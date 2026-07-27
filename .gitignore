@@ -46,6 +46,7 @@ conan.lock
 *.swp
 *.orig
 /build*.txt
+__pycache__/
 
 # Local AI-agent tools and planning material
 /AGENTS.md

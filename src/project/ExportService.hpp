@@ -58,8 +58,9 @@ struct ExportResult
 
 using ExportProgressFn = std::function<void(const ExportProgress&)>;
 
-/// Validates project, stages player + referenced assets into a new/empty directory,
-/// writes export.manifest.json. Never deletes or clears a non-empty user folder.
+/// Validates project, stages the player + the project content folders
+/// (Scenes/Assets/Scripts/Audio/UI) into a new/empty directory, and writes
+/// export.manifest.json. Never deletes or clears a non-empty user folder.
 [[nodiscard]] ExportResult ExportProject(
     const ExportOptions& options,
     const ExportProgressFn& onProgress = {});

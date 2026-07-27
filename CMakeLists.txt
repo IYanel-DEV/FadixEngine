@@ -476,6 +476,26 @@ if(WIN32)
     target_link_libraries(fadix_project_smoke PRIVATE ole32 shell32 uuid)
 endif()
 
+add_executable(fadix_export_smoke
+    tools/ExportSmoke.cpp
+    src/assets/EmbeddedAssetProvider.cpp
+    src/project/ExportService.cpp
+    src/project/ProjectService.cpp
+    src/project/ProjectJson.cpp
+    src/engine/Uuid.cpp)
+target_include_directories(fadix_export_smoke PRIVATE src)
+target_compile_definitions(fadix_export_smoke PRIVATE
+    FADIX_ASSET_ROOT="${CMAKE_SOURCE_DIR}/assets")
+add_dependencies(fadix_export_smoke fadix_embed_assets)
+if(WIN32)
+    target_link_libraries(fadix_export_smoke PRIVATE ole32 shell32 uuid)
+endif()
+if(MSVC)
+    target_compile_options(fadix_export_smoke PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(fadix_export_smoke PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(FADIX_ENABLE_LUA)
     add_executable(fadix_lua_smoke
         tools/LuaSmoke.cpp

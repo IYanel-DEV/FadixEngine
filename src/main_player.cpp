@@ -90,6 +90,14 @@ namespace
             const std::string text{std::istreambuf_iterator<char>{in}, {}};
             if (const auto json = fadix::project_json::Parse(text))
             {
+                if (auto versionError = fadix::project_json::CheckFormatVersion(
+                        *json,
+                        "formatVersion",
+                        fadix::project_json::kManifestFormatVersion,
+                        "export.manifest.json"))
+                {
+                    throw std::runtime_error(std::move(*versionError));
+                }
                 if (options.BootScene.empty() && json->Contains("bootScene") &&
                     json->at("bootScene").IsString())
                 {
