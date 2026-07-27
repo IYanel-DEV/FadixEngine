@@ -28,6 +28,13 @@ struct Vertex
 };
 static_assert(sizeof(Vertex) == 96);
 
+// A contiguous slice of the shared index buffer identifying one primitive mesh.
+struct MeshRange
+{
+    std::uint32_t FirstIndex{0};
+    std::uint32_t IndexCount{0};
+};
+
 void AppendCube(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices);
 void AppendCylinder(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices, int segments);
 void AppendCone(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices, int segments);

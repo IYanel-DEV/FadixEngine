@@ -7,6 +7,7 @@
 #include "render/AssetResourceCache.hpp"
 #include "render/ParticleRenderer.hpp"
 #include "render/ViewportGeometry.hpp"
+#include "render/ViewportGizmo.hpp"
 #include "render/ViewportMath.hpp"
 #include "render/ViewportUniforms.hpp"
 #include "render/ParticleSystem.hpp"
@@ -82,6 +83,10 @@ using viewport_geometry::AppendPlanePrimitive;
 using viewport_geometry::AppendQuad;
 using viewport_geometry::AppendSphere;
 using viewport_geometry::AppendTorus;
+using viewport_geometry::MeshRange;
+
+// Transform-gizmo part assembly now lives in ViewportGizmo.{hpp,cpp}.
+using viewport_gizmo::GizmoPart;
 
 // Pure viewport math helpers now live in ViewportMath.{hpp,cpp}; bridge them
 // back so existing unqualified call sites resolve unchanged.
@@ -115,12 +120,6 @@ constexpr int kMaxShadowResolution = 4096;
 // above the slice still render into that cascade's depth map.
 constexpr float kShadowCasterMargin = 50.0F;
 
-struct MeshRange
-{
-    std::uint32_t FirstIndex{0};
-    std::uint32_t IndexCount{0};
-};
-
 struct Pickable
 {
     Uuid Id;
@@ -128,9 +127,7 @@ struct Pickable
     glm::vec3 Maximum;
 };
 
-constexpr glm::vec3 AxisColorX{0.90F, 0.24F, 0.24F};
-constexpr glm::vec3 AxisColorY{0.32F, 0.80F, 0.32F};
-constexpr glm::vec3 AxisColorZ{0.26F, 0.50F, 0.95F};
+// AxisColorX/Y/Z moved with BuildGizmoParts into ViewportGizmo.cpp.
 constexpr glm::vec3 HighlightColor{1.0F, 0.86F, 0.30F};
 constexpr glm::vec3 SunWarmColor{1.0F, 0.72F, 0.25F};
 constexpr glm::vec3 MoonCoolColor{0.55F, 0.70F, 1.0F};
@@ -2505,152 +2502,18 @@ private:
         }
     }
 
-    struct GizmoPart
-    {
-        GizmoHandle Handle;
-        const MeshRange* Mesh;
-        glm::mat4 Model;
-        glm::vec3 Color;
-        float Alpha;
-    };
-
     // Fills m_GizmoParts (reused across frames to avoid per-frame allocation).
     void BuildGizmoParts()
     {
-        namespace layout = gizmo_layout;
-        std::vector<GizmoPart>& parts = m_GizmoParts;
-        parts.clear();
-        const float size = GizmoWorldSize(
-            m_View, m_Projection, m_Gizmo.Position, static_cast<float>(m_Extent.Height));
-        if (size <= 0.0F)
-        {
-            return; // Anchor behind the camera.
-        }
-        const glm::quat orientation = m_Gizmo.Orientation;
-        const glm::vec3 position = m_Gizmo.Position;
-
-        constexpr std::array handles{GizmoHandle::AxisX, GizmoHandle::AxisY, GizmoHandle::AxisZ};
-        constexpr std::array colors{AxisColorX, AxisColorY, AxisColorZ};
-        const auto isHot = [this](const GizmoHandle handle) {
-            return (m_Gizmo.Active && *m_Gizmo.Active == handle) ||
-                (!m_Gizmo.Active && m_Gizmo.Hover && *m_Gizmo.Hover == handle);
-        };
-        const auto axisRotation = [&](const int index) {
-            // Rotate the +Y-aligned primitives onto the requested axis.
-            if (index == 0)
-            {
-                return orientation * glm::angleAxis(-glm::half_pi<float>(), glm::vec3{0, 0, 1});
-            }
-            if (index == 2)
-            {
-                return orientation * glm::angleAxis(glm::half_pi<float>(), glm::vec3{1, 0, 0});
-            }
-            return orientation;
-        };
-
-        if (m_Gizmo.Mode == GizmoMode::Rotate)
-        {
-            for (int index = 0; index < 3; ++index)
-            {
-                const GizmoHandle handle = handles[static_cast<std::size_t>(index)];
-                // Torus circle lies in XY (around Z); rotate Z onto the axis.
-                glm::quat ringRotation = orientation;
-                if (index == 0)
-                {
-                    ringRotation = orientation * glm::angleAxis(glm::half_pi<float>(), glm::vec3{0, 1, 0});
-                }
-                else if (index == 1)
-                {
-                    ringRotation = orientation * glm::angleAxis(-glm::half_pi<float>(), glm::vec3{1, 0, 0});
-                }
-                parts.push_back({handle,
-                    &m_Torus,
-                    ComposeMatrix(position, ringRotation, glm::vec3{size * layout::RingRadius}),
-                    isHot(handle) ? HighlightColor : colors[static_cast<std::size_t>(index)],
-                    1.0F});
-            }
-            return;
-        }
-
-        for (int index = 0; index < 3; ++index)
-        {
-            const GizmoHandle handle = handles[static_cast<std::size_t>(index)];
-            const glm::vec3 color =
-                isHot(handle) ? HighlightColor : colors[static_cast<std::size_t>(index)];
-            const glm::vec3 direction = orientation * GizmoAxisVector(static_cast<GizmoAxis>(index));
-            const glm::quat rotation = axisRotation(index);
-            const float shaftLength = (layout::ShaftEnd - layout::ShaftStart) * size;
-            parts.push_back({handle,
-                &m_Cylinder,
-                ComposeMatrix(position + direction * layout::ShaftStart * size,
-                    rotation,
-                    glm::vec3{layout::ShaftRadius * 2.0F * size,
-                        shaftLength,
-                        layout::ShaftRadius * 2.0F * size}),
-                color,
-                1.0F});
-            if (m_Gizmo.Mode == GizmoMode::Translate)
-            {
-                parts.push_back({handle,
-                    &m_Cone,
-                    ComposeMatrix(position + direction * layout::ShaftEnd * size,
-                        rotation,
-                        glm::vec3{layout::ArrowRadius * 2.0F * size,
-                            layout::ArrowLength * size,
-                            layout::ArrowRadius * 2.0F * size}),
-                    color,
-                    1.0F});
-            }
-            else
-            {
-                parts.push_back({handle,
-                    &m_Cube,
-                    ComposeMatrix(position + direction * layout::ShaftEnd * size,
-                        orientation,
-                        glm::vec3{layout::ScaleCubeHalf * 2.0F * size}),
-                    color,
-                    1.0F});
-            }
-        }
-
-        if (m_Gizmo.Mode == GizmoMode::Translate)
-        {
-            constexpr std::array planeHandles{
-                GizmoHandle::PlaneXY, GizmoHandle::PlaneXZ, GizmoHandle::PlaneYZ};
-            constexpr std::array planeColors{AxisColorZ, AxisColorY, AxisColorX};
-            for (std::size_t index = 0; index < planeHandles.size(); ++index)
-            {
-                const GizmoHandle handle = planeHandles[index];
-                // Quad lives in XY; rotate onto the target plane.
-                glm::quat planeRotation = orientation;
-                if (handle == GizmoHandle::PlaneXZ)
-                {
-                    planeRotation =
-                        orientation * glm::angleAxis(glm::half_pi<float>(), glm::vec3{1, 0, 0});
-                }
-                else if (handle == GizmoHandle::PlaneYZ)
-                {
-                    planeRotation =
-                        orientation * glm::angleAxis(-glm::half_pi<float>(), glm::vec3{0, 1, 0});
-                }
-                const glm::vec3 planeOrigin = position +
-                    planeRotation *
-                        glm::vec3{layout::PlaneOffset * size, layout::PlaneOffset * size, 0.0F};
-                parts.push_back({handle,
-                    &m_Quad,
-                    ComposeMatrix(planeOrigin, planeRotation, glm::vec3{layout::PlaneSize * size}),
-                    isHot(handle) ? HighlightColor : planeColors[index],
-                    0.55F});
-            }
-        }
-        else if (m_Gizmo.Mode == GizmoMode::Scale)
-        {
-            parts.push_back({GizmoHandle::Uniform,
-                &m_Cube,
-                ComposeMatrix(position, orientation, glm::vec3{layout::UniformCubeHalf * 2.0F * size}),
-                isHot(GizmoHandle::Uniform) ? HighlightColor : glm::vec3{0.85F, 0.85F, 0.88F},
-                1.0F});
-        }
+        const viewport_gizmo::GizmoMeshes meshes{
+            &m_Torus, &m_Cylinder, &m_Cone, &m_Cube, &m_Quad};
+        viewport_gizmo::BuildGizmoParts(
+            m_Gizmo,
+            m_View,
+            m_Projection,
+            static_cast<float>(m_Extent.Height),
+            meshes,
+            m_GizmoParts);
     }
 
     void DrawGizmo(rhi::CommandList& list, const bool ldrOverlay = false)

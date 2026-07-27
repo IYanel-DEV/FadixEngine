@@ -2,21 +2,13 @@
 
 #include "engine/Version.hpp"
 
-#include "assets/AssetDatabase.hpp"
-#include "assets/ScriptDatabase.hpp"
-#include "editor/scene/SceneSerializer.hpp"
-#include "engine/app/ModuleRegistration.hpp"
-#include "engine/assets/MaterialAsset.hpp"
-#include "engine/scene/IWorld.hpp"
 #include "project/ProjectJson.hpp"
 #include "project/ProjectService.hpp"
-#include "runtime/Components.hpp"
 
 #include <algorithm>
 #include <fstream>
 #include <set>
 #include <system_error>
-#include <unordered_set>
 #include <utility>
 
 namespace fadix
@@ -138,62 +130,41 @@ void AddMessage(
     return Result<void>::Ok();
 }
 
-void CollectHandle(
-    const AssetHandle& handle,
-    AssetDatabase& assets,
-    std::unordered_set<AssetHandle>& handles)
+// Copies every regular file under projectRoot/<folder> into the staging tree,
+// preserving relative layout. The player's AssetDatabase/ScriptDatabase scan the
+// whole staged root, so shipping the content folders wholesale is what makes an
+// export bootable without the editor.
+[[nodiscard]] Result<void> StageContentFolder(
+    const std::filesystem::path& projectRoot,
+    const std::filesystem::path& stageRoot,
+    const char* folder,
+    std::set<std::string>& staged,
+    ExportResult& result)
 {
-    if (handle.IsValid())
+    const std::filesystem::path source = projectRoot / folder;
+    std::error_code error;
+    if (!std::filesystem::is_directory(source, error) || error)
     {
-        handles.insert(handle);
+        return Result<void>::Ok();
     }
-    static_cast<void>(assets);
-}
-
-[[nodiscard]] Result<void> CollectReferencedAssets(
-    IWorld& world,
-    AssetDatabase& assets,
-    ScriptDatabase* scripts,
-    std::unordered_set<AssetHandle>& handles,
-    std::set<std::string>& scriptNames)
-{
-    auto& registry = world.Registry();
-    for (const auto [entity, mesh] : registry.view<const MeshComponent>().each())
+    for (std::filesystem::recursive_directory_iterator it{source, error}, end;
+         !error && it != end;
+         it.increment(error))
     {
-        static_cast<void>(entity);
-        CollectHandle(mesh.Material, assets, handles);
-        CollectHandle(mesh.ImportedMesh, assets, handles);
-        if (mesh.Material.IsValid())
+        if (!it->is_regular_file(error) || error)
         {
-            if (auto material = assets.LoadMaterial(mesh.Material))
-            {
-                CollectHandle(material.Value().BaseColorTexture, assets, handles);
-                CollectHandle(material.Value().NormalTexture, assets, handles);
-                CollectHandle(material.Value().MetallicRoughnessTexture, assets, handles);
-                CollectHandle(material.Value().EmissiveTexture, assets, handles);
-            }
+            continue;
+        }
+        if (const Result<void> copied =
+                CopyRelativeFile(projectRoot, stageRoot, it->path(), staged, result);
+            !copied)
+        {
+            return copied;
         }
     }
-    for (const auto [entity, ui] : registry.view<const UICanvasComponent>().each())
+    if (error)
     {
-        static_cast<void>(entity);
-        CollectHandle(ui.UIAsset, assets, handles);
-        CollectHandle(ui.StyleAsset, assets, handles);
-    }
-    for (const auto [entity, script] : registry.view<const ScriptComponent>().each())
-    {
-        static_cast<void>(entity);
-        for (const std::string& name : script.ScriptNames)
-        {
-            scriptNames.insert(name);
-            if (scripts != nullptr)
-            {
-                if (auto asset = scripts->Get(name))
-                {
-                    static_cast<void>(asset);
-                }
-            }
-        }
+        return Result<void>::Error("Failed to walk " + source.string() + ": " + error.message());
     }
     return Result<void>::Ok();
 }
@@ -205,7 +176,7 @@ void CollectHandle(
     const ExportResult& result)
 {
     project_json::Value root = project_json::Value::MakeObject();
-    root["formatVersion"] = project_json::Value::MakeNumber(1);
+    root["formatVersion"] = project_json::Value::MakeNumber(project_json::kManifestFormatVersion);
     root["projectName"] = project_json::Value::MakeString(project.Name);
     root["bootScene"] = project_json::Value::MakeString(bootScene);
     root["executable"] = project_json::Value::MakeString(options.ExecutableName);
@@ -310,36 +281,11 @@ ExportResult ExportProject(const ExportOptions& options, const ExportProgressFn&
     result.StagedRoot = options.DestinationDirectory;
     result.ManifestPath = result.StagedRoot / "export.manifest.json";
 
-    Progress(onProgress, 0.25F, "Load boot scene");
-    auto world = sceneplay::CreateEditWorld();
-    SceneDocument document{
-        Uuid::Generate(),
-        std::filesystem::path{bootScene}.stem().string(),
-        bootAbsolute,
-        false};
-    SceneService scenes;
-    if (const Result<void> loaded = scenes.Load(document, *world, bootAbsolute); !loaded)
-    {
-        AddMessage(result, ExportSeverity::Error, "Boot scene load failed: " + loaded.ErrorMessage());
-        return result;
-    }
-
-    auto assets = std::make_unique<AssetDatabase>(project.RootPath);
-    if (const Result<void> refreshed = assets->Refresh(); !refreshed)
-    {
-        AddMessage(result, ExportSeverity::Warning, refreshed.ErrorMessage());
-    }
-    ScriptDatabase scriptDb;
-    scriptDb.ScanFolder(project.RootPath);
-
-    std::unordered_set<AssetHandle> handles;
-    std::set<std::string> scriptNames;
-    static_cast<void>(CollectReferencedAssets(*world, *assets, &scriptDb, handles, scriptNames));
-
     Progress(onProgress, 0.45F, "Stage project files");
     std::set<std::string> stagedKeys;
     {
         project_json::Value root = project_json::Value::MakeObject();
+        root["formatVersion"] = project_json::Value::MakeNumber(project_json::kProjectFormatVersion);
         root["id"] = project_json::Value::MakeString(project.Id.ToString());
         root["name"] = project_json::Value::MakeString(project.Name);
         root["engineVersion"] = project_json::Value::MakeString(std::string{EngineVersion});
@@ -377,55 +323,15 @@ ExportResult ExportProject(const ExportOptions& options, const ExportProgressFn&
     static_cast<void>(
         CopyRelativeFile(project.RootPath, result.StagedRoot, bootMeta, stagedKeys, result));
 
-    Progress(onProgress, 0.6F, "Stage referenced assets");
-    for (const AssetHandle& handle : handles)
+    Progress(onProgress, 0.6F, "Stage content");
+    for (const char* folder : {"Scenes", "Assets", "Scripts", "Audio", "UI"})
     {
-        const AssetMetadata* meta = assets->Meta(handle);
-        if (meta == nullptr)
+        if (const Result<void> staged =
+                StageContentFolder(project.RootPath, result.StagedRoot, folder, stagedKeys, result);
+            !staged)
         {
-            AddMessage(
-                result,
-                ExportSeverity::Warning,
-                "Unknown asset handle skipped: " + handle.ToString());
-            continue;
-        }
-        if (const Result<void> copied = CopyRelativeFile(
-                project.RootPath, result.StagedRoot, meta->SourcePath, stagedKeys, result);
-            !copied)
-        {
-            AddMessage(result, ExportSeverity::Error, copied.ErrorMessage());
+            AddMessage(result, ExportSeverity::Error, staged.ErrorMessage());
             return result;
-        }
-        const std::filesystem::path sidecar =
-            std::filesystem::path{meta->SourcePath.string() + ".fadixmeta"};
-        static_cast<void>(
-            CopyRelativeFile(project.RootPath, result.StagedRoot, sidecar, stagedKeys, result));
-        if (!meta->ImportedPath.empty())
-        {
-            static_cast<void>(CopyRelativeFile(
-                project.RootPath, result.StagedRoot, meta->ImportedPath, stagedKeys, result));
-        }
-    }
-
-    for (const std::string& name : scriptNames)
-    {
-        if (auto asset = scriptDb.Get(name))
-        {
-            if (const Result<void> copied = CopyRelativeFile(
-                    project.RootPath,
-                    result.StagedRoot,
-                    asset->get().SourcePath,
-                    stagedKeys,
-                    result);
-                !copied)
-            {
-                AddMessage(result, ExportSeverity::Error, copied.ErrorMessage());
-                return result;
-            }
-        }
-        else
-        {
-            AddMessage(result, ExportSeverity::Warning, "Script not found: " + name);
         }
     }
 
@@ -458,7 +364,9 @@ ExportResult ExportProject(const ExportOptions& options, const ExportProgressFn&
         result,
         ExportSeverity::Info,
         "Export staged to " + result.StagedRoot.string());
-    // ponytail: referenced-only assets; full Assets/ tree + dependency graph when shipping.
+    // ponytail: ships the whole Scenes/Assets/Scripts/Audio/UI trees (Cache/Saved
+    // excluded) so the player boots without the editor. Bootable but unpruned; add a
+    // dependency walk to drop unreferenced assets when export size matters.
     Progress(onProgress, 1.0F, "Done");
     result.Ok = true;
     return result;

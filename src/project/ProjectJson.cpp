@@ -452,6 +452,29 @@ std::string Stringify(const Value& value, const int indent)
     return out;
 }
 
+std::optional<std::string> CheckFormatVersion(
+    const Value& object, const std::string_view key, const int expected, const std::string_view label)
+{
+    if (!object.Contains(key) || object.at(key).GetType() != Value::Type::Number)
+    {
+        return std::string{label} + " is missing a numeric \"" + std::string{key} +
+               "\" (expected format version " + std::to_string(expected) +
+               "). The file is corrupt or from an incompatible Fadix.";
+    }
+    const int found = static_cast<int>(object.at(key).AsNumber());
+    if (found < 1)
+    {
+        return std::string{label} + " has an invalid format version " + std::to_string(found) + ".";
+    }
+    if (found > expected)
+    {
+        return std::string{label} + " was written by a newer Fadix (format version " +
+               std::to_string(found) + "; this build supports up to " + std::to_string(expected) +
+               "). Update Fadix to open it.";
+    }
+    return std::nullopt;
+}
+
 std::string Escape(const std::string_view text)
 {
     std::string out;

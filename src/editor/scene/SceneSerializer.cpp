@@ -12,6 +12,9 @@ namespace fadix
 {
 namespace
 {
+// Bump when the scene text format changes incompatibly.
+constexpr unsigned kSceneFormatVersion = 1;
+
 std::filesystem::path AutosavePath(const SceneDocument& document)
 {
     if (!document.Path.empty())
@@ -85,7 +88,7 @@ Result<void> SceneSerializer::SavePath(const std::filesystem::path& path, const 
         return Result<void>::Error("Could not open scene for writing: " + temporary.string());
     }
 
-    output << "FADIX_SCENE 1\n";
+    output << "FADIX_SCENE " << kSceneFormatVersion << "\n";
     const entt::registry& registry = world.Registry();
     for (const auto [entity, uuid] : registry.view<const UuidComponent>().each())
     {
@@ -108,9 +111,20 @@ Result<void> SceneSerializer::LoadPath(const std::filesystem::path& path, IWorld
     std::ifstream input{path};
     std::string header;
     unsigned version = 0;
-    if (!(input >> header >> version) || header != "FADIX_SCENE" || version != 1)
+    if (!(input >> header >> version) || header != "FADIX_SCENE")
     {
-        return Result<void>::Error("Invalid or unsupported scene: " + path.string());
+        return Result<void>::Error("Not a Fadix scene file: " + path.string());
+    }
+    if (version > kSceneFormatVersion)
+    {
+        return Result<void>::Error(
+            "Scene was written by a newer Fadix (format version " + std::to_string(version) +
+            "; this build supports up to " + std::to_string(kSceneFormatVersion) + "): " +
+            path.string());
+    }
+    if (version < 1)
+    {
+        return Result<void>::Error("Scene has an invalid format version: " + path.string());
     }
 
     World staging{false};
