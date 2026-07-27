@@ -1,0 +1,98 @@
+# Build output
+/.build/
+/build/
+/bin/
+/out/
+/cmake-build-*/
+/artifacts/
+/scratch/
+/Saved/
+/Intermediate/
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.dylib
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.dmp
+
+# CMake and Conan generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+compile_commands.json
+CMakeUserPresets.json
+conan.lock
+
+# Generated source and runtime caches
+/src/generated/
+.fadix/
+/Scenes/
+
+# Local logs and captures
+*.log
+*.out
+*.err
+*.tmp
+*.bak
+*.swp
+*.orig
+/build*.txt
+
+# Local AI-agent tools and planning material
+/AGENTS.md
+/CLAUDE.md
+/.agents/
+/.claude/
+/.codex/
+/.superpowers/
+/.worktrees/
+/docs/superpowers/
+/plugins/
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+
+# Visual Studio
+/.vs/
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Other editors
+/.vscode/
+/.idea/
+*.iml
+*.ipr
+*.iws
+*.sublime-project
+*.sublime-workspace
+
+# Platform files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.lnk
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+*~

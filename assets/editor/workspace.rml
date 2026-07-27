@@ -1,0 +1,101 @@
+<rml>
+<head>
+    <title>Fadix Engine</title>
+    <link type="text/rcss" href="workspace.rcss"/>
+</head>
+<body>
+    <div id="app">
+        <header id="menubar">
+            <div class="brand">FADIX</div>
+            <button id="menu-scene" class="menu">Scene</button>
+            <button id="menu-edit" class="menu">Edit</button>
+            <button id="menu-project" class="menu">Project</button>
+            <button id="menu-debug" class="menu">Debug</button>
+            <button id="menu-editor" class="menu">Editor</button>
+            <div class="spacer"/>
+            <span id="scene-label" class="scene-label">Untitled</span>
+            <span id="project-name" class="project">Project</span>
+        </header>
+        <div id="toolbar">
+            <button id="add" class="tool primary">+ Add</button>
+            <div class="spacer"/>
+            <button id="play" class="tool play">Play</button>
+            <button id="pause" class="tool">Pause</button>
+            <button id="step" class="tool">Step</button>
+            <button id="stop" class="tool">Stop</button>
+            <div class="spacer"/>
+            <button id="save-all" class="tool">Save All</button>
+            <button id="undo" class="tool">Undo</button>
+            <button id="redo" class="tool">Redo</button>
+        </div>
+        <main id="workspace">
+            <div id="dock-root"/>
+            <div id="dock-panel-bank" class="hidden">
+                <aside id="left-panel" class="dock-panel panel">
+                    <div id="dock-header-hierarchy" class="dock-header"><span class="dock-grip">::</span><span class="dock-title">Hierarchy</span></div>
+                    <input id="hierarchy-filter" class="filter-input" type="text" placeholder="Filter entities..."/>
+                    <div id="scene-tree" class="tree"/>
+                </aside>
+                <section id="center" class="dock-panel panel">
+                    <div id="dock-header-viewport" class="dock-header viewport-dock-header">
+                        <span class="dock-grip">::</span>
+                        <span class="dock-title">Viewport</span>
+                        <button id="mode-edit" class="dock-tab viewport-mode-tab active">Editor</button>
+                        <button id="mode-game" class="dock-tab viewport-mode-tab">Game</button>
+                        <span class="dock-spacer"/>
+                    </div>
+                    <div id="viewport">
+                        <div id="viewport-tool-rail" class="viewport-tool-rail">
+                            <div class="rail-tools">
+                                <button id="gizmo-select" class="viewport-tool active"><span class="tool-icon select"/><span class="tool-tooltip"><span class="tooltip-label">Select</span><span class="tooltip-key">Q</span></span></button>
+                                <button id="gizmo-move" class="viewport-tool"><span class="tool-icon move"/><span class="tool-tooltip"><span class="tooltip-label">Move</span><span class="tooltip-key">W</span></span></button>
+                                <button id="gizmo-rotate" class="viewport-tool"><span class="tool-icon rotate"/><span class="tool-tooltip"><span class="tooltip-label">Rotate</span><span class="tooltip-key">E</span></span></button>
+                                <button id="gizmo-scale" class="viewport-tool"><span class="tool-icon scale"/><span class="tool-tooltip"><span class="tooltip-label">Scale</span><span class="tooltip-key">R</span></span></button>
+                                <div class="rail-separator"/>
+                                <button id="gizmo-space" class="viewport-tool"><span class="tool-icon space"/><span class="tool-tooltip"><span id="gizmo-space-tooltip-label" class="tooltip-label">World Space</span><span class="tooltip-key">X</span></span></button>
+                            </div>
+                            <button id="gizmo-rail-toggle" class="viewport-tool rail-toggle"><span class="tool-icon chevron"/><span class="tool-tooltip"><span id="gizmo-rail-tooltip-label" class="tooltip-label">Hide Tools</span><span class="tooltip-key">T</span></span></button>
+                        </div>
+                        <div id="play-banner" class="play-banner hidden">Running</div>
+                        <div id="no-game-camera" class="viewport-note hidden">No game camera in this scene</div>
+                    </div>
+                </section>
+                <aside id="inspector" class="dock-panel panel">
+                    <div id="dock-header-inspector" class="dock-header"><span class="dock-grip">::</span><span class="dock-title">Inspector</span></div>
+                    <div id="inspector-content"><div class="inspector-empty">Select an entity</div></div>
+                </aside>
+                <section id="bottom-panel" class="dock-panel panel">
+                    <div id="dock-header-content" class="dock-header content-dock-header">
+                        <span class="dock-grip">::</span>
+                        <button id="tab-assets" class="dock-tab active">Assets</button>
+                        <button id="tab-output" class="dock-tab">Output</button>
+                        <span class="dock-spacer"/><span id="import-state" class="panel-state"></span>
+                    </div>
+                    <div id="asset-browser">
+                        <div class="asset-toolbar"><button id="asset-up" class="mini">Up</button><button id="asset-refresh" class="mini">Refresh</button><span id="asset-breadcrumb" class="breadcrumb">Assets</span><input id="asset-search" class="filter-input asset-search" type="text" placeholder="Search assets..."/></div>
+                        <div id="asset-list" class="asset-list"/>
+                        <div id="asset-progress" class="import-progress hidden"><span id="asset-progress-label" class="progress-label"></span><span class="progress-track"><span id="asset-progress-value" class="progress-value"/></span></div>
+                    </div>
+                    <div id="output" class="console hidden">
+                        <div class="output-toolbar"><button id="output-filter-info" class="mini toggle-on">Info</button><button id="output-filter-warn" class="mini toggle-on">Warn</button><button id="output-filter-error" class="mini toggle-on">Error</button><span class="spacer"/><button id="output-autoscroll" class="mini toggle-on">Auto-scroll</button><button id="output-clear" class="mini">Clear</button></div>
+                        <div id="output-list" class="output-list"/>
+                    </div>
+                </section>
+            </div>
+            <div id="dock-float-layer"/>
+            <div id="dock-overlay-layer" class="hidden"/>
+        </main>
+        <footer>
+            <span id="status-message">Ready</span>
+            <span class="spacer"/>
+            <span id="status-scene" class="stat"></span>
+            <span id="status-camera" class="stat"></span>
+            <span id="status-backend" class="stat"></span>
+            <span id="status-entities" class="stat"></span>
+        </footer>
+        <div id="menu-popup" class="popup hidden"/>
+        <div id="component-popup" class="component-popup hidden"/>
+        <div id="modal-root" class="modal-backdrop hidden"/>
+    </div>
+</body>
+</rml>

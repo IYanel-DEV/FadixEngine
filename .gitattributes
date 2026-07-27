@@ -1,0 +1,6 @@
+# Auto-detect text files and normalize repository content.
+* text=auto
+*.bat text eol=crlf
+*.png binary
+*.ttf binary
+*.otf binary

@@ -1,0 +1,1 @@
+{"Version":1,"Name":"EmissiveGlow","BaseColor":[0.08,0.08,0.08,1],"MetallicFactor":0,"RoughnessFactor":0.25,"EmissiveFactor":[1,0.55,0.15],"EmissiveIntensity":5,"OcclusionStrength":1,"NormalScale":1,"AlphaMode":"Opaque","AlphaCutoff":0.5,"DoubleSided":false,"UVScale":[1,1],"UVOffset":[0,0]}

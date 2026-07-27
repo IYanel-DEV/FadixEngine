@@ -1,0 +1,13 @@
+<rml>
+<head>
+    <link type="text/rcss" href="Default.rcss"/>
+</head>
+<body id="game-ui">
+    <div id="hud">
+        <div id="health-bar">
+            <div id="health-fill"></div>
+        </div>
+        <div id="score">Score: 0</div>
+    </div>
+</body>
+</rml>

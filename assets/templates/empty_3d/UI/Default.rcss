@@ -1,0 +1,27 @@
+body {
+    width: 100%;
+    height: 100%;
+    font-family: LatoLatin;
+    color: white;
+}
+#hud {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+}
+#health-bar {
+    width: 200px;
+    height: 20px;
+    background-color: #333333;
+    border: 1px #666666;
+}
+#health-fill {
+    width: 100%;
+    height: 100%;
+    background-color: #e74c3c;
+}
+#score {
+    margin-top: 10px;
+    font-size: 18px;
+    font-weight: bold;
+}

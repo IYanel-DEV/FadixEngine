@@ -1,0 +1,115 @@
+<rml>
+<head>
+	<title>Fadix Project Manager</title>
+	<link type="text/rcss" href="project_manager.rcss"/>
+</head>
+<body>
+	<main id="project-manager">
+		<header class="topbar">
+			<div class="brand-mark">F</div>
+			<div class="brand-copy">
+				<div class="brand">FADIX ENGINE</div>
+				<div class="edition">PROJECT MANAGER</div>
+			</div>
+			<div class="topbar-spacer"/>
+			<div class="build-label">EDITOR DEVELOPMENT BUILD</div>
+		</header>
+
+		<div class="shell">
+			<aside class="sidebar">
+				<div class="sidebar-section-label">WORKSPACE</div>
+				<div class="nav-item active"><span class="nav-accent"/><span class="nav-label">Projects</span></div>
+
+				<div class="sidebar-spacer"/>
+				<div class="engine-state">
+					<div class="state-title"><span class="state-dot"/>Engine ready</div>
+					<div class="state-meta">SDL GPU + RmlUi</div>
+				</div>
+			</aside>
+
+			<section class="content">
+				<header class="content-header">
+					<div>
+						<h1>Projects</h1>
+						<div class="content-kicker">Open a workspace or start a new project.</div>
+					</div>
+				</header>
+
+				<div class="content-body">
+					<section class="projects-column">
+						<div class="section-heading">
+							<h2>Recent projects</h2>
+						</div>
+
+						<div class="open-strip">
+							<input type="text" id="open-path" value="" placeholder="Path to project.fadix"/>
+							<button id="btn-browse-open" class="secondary browse-button" title="Browse for a project.fadix file">Browse</button>
+							<button id="btn-open" class="primary open-button" title="Open or import this project">Open project</button>
+						</div>
+
+						<div id="recent-list" class="recent-list">
+							<div class="empty-state" id="recent-empty">
+								<div class="empty-glyph">+</div>
+								<div class="empty-title">No recent projects</div>
+								<div class="empty-copy">Create a project or open an existing project.fadix file.</div>
+							</div>
+						</div>
+
+						<div class="selection-tools">
+							<div class="selection-heading">Selected project</div>
+							<div class="rename-row">
+								<input type="text" id="rename-name" value="" placeholder="Project name"/>
+								<button id="btn-rename" class="secondary rename-button" title="Select a recent project first">Rename</button>
+							</div>
+							<div class="selection-actions">
+								<button id="btn-open-selected" class="primary" title="Select a recent project first">Open selected</button>
+								<button id="btn-reveal" class="secondary" title="Select a recent project first">Show in folder</button>
+								<button id="btn-remove" class="danger" title="Select a recent project first">Remove from list</button>
+							</div>
+						</div>
+					</section>
+
+					<aside class="create-panel">
+						<div class="panel-eyebrow">NEW WORKSPACE</div>
+						<h2>New project</h2>
+
+						<label class="field-label" for="create-name">Project name</label>
+						<input type="text" id="create-name" value="NewProject"/>
+
+						<label class="field-label" for="create-path">Location</label>
+						<div class="path-row">
+							<input type="text" id="create-path" value="" placeholder="Parent folder"/>
+							<button id="btn-browse-parent" class="secondary browse-button" title="Browse for the parent folder">Browse</button>
+						</div>
+
+						<label class="field-label">Project type</label>
+						<div class="template-picker">
+							<button id="template-2d" class="template" title="Create an empty 2D project">
+								<span class="template-badge">2D</span>
+								<span class="template-copy"><b>Empty 2D</b><small>Box2D world</small></span>
+							</button>
+							<button id="template-3d" class="template active" title="Create an empty 3D project">
+								<span class="template-badge">3D</span>
+								<span class="template-copy"><b>Empty 3D</b><small>Jolt world</small></span>
+							</button>
+						</div>
+
+						<div class="create-spacer"/>
+						<div class="create-summary">
+							<div class="summary-label">PROJECT FILE</div>
+							<div class="summary-value">project.fadix</div>
+						</div>
+						<button id="btn-new" class="primary create-button" title="Create project from the selected type">Create project</button>
+					</aside>
+				</div>
+			</section>
+		</div>
+
+		<footer class="statusbar">
+			<span id="status">Select or create a project.</span>
+			<span class="status-spacer"/>
+			<span class="status-platform">WINDOWS</span>
+		</footer>
+	</main>
+</body>
+</rml>
