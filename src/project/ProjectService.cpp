@@ -1,5 +1,7 @@
 #include "project/ProjectService.hpp"
 
+#include "assets/EmbeddedAssetProvider.hpp"
+
 #include "engine/Version.hpp"
 
 #include "project/ProjectJson.hpp"
@@ -397,7 +399,7 @@ std::filesystem::path ProjectService::DefaultProjectsDirectory()
 std::filesystem::path ProjectService::TemplateDirectory(const ProjectTemplate projectTemplate)
 {
     const char* folder = projectTemplate == ProjectTemplate::Empty2D ? "empty_2d" : "empty_3d";
-    return std::filesystem::path{FADIX_ASSET_ROOT} / "templates" / folder;
+    return RuntimeAssetRoot() / "templates" / folder;
 }
 
 std::string ProjectService::TemplateToString(const ProjectTemplate value)
@@ -742,6 +744,11 @@ Result<ProjectMetadata> ProjectService::ReadProjectFile(const std::filesystem::p
     {
         return Result<ProjectMetadata>::Error("project.fadix is not valid JSON");
     }
+    if (auto versionError = project_json::CheckFormatVersion(
+            *json, "formatVersion", project_json::kProjectFormatVersion, "project.fadix"))
+    {
+        return Result<ProjectMetadata>::Error(std::move(*versionError));
+    }
 
     ProjectMetadata metadata;
     metadata.ProjectFile = std::filesystem::weakly_canonical(projectFile, error);
@@ -813,6 +820,7 @@ Result<ProjectMetadata> ProjectService::ReadProjectFile(const std::filesystem::p
 Result<void> ProjectService::WriteProjectFile(const ProjectMetadata& metadata) const
 {
     project_json::Value root = project_json::Value::MakeObject();
+    root["formatVersion"] = project_json::Value::MakeNumber(project_json::kProjectFormatVersion);
     root["id"] = project_json::Value::MakeString(metadata.Id.ToString());
     root["name"] = project_json::Value::MakeString(metadata.Name);
     root["engineVersion"] = project_json::Value::MakeString(std::string{EngineVersion});

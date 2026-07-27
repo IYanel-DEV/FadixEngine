@@ -1,5 +1,7 @@
 #include "render/ShaderCompiler.hpp"
 
+#include "assets/EmbeddedAssetProvider.hpp"
+
 #ifdef _WIN32
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -12,16 +14,11 @@
 #include <stdexcept>
 #include <string>
 
-#ifndef FADIX_ASSET_ROOT
-#define FADIX_ASSET_ROOT "assets"
-#endif
-
 namespace fadix::render
 {
 std::vector<std::byte> ReadShaderSource(const char* fileName)
 {
-    const std::filesystem::path path =
-        std::filesystem::path{FADIX_ASSET_ROOT} / "shaders" / fileName;
+    const std::filesystem::path path = RuntimeAssetRoot() / "shaders" / fileName;
     std::ifstream stream(path, std::ios::binary | std::ios::ate);
     if (!stream)
     {

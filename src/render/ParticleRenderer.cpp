@@ -1,5 +1,6 @@
 #include "render/ParticleRenderer.hpp"
 
+#include "assets/EmbeddedAssetProvider.hpp"
 #include "engine/rhi/Buffer.hpp"
 #include "engine/rhi/CommandList.hpp"
 #include "engine/rhi/Pipeline.hpp"
@@ -26,10 +27,6 @@
 #include <utility>
 #include <vector>
 
-#ifndef FADIX_ASSET_ROOT
-#define FADIX_ASSET_ROOT "assets"
-#endif
-
 namespace fadix
 {
 namespace
@@ -42,8 +39,7 @@ constexpr std::size_t kParticleVertexStride = 48;
 
 [[nodiscard]] std::vector<std::byte> ReadShaderSource()
 {
-    const std::filesystem::path path =
-        std::filesystem::path{FADIX_ASSET_ROOT} / "shaders" / "particle.hlsl";
+    const std::filesystem::path path = RuntimeAssetRoot() / "shaders" / "particle.hlsl";
     std::ifstream stream(path, std::ios::binary | std::ios::ate);
     if (!stream)
     {

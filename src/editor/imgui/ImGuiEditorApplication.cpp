@@ -1,6 +1,7 @@
 #include "editor/imgui/ImGuiEditorApplication.hpp"
 
 #include "assets/AssetDatabase.hpp"
+#include "assets/EmbeddedAssetProvider.hpp"
 #include "assets/GltfMeshCache.hpp"
 #include "editor/camera/CameraSelection.hpp"
 #include "editor/play/PlaySession.hpp"
@@ -148,9 +149,7 @@ private:
 }
 
 ImGuiEditorApplication::ImGuiEditorApplication()
-#ifdef FADIX_ASSET_ROOT
-    : m_AssetRoot(FADIX_ASSET_ROOT)
-#endif
+    : m_AssetRoot(RuntimeAssetRoot())
 {
 }
 
