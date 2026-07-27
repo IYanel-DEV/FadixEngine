@@ -189,6 +189,7 @@ if(WIN32)
     add_library(fadix_fxs_editor STATIC
         src/editor/scripting/ScriptEditorController.cpp
         src/editor/scripting/FxsCodeEditor.cpp
+        src/editor/scripting/FxsCodeEditorAutocomplete.cpp
         src/editor/scripting/FxsEditorSettings.cpp
         src/editor/scripting/FxsTextSearch.cpp
         src/editor/scripting/FxsApiCatalog.cpp
