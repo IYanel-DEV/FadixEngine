@@ -1,6 +1,7 @@
 #include "project/ExportService.hpp"
 #include "project/ProjectService.hpp"
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -134,7 +135,24 @@ int main(int argc, char** argv)
         std::cerr << "[export-smoke] staged project.fadix missing defaultScene\n";
         return 11;
     }
+    if (!Contains(projectText, "\"formatVersion\""))
+    {
+        std::cerr << "[export-smoke] staged project.fadix missing formatVersion\n";
+        return 12;
+    }
 
-    std::cout << "[export-smoke] PASS staged export\n";
+    // The exported player must boot the staged project with no editor. It reads
+    // project.fadix + export.manifest.json beside its own exe; --smoke-exit loads
+    // the boot scene and exits 0 before opening a window.
+    const std::filesystem::path exportedPlayer = stage / "ExportSmokeGame.exe";
+    const std::string command = "\"" + exportedPlayer.string() + "\" --smoke-exit";
+    const int playerExit = std::system(command.c_str());
+    if (playerExit != 0)
+    {
+        std::cerr << "[export-smoke] exported player did not boot (exit " << playerExit << ")\n";
+        return 13;
+    }
+
+    std::cout << "[export-smoke] PASS staged export + player boot\n";
     return 0;
 }

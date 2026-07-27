@@ -9,6 +9,17 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin")
 
 option(FADIX_ENABLE_PHYSICS "Build Jolt 3D and Box2D 2D physics" ON)
 option(FADIX_ENABLE_LUA "Build FXS/Lua scripting" ON)
+option(FADIX_PORTABLE_BUILD "Use only assets embedded in fadix_editor" OFF)
+option(FADIX_STATIC_MSVC_RUNTIME "Link the Microsoft runtime into Windows binaries" OFF)
+
+if(MSVC)
+    if(FADIX_STATIC_MSVC_RUNTIME)
+        set(FADIX_MSVC_RUNTIME "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    else()
+        set(FADIX_MSVC_RUNTIME "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+    endif()
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "${FADIX_MSVC_RUNTIME}")
+endif()
 
 include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
@@ -71,12 +82,8 @@ set(FT_DISABLE_BZIP2 ON CACHE BOOL "" FORCE)
 set(FT_DISABLE_HARFBUZZ ON CACHE BOOL "" FORCE)
 set(FT_DISABLE_PNG ON CACHE BOOL "" FORCE)
 set(FT_DISABLE_ZLIB ON CACHE BOOL "" FORCE)
-set(_fadix_conan_deps "${CMAKE_SOURCE_DIR}/.build/conan")
-if(CMAKE_TOOLCHAIN_FILE MATCHES "conan"
-    OR (IS_DIRECTORY "${_fadix_conan_deps}" AND EXISTS "${_fadix_conan_deps}/freetype-config.cmake"))
-    list(PREPEND CMAKE_PREFIX_PATH "${_fadix_conan_deps}")
-    find_package(freetype REQUIRED)
-elseif(NOT TARGET freetype)
+# FreeType, like every other dependency, is fetched from source. No Conan.
+if(NOT TARGET freetype)
     FetchContent_Declare(freetype
         GIT_REPOSITORY https://github.com/freetype/freetype.git
         GIT_TAG VER-2-13-3
@@ -157,7 +164,7 @@ if(WIN32)
         imm32 ole32 oleaut32 uuid gdi32 user32 advapi32)
     if(MSVC)
         set_target_properties(fadix_scintilla PROPERTIES
-            MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+            MSVC_RUNTIME_LIBRARY "${FADIX_MSVC_RUNTIME}")
         target_compile_options(fadix_scintilla PRIVATE /W0 /utf-8)
     endif()
 
@@ -175,13 +182,14 @@ if(WIN32)
     target_link_libraries(fadix_lexilla PUBLIC fadix_scintilla)
     if(MSVC)
         set_target_properties(fadix_lexilla PROPERTIES
-            MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+            MSVC_RUNTIME_LIBRARY "${FADIX_MSVC_RUNTIME}")
         target_compile_options(fadix_lexilla PRIVATE /W0 /utf-8)
     endif()
 
     add_library(fadix_fxs_editor STATIC
         src/editor/scripting/ScriptEditorController.cpp
         src/editor/scripting/FxsCodeEditor.cpp
+        src/editor/scripting/FxsCodeEditorAutocomplete.cpp
         src/editor/scripting/FxsEditorSettings.cpp
         src/editor/scripting/FxsTextSearch.cpp
         src/editor/scripting/FxsApiCatalog.cpp
@@ -193,7 +201,7 @@ if(WIN32)
     target_link_libraries(fadix_fxs_editor PRIVATE Comctl32 shell32 ole32)
     if(MSVC)
         set_target_properties(fadix_fxs_editor PROPERTIES
-            MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+            MSVC_RUNTIME_LIBRARY "${FADIX_MSVC_RUNTIME}")
     endif()
 endif()
 
@@ -210,7 +218,7 @@ FetchContent_Declare(tinygltf
 FetchContent_MakeAvailable(tinygltf)
 if(MSVC AND TARGET tinygltf)
     set_target_properties(tinygltf PROPERTIES
-        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        MSVC_RUNTIME_LIBRARY "${FADIX_MSVC_RUNTIME}")
 endif()
 
 FetchContent_Declare(EnTT
@@ -239,7 +247,7 @@ if(FADIX_ENABLE_LUA)
     target_include_directories(lua_static PUBLIC "${lua_SOURCE_DIR}/src")
     if(MSVC)
         set_target_properties(lua_static PROPERTIES
-            MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+            MSVC_RUNTIME_LIBRARY "${FADIX_MSVC_RUNTIME}")
     endif()
 
     FetchContent_Declare(sol2
@@ -272,7 +280,7 @@ if(FADIX_ENABLE_PHYSICS)
     set(JPH_BUILD_VIEWER OFF CACHE BOOL "" FORCE)
     set(JPH_BUILD_HELLO_WORLD OFF CACHE BOOL "" FORCE)
     set(JPH_USE_AVX2 OFF CACHE BOOL "" FORCE)
-    set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)
+    set(USE_STATIC_MSVC_RUNTIME_LIBRARY ${FADIX_STATIC_MSVC_RUNTIME} CACHE BOOL "" FORCE)
     FetchContent_Declare(JoltPhysics
         GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
         GIT_TAG v5.5.0
@@ -290,7 +298,7 @@ if(FADIX_ENABLE_PHYSICS)
     FetchContent_MakeAvailable(box2d)
     if(MSVC)
         set_property(TARGET box2d PROPERTY MSVC_RUNTIME_LIBRARY
-            "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+            "${FADIX_MSVC_RUNTIME}")
     endif()
 
     target_sources(fadix_runtime PRIVATE
@@ -299,21 +307,6 @@ if(FADIX_ENABLE_PHYSICS)
     target_link_libraries(fadix_runtime PUBLIC Jolt box2d)
     target_compile_definitions(fadix_runtime PUBLIC FADIX_ENABLE_PHYSICS=1)
 endif()
-
-file(GLOB_RECURSE FADIX_FEATURE_SOURCES CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/project/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/editor/project/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/rhi/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/render/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/editor/camera/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/editor/dock/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/editor/scene/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/editor/play/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/editor/gizmo/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/editor/command/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/editor/assets/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/assets/*.cpp")
-list(FILTER FADIX_FEATURE_SOURCES EXCLUDE REGEX "_test\\.cpp$")
 
 file(GLOB_RECURSE FADIX_IMGUI_EDITOR_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/editor/imgui/*.cpp")
@@ -334,7 +327,6 @@ file(GLOB_RECURSE FADIX_IMGUI_SESSION_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/scripting/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/assets/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/engine/audio/*.cpp")
-list(FILTER FADIX_IMGUI_SESSION_SOURCES EXCLUDE REGEX "SceneController\\.cpp$")
 list(FILTER FADIX_IMGUI_SESSION_SOURCES EXCLUDE REGEX "MaterialEditorRmlAdapter\\.cpp$")
 list(FILTER FADIX_IMGUI_SESSION_SOURCES EXCLUDE REGEX "ScriptEditorRmlAdapter\\.cpp$")
 list(FILTER FADIX_IMGUI_SESSION_SOURCES EXCLUDE REGEX "_test\\.cpp$")
@@ -343,6 +335,11 @@ list(APPEND FADIX_IMGUI_SESSION_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/editor/ui/GameUIOverlay.cpp")
 
 set(FADIX_EMBEDDED_ASSETS_HPP "${CMAKE_CURRENT_SOURCE_DIR}/src/generated/EmbeddedAssets.hpp")
+file(GLOB_RECURSE FADIX_EMBEDDED_ASSET_INPUTS CONFIGURE_DEPENDS LIST_DIRECTORIES false
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/*"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/*"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/*"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/templates/*")
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
     add_custom_command(
@@ -353,33 +350,7 @@ if(Python3_Interpreter_FOUND)
             --output "${FADIX_EMBEDDED_ASSETS_HPP}"
         DEPENDS
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_assets.py"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/project_manager.rml"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/project_manager.rcss"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/workspace.rml"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/workspace.rcss"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/icons/entity.svg"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/icons/mesh.svg"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/icons/camera.svg"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/icons/light.svg"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/icons/scene.svg"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/icons/physics3d.svg"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/icons/physics2d.svg"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/icons/network.svg"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/icons/folder.svg"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/icons/file.svg"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/icons/texture.svg"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/icons/material.svg"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/icons/script.svg"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/icons/audio.svg"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/icons/tool-select.svg"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/icons/tool-move.svg"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/icons/tool-rotate.svg"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/icons/tool-scale.svg"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/icons/tool-world.svg"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/icons/tool-local.svg"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/icons/chevron-left.svg"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/icons/chevron-right.svg"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/LatoLatin-Regular.ttf"
+            ${FADIX_EMBEDDED_ASSET_INPUTS}
         COMMENT "Embedding editor runtime assets"
         VERBATIM)
 else()
@@ -388,6 +359,20 @@ else()
     endif()
 endif()
 add_custom_target(fadix_embed_assets DEPENDS "${FADIX_EMBEDDED_ASSETS_HPP}")
+
+add_executable(fadix_portable_assets_smoke
+    tools/PortableAssetsSmoke.cpp
+    src/assets/EmbeddedAssetProvider.cpp)
+target_include_directories(fadix_portable_assets_smoke PRIVATE src)
+target_compile_definitions(fadix_portable_assets_smoke PRIVATE
+    FADIX_ASSET_ROOT="${CMAKE_SOURCE_DIR}/assets"
+    FADIX_PORTABLE_BUILD=1)
+add_dependencies(fadix_portable_assets_smoke fadix_embed_assets)
+if(MSVC)
+    target_compile_options(fadix_portable_assets_smoke PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(fadix_portable_assets_smoke PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
 add_executable(fadix_dock_smoke
     tools/DockLayoutSmoke.cpp
@@ -408,6 +393,7 @@ add_executable(fadix_editor
     ${FADIX_IMGUI_SESSION_SOURCES})
 add_executable(fadix ALIAS fadix_editor)
 add_dependencies(fadix_editor fadix_dock_smoke)
+add_dependencies(fadix_editor fadix_portable_assets_smoke)
 target_include_directories(fadix_editor PRIVATE src)
 target_link_libraries(fadix_editor PRIVATE
     fadix_runtime
@@ -426,19 +412,88 @@ if(WIN32)
     target_link_libraries(fadix_editor PRIVATE fadix_fxs_editor ole32 shell32 uuid)
 endif()
 target_compile_definitions(fadix_editor PRIVATE
-    FADIX_ASSET_ROOT="${CMAKE_SOURCE_DIR}/assets"
-    FADIX_SRC_DIR="${CMAKE_SOURCE_DIR}/src")
+    FADIX_ASSET_ROOT="${CMAKE_SOURCE_DIR}/assets")
+if(FADIX_PORTABLE_BUILD)
+    target_compile_definitions(fadix_editor PRIVATE FADIX_PORTABLE_BUILD=1)
+else()
+    target_compile_definitions(fadix_editor PRIVATE FADIX_SRC_DIR="${CMAKE_SOURCE_DIR}/src")
+endif()
+
+# -----------------------------------------------------------------------------
+# fadix_player — the standalone runtime that ships with an exported game.
+# Reuses the exact shared session sources as the editor (render, rhi, scene,
+# play, scripting, assets, audio, project) but drops all editor/imgui chrome.
+# A stranger runs an exported game with fadix_player.exe + assets, no IDE.
+# -----------------------------------------------------------------------------
+add_executable(fadix_player
+    src/main_player.cpp
+    src/player/PlayerApplication.cpp
+    src/player/PlayerApplication.hpp
+    src/engine/Uuid.cpp
+    src/engine/command/UndoStack.cpp
+    src/engine/app/ModuleFactories.cpp
+    ${FADIX_IMGUI_SESSION_SOURCES})
+target_include_directories(fadix_player PRIVATE src)
+target_link_libraries(fadix_player PRIVATE
+    fadix_runtime
+    RmlUi::RmlUi
+    rmlui_backend_SDL_GPU
+    SDL3::SDL3-static
+    SDL3_image::SDL3_image
+    SDL3_mixer::SDL3_mixer
+    tinygltf
+    glm::glm)
+if(FADIX_ENABLE_LUA)
+    target_link_libraries(fadix_player PRIVATE fadix_lua)
+endif()
+if(WIN32)
+    target_link_libraries(fadix_player PRIVATE ole32 shell32 uuid)
+endif()
+target_compile_definitions(fadix_player PRIVATE
+    FADIX_ASSET_ROOT="${CMAKE_SOURCE_DIR}/assets")
+if(FADIX_PORTABLE_BUILD)
+    target_compile_definitions(fadix_player PRIVATE FADIX_PORTABLE_BUILD=1)
+else()
+    target_compile_definitions(fadix_player PRIVATE FADIX_SRC_DIR="${CMAKE_SOURCE_DIR}/src")
+endif()
+if(MSVC)
+    target_compile_options(fadix_player PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(fadix_player PRIVATE -Wall -Wextra)
+endif()
 
 add_executable(fadix_project_smoke
     tools/ProjectServiceSmoke.cpp
+    src/assets/EmbeddedAssetProvider.cpp
     src/project/ProjectService.cpp
     src/project/ProjectJson.cpp
     src/engine/Uuid.cpp)
 target_include_directories(fadix_project_smoke PRIVATE src)
 target_compile_definitions(fadix_project_smoke PRIVATE
     FADIX_ASSET_ROOT="${CMAKE_SOURCE_DIR}/assets")
+add_dependencies(fadix_project_smoke fadix_embed_assets)
 if(WIN32)
     target_link_libraries(fadix_project_smoke PRIVATE ole32 shell32 uuid)
+endif()
+
+add_executable(fadix_export_smoke
+    tools/ExportSmoke.cpp
+    src/assets/EmbeddedAssetProvider.cpp
+    src/project/ExportService.cpp
+    src/project/ProjectService.cpp
+    src/project/ProjectJson.cpp
+    src/engine/Uuid.cpp)
+target_include_directories(fadix_export_smoke PRIVATE src)
+target_compile_definitions(fadix_export_smoke PRIVATE
+    FADIX_ASSET_ROOT="${CMAKE_SOURCE_DIR}/assets")
+add_dependencies(fadix_export_smoke fadix_embed_assets)
+if(WIN32)
+    target_link_libraries(fadix_export_smoke PRIVATE ole32 shell32 uuid)
+endif()
+if(MSVC)
+    target_compile_options(fadix_export_smoke PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(fadix_export_smoke PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(FADIX_ENABLE_LUA)
@@ -574,6 +629,7 @@ endif()
 if(WIN32)
     add_executable(fadix_shader_compile_smoke
         tools/ShaderCompileSmoke.cpp
+        src/assets/EmbeddedAssetProvider.cpp
         src/render/ShaderCompiler.cpp)
     target_include_directories(fadix_shader_compile_smoke PRIVATE src)
     target_compile_definitions(fadix_shader_compile_smoke PRIVATE
@@ -582,12 +638,14 @@ if(WIN32)
         target_compile_options(fadix_shader_compile_smoke PRIVATE /W4 /permissive-)
     endif()
     add_dependencies(fadix_editor fadix_shader_compile_smoke)
+    add_dependencies(fadix_shader_compile_smoke fadix_embed_assets)
 
     # Real GPU pipeline smoke: builds an actual SDL_GPU device and creates every
     # post-processing pipeline. Catches SDL_CreateGPUGraphicsPipeline failures
     # (0x80070057) that the compile-only smoke cannot see.
     add_executable(fadix_gpu_pipeline_smoke
         tools/GpuPipelineSmoke.cpp
+        src/assets/EmbeddedAssetProvider.cpp
         src/assets/GltfMeshCache.cpp
         src/engine/Uuid.cpp
         src/render/PostProcessing.cpp
@@ -601,6 +659,7 @@ if(WIN32)
         target_compile_options(fadix_gpu_pipeline_smoke PRIVATE /W4 /permissive-)
     endif()
     add_dependencies(fadix_editor fadix_gpu_pipeline_smoke)
+    add_dependencies(fadix_gpu_pipeline_smoke fadix_embed_assets)
 endif()
 
 if(MSVC)

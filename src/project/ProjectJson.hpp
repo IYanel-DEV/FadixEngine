@@ -60,4 +60,14 @@ private:
 [[nodiscard]] std::optional<Value> Parse(std::string_view text);
 [[nodiscard]] std::string Stringify(const Value& value, int indent = 2);
 [[nodiscard]] std::string Escape(std::string_view text);
+
+// Current on-disk schema versions. Bump when a format changes incompatibly.
+inline constexpr int kProjectFormatVersion = 1;
+inline constexpr int kManifestFormatVersion = 1;
+
+// Validates an integer format-version field. Returns an error message when the
+// field is missing/non-numeric or newer than this build supports; nullopt = OK
+// to load (accepts the current version and any older version).
+[[nodiscard]] std::optional<std::string> CheckFormatVersion(
+    const Value& object, std::string_view key, int expected, std::string_view label);
 }

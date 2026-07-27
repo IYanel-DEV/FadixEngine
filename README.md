@@ -24,6 +24,14 @@ Fadix combines a dockable Dear ImGui editor with an SDL GPU renderer, scene edit
 
 Current release: **0.9.125**
 
+## Download
+
+Windows users can download `FadixEngine-0.9.125-Windows-x64.exe` from the
+[latest GitHub release](https://github.com/IYanel-DEV/FadixEngine/releases/latest).
+It is a portable editor: no source checkout, compiler, build step, or separate
+engine asset folder is required. Fadix unpacks its embedded runtime resources
+into the user's local application cache when it starts.
+
 ## Highlights
 
 - Project launcher with recent projects, templates, news, and development history
@@ -45,15 +53,8 @@ The currently supported development environment is:
 - [CMake](https://cmake.org/) 3.24 or newer installed in its default Windows location
 - [Git](https://git-scm.com/) for dependency downloads
 - [Python](https://www.python.org/) 3 for generated embedded editor assets
-- [Conan](https://conan.io/) 2.x
 
-Install Conan if it is not already available:
-
-```powershell
-python -m pip install --user "conan>=2,<3"
-```
-
-An internet connection is required for the first build because CMake downloads pinned third-party dependencies. Blender is optional and is only required when importing formats that Fadix converts to GLB.
+Every third-party library (FreeType, SDL, Jolt, Box2D, RmlUi, ImGui, glm, EnTT, tinygltf, Lua) is pulled and built from source by CMake FetchContent. There is no Conan or other package-manager step. An internet connection is required for the first build because CMake downloads the pinned dependencies. Blender is optional and is only required when importing formats that Fadix converts to GLB.
 
 ## Build
 
@@ -63,29 +64,41 @@ Clone or download the repository, open PowerShell in its root directory, and run
 .\build.bat 1
 ```
 
-The script detects the Visual Studio toolchain, prepares Conan dependencies, configures CMake, and builds the Debug editor. The resulting executable is:
+The script detects the Visual Studio toolchain, configures CMake in `.build\debug-cmake` (FetchContent downloads the dependencies), and builds the Debug editor and player. The resulting executables are:
 
 ```text
 bin\Debug\fadix_editor.exe
+bin\Debug\fadix_player.exe
 ```
 
 The first build can take a while because dependencies are compiled locally. Later builds reuse the `.build` cache.
 
-### Manual CMake build
-
-From a Visual Studio x64 developer shell:
+To produce the portable Windows release executables, run:
 
 ```powershell
-conan profile detect --force
-conan install . --output-folder=.build\conan --build=missing `
-  -s:h build_type=Debug -s:h compiler.cppstd=20 -s:b compiler.cppstd=20
+.\build.bat 2
+```
 
-cmake -S . -B .build\conan-cmake `
-  -DCMAKE_TOOLCHAIN_FILE=.build/conan/conan_toolchain.cmake `
+The release artifacts are written to:
+
+```text
+artifacts\FadixEngine-0.9.125-Windows-x64.exe
+artifacts\FadixPlayer-0.9.125-Windows-x64.exe
+```
+
+### Manual CMake build
+
+Every dependency is fetched from source by CMake FetchContent — there is no
+Conan step and no other package manager. From a Visual Studio x64 developer
+shell:
+
+```powershell
+cmake -S . -B .build\debug-cmake `
   -DFADIX_ENABLE_PHYSICS=ON `
   -DFADIX_ENABLE_LUA=ON
 
-cmake --build .build\conan-cmake --config Debug --target fadix_editor --parallel 8
+cmake --build .build\debug-cmake --config Debug --target fadix_editor --parallel 8
+cmake --build .build\debug-cmake --config Debug --target fadix_player --parallel 8
 ```
 
 ## Getting started
@@ -135,7 +148,7 @@ While the Scene View camera is active, use `W`, `A`, `S`, `D`, `Q`, and `E` to f
 The repository uses small executable smoke tests instead of a separate unit-test framework. After configuration, build and run the relevant target from `bin\Debug`. For example:
 
 ```powershell
-cmake --build .build\conan-cmake --config Debug --target fadix_project_smoke --parallel 8
+cmake --build .build\debug-cmake --config Debug --target fadix_project_smoke --parallel 8
 .\bin\Debug\fadix_project_smoke.exe
 ```
 
@@ -162,7 +175,9 @@ tools/        Asset embedding and smoke-test programs
 - Windows is the only actively verified editor platform.
 - The engine and project formats may change before version 1.0.
 - A clean first build requires network access and can be large because dependencies are built from source.
-- Some advanced rendering, networking, animation, packaging, and platform workflows are still experimental.
+- Some advanced rendering, animation, and packaging workflows are still experimental.
+- Multiplayer/networking is **not implemented**. `src/network` currently defines only a replication *schema* (component/field registry and protocol hash); there is no transport, no client/server, and no state synchronization. Do not rely on it for online play.
+- Animation is early: glTF clips and skeletons load and can play, but there is no animation-graph/state-machine or retargeting tooling yet.
 - There are no official prebuilt releases or compatibility guarantees yet.
 
 Please report bugs with reproduction steps, the graphics adapter, Windows version, build configuration, and relevant Output-panel or console messages.

@@ -6,6 +6,10 @@
 #include "engine/render/ViewportRenderer.hpp"
 #include "render/AssetResourceCache.hpp"
 #include "render/ParticleRenderer.hpp"
+#include "render/ViewportGeometry.hpp"
+#include "render/ViewportGizmo.hpp"
+#include "render/ViewportMath.hpp"
+#include "render/ViewportUniforms.hpp"
 #include "render/ParticleSystem.hpp"
 #include "render/PostProcessing.h"
 #include "render/ShadowCascades.hpp"
@@ -62,152 +66,59 @@
 #include <utility>
 #include <vector>
 
-#ifndef FADIX_ASSET_ROOT
-#define FADIX_ASSET_ROOT "assets"
-#endif
-
 namespace fadix
 {
 namespace
 {
-struct Vertex
-{
-    glm::vec3 Position;
-    glm::vec3 Normal;
-    glm::vec4 Tangent;
-    glm::vec2 UV;
-    glm::vec4 Color;
-    glm::vec4 JointIndices{0.0F};
-    glm::vec4 JointWeights{0.0F};
-};
-static_assert(sizeof(Vertex) == 96);
+// Primitive mesh generation + the shared Vertex layout live in
+// ViewportGeometry.{hpp,cpp}. Bridge the names back into this anonymous
+// namespace so every existing call site (Vertex{...}, AppendCube(...), ...)
+// resolves unchanged.
+using viewport_geometry::Vertex;
+using viewport_geometry::AppendCapsule;
+using viewport_geometry::AppendCone;
+using viewport_geometry::AppendCube;
+using viewport_geometry::AppendCylinder;
+using viewport_geometry::AppendPlanePrimitive;
+using viewport_geometry::AppendQuad;
+using viewport_geometry::AppendSphere;
+using viewport_geometry::AppendTorus;
+using viewport_geometry::MeshRange;
 
+// Transform-gizmo part assembly now lives in ViewportGizmo.{hpp,cpp}.
+using viewport_gizmo::GizmoPart;
 
-struct VertexUniform
-{
-    glm::mat4 ViewProjection{1.0F};
-    glm::mat4 PrevViewProjection{1.0F};
-    glm::mat4 Model{1.0F};
-    glm::mat4 PrevModel{1.0F};
-    glm::vec4 SkinParams{0.0F};
-    glm::mat4 NormalMatrix{1.0F};
-};
+// Pure viewport math helpers now live in ViewportMath.{hpp,cpp}; bridge them
+// back so existing unqualified call sites resolve unchanged.
+using viewport_math::ComposeMatrix;
+using viewport_math::Halton23;
+using viewport_math::HaltonDigit;
+using viewport_math::IntersectAabb;
+using viewport_math::ModelMatrix;
+using viewport_math::RotationBetween;
+using viewport_math::SmoothStep;
+using viewport_math::ViewForwardWorld;
 
-struct BoneUniform
-{
-    glm::mat4 Bones[kMaxSkinJoints]{};
-};
-
-[[nodiscard]] inline glm::mat4 NormalMatrixFor(const glm::mat4& model)
-{
-    return glm::mat4{glm::inverseTranspose(glm::mat3{model})};
-}
-
-struct ShadowVertexUniform
-{
-    glm::mat4 LightSpaceMatrix{1.0F};
-    glm::mat4 Model{1.0F};
-    glm::vec4 SkinParams{0.0F}; // x = skinning enabled (matches shadow_depth.hlsl)
-};
-
-struct ShadowFragmentUniform
-{
-    glm::vec4 UvParams{1.0F, 1.0F, 0.0F, 0.0F};
-    glm::vec4 AlphaParams{0.0F, 0.5F, 0.0F, 0.0F}; // x = mask enabled
-};
-
-constexpr int MaxPointLights = 8;
-constexpr int MaxSpotLights = 8;
+// GPU cbuffer layouts now live in ViewportUniforms.hpp; bridge them (and the
+// two light-count constants they share with the lighting loop) back here.
+using viewport_uniforms::ApplyLdrTarget;
+using viewport_uniforms::ApplySceneMrt;
+using viewport_uniforms::BoneUniform;
+using viewport_uniforms::FragmentUniform;
+using viewport_uniforms::LightSet;
+using viewport_uniforms::MaxPointLights;
+using viewport_uniforms::MaxSpotLights;
+using viewport_uniforms::NormalMatrixFor;
+using viewport_uniforms::ShadowFragmentUniform;
+using viewport_uniforms::ShadowVertexUniform;
+using viewport_uniforms::SkyUniform;
+using viewport_uniforms::VertexUniform;
 
 // Device-safe upper bound on a single directional shadow-map dimension.
 constexpr int kMaxShadowResolution = 4096;
 // World-space pull-back added behind each cascade slice so tall casters standing
 // above the slice still render into that cascade's depth map.
 constexpr float kShadowCasterMargin = 50.0F;
-
-// Per-frame punctual light data shared by every lit draw. Must match the
-// LightSet layout inside FragmentUniforms in viewport.hlsl exactly.
-struct LightSet
-{
-    // x = point light count, y = spot light count.
-    glm::vec4 Counts{0.0F};
-    glm::vec4 PointPositionRange[MaxPointLights]{};   // xyz position, w range
-    glm::vec4 PointColorIntensity[MaxPointLights]{};  // rgb color, a intensity
-    glm::vec4 PointParams[MaxPointLights]{};          // x falloff exponent
-    glm::vec4 SpotPositionRange[MaxSpotLights]{};     // xyz position, w range
-    glm::vec4 SpotDirectionFalloff[MaxSpotLights]{};  // xyz direction, w falloff
-    glm::vec4 SpotColorIntensity[MaxSpotLights]{};    // rgb color, a intensity
-    glm::vec4 SpotCone[MaxSpotLights]{};              // x cos(inner), y cos(outer)
-};
-
-static_assert(sizeof(LightSet) ==
-    sizeof(glm::vec4) * (1 + 3 * MaxPointLights + 4 * MaxSpotLights));
-
-struct FragmentUniform
-{
-    glm::vec4 BaseColor{1.0F};
-    glm::vec4 Material{0.0F, 0.65F, 0.0F, 0.0F};
-    glm::vec4 EmissiveColorIntensity{0.0F, 0.0F, 0.0F, 0.0F};
-    glm::vec4 UvParams{1.0f, 1.0f, 0.0f, 0.0f};
-    glm::vec4 AlphaParams{0.0f, 0.5f, 0.0f, 0.0f};
-    glm::vec4 LightDirection{-0.4F, -1.0F, -0.25F, 0.0F};
-    glm::vec4 LightColor{1.0F, 0.96F, 0.88F, 3.0F};
-    glm::vec4 CameraPosition{0.0F};
-    glm::vec4 AmbientSky{0.45F, 0.55F, 0.70F, 0.55F};
-    glm::vec4 AmbientGround{0.28F, 0.25F, 0.22F, 0.0F};
-    glm::vec4 EnvParams{1.0F, 0.0F, 0.0F, 0.0F};
-    glm::vec4 FogColorDensity{0.60F, 0.66F, 0.75F, 0.0F};
-    glm::vec4 FogRange{10.0F, 250.0F, 0.0F, 0.0F};
-    LightSet Lights;
-    glm::vec4 ShadowParams{0.0F};   // x filter radius (texels), y bias, z strength, w enabled
-    glm::vec4 CascadeSplits{0.0F};  // view-space far distance of cascade 0..3
-    glm::vec4 CascadeTexel{0.0F};   // UV texel size (1/resolution) of cascade 0..3
-    glm::vec4 CascadeCount{0.0F};   // x active cascade count
-    glm::vec4 CameraForward{0.0F};  // xyz unit camera view direction
-    std::array<glm::mat4, shadow::kMaxCascades> CascadeLightSpace{
-        {glm::mat4{1.0F}, glm::mat4{1.0F}, glm::mat4{1.0F}, glm::mat4{1.0F}}};
-    glm::vec4 DebugParams{0.0F};  // x mode, y cascade count (diagnostic)
-    glm::vec4 DebugSplits{0.0F};  // x split2, y split3, z shadow distance, w unused
-};
-
-static_assert(sizeof(FragmentUniform) ==
-    sizeof(glm::vec4) * 13 + sizeof(LightSet) + sizeof(glm::vec4) * 5 +
-        sizeof(glm::mat4) * shadow::kMaxCascades + sizeof(glm::vec4) * 2,
-    "FragmentUniform must stay tightly packed to match viewport.hlsl");
-
-struct SkyUniform
-{
-    glm::mat4 InverseViewProjection{1.0F};
-    glm::mat4 PrevInverseViewProjection{1.0F};
-    glm::mat4 ViewProjection{1.0F};
-    glm::mat4 PrevViewProjection{1.0F};
-    glm::vec4 SunDirection{-0.4F, -1.0F, -0.25F, 1.0F};
-    glm::vec4 SunColor{1.0F, 0.92F, 0.78F, 1.0F};
-    glm::vec4 MoonDirection{0.4F, 1.0F, 0.25F, 1.0F};
-    glm::vec4 MoonColor{0.62F, 0.72F, 1.0F, 0.35F};
-    glm::vec4 Params{0.0F}; // x ortho flag, y exposure
-    glm::vec4 ZenithColor{0.13F, 0.27F, 0.52F, 0.0F};
-    glm::vec4 HorizonColor{0.63F, 0.71F, 0.82F, 0.0F};
-    glm::vec4 GroundColor{0.20F, 0.19F, 0.18F, 0.0F};
-};
-
-void ApplySceneMrt(rhi::PipelineDesc& description)
-{
-    description.ColorFormat = rhi::Format::R16G16B16A16Float;
-    description.ColorFormat1 = rhi::Format::R16G16Float;
-}
-
-void ApplyLdrTarget(rhi::PipelineDesc& description)
-{
-    description.ColorFormat = rhi::Format::R8G8B8A8Unorm;
-    description.ColorFormat1 = rhi::Format::Unknown;
-}
-
-struct MeshRange
-{
-    std::uint32_t FirstIndex{0};
-    std::uint32_t IndexCount{0};
-};
 
 struct Pickable
 {
@@ -216,313 +127,15 @@ struct Pickable
     glm::vec3 Maximum;
 };
 
-void AppendFace(
-    std::vector<Vertex>& vertices,
-    std::vector<std::uint32_t>& indices,
-    const glm::vec3 normal,
-    const glm::vec4 tangent,
-    const std::array<glm::vec3, 4>& corners,
-    const glm::vec4 color)
-{
-    const auto start = static_cast<std::uint32_t>(vertices.size());
-    vertices.push_back({corners[0], normal, tangent, {0, 0}, color});
-    vertices.push_back({corners[1], normal, tangent, {1, 0}, color});
-    vertices.push_back({corners[2], normal, tangent, {1, 1}, color});
-    vertices.push_back({corners[3], normal, tangent, {0, 1}, color});
-    indices.insert(indices.end(), {start, start + 1, start + 2, start, start + 2, start + 3});
-}
-
-void AppendCube(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices)
-{
-    constexpr float h = 0.5F;
-    AppendFace(vertices, indices, {0, 0, 1}, {1, 0, 0, 1}, {{{-h, -h, h}, {h, -h, h}, {h, h, h}, {-h, h, h}}}, {1, 1, 1, 1});
-    AppendFace(vertices, indices, {0, 0, -1}, {-1, 0, 0, 1}, {{{h, -h, -h}, {-h, -h, -h}, {-h, h, -h}, {h, h, -h}}}, {1, 1, 1, 1});
-    AppendFace(vertices, indices, {1, 0, 0}, {0, 0, -1, 1}, {{{h, -h, h}, {h, -h, -h}, {h, h, -h}, {h, h, h}}}, {1, 1, 1, 1});
-    AppendFace(vertices, indices, {-1, 0, 0}, {0, 0, 1, 1}, {{{-h, -h, -h}, {-h, -h, h}, {-h, h, h}, {-h, h, -h}}}, {1, 1, 1, 1});
-    AppendFace(vertices, indices, {0, 1, 0}, {1, 0, 0, 1}, {{{-h, h, h}, {h, h, h}, {h, h, -h}, {-h, h, -h}}}, {1, 1, 1, 1});
-    AppendFace(vertices, indices, {0, -1, 0}, {1, 0, 0, 1}, {{{-h, -h, -h}, {h, -h, -h}, {h, -h, h}, {-h, -h, h}}}, {1, 1, 1, 1});
-}
-
-void AppendCylinder(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices, const int segments)
-{
-    const auto ring = [&](const float y, const float v) {
-        const auto start = static_cast<std::uint32_t>(vertices.size());
-        for (int i = 0; i < segments; ++i)
-        {
-            const float angle = glm::two_pi<float>() * static_cast<float>(i) / static_cast<float>(segments);
-            const glm::vec3 normal{std::cos(angle), 0.0F, std::sin(angle)};
-            const glm::vec4 tangent{-std::sin(angle), 0.0F, std::cos(angle), 1.0F};
-            const float u = static_cast<float>(i) / static_cast<float>(segments);
-            vertices.push_back({{normal.x * 0.5F, y, normal.z * 0.5F}, normal, tangent, {u, v}, {1, 1, 1, 1}});
-        }
-        return start;
-    };
-    const std::uint32_t bottom = ring(0.0F, 0.0F);
-    const std::uint32_t top = ring(1.0F, 1.0F);
-    for (int i = 0; i < segments; ++i)
-    {
-        const std::uint32_t next = static_cast<std::uint32_t>((i + 1) % segments);
-        const auto b0 = bottom + static_cast<std::uint32_t>(i);
-        const auto b1 = bottom + next;
-        const auto t0 = top + static_cast<std::uint32_t>(i);
-        const auto t1 = top + next;
-        indices.insert(indices.end(), {b0, t0, t1, b0, t1, b1});
-    }
-    const auto capCenterBottom = static_cast<std::uint32_t>(vertices.size());
-    vertices.push_back({{0, 0, 0}, {0, -1, 0}, {1, 0, 0, 1}, {0.5F, 0.5F}, {1, 1, 1, 1}});
-    const auto capCenterTop = static_cast<std::uint32_t>(vertices.size());
-    vertices.push_back({{0, 1, 0}, {0, 1, 0}, {1, 0, 0, 1}, {0.5F, 0.5F}, {1, 1, 1, 1}});
-    for (int i = 0; i < segments; ++i)
-    {
-        const std::uint32_t next = static_cast<std::uint32_t>((i + 1) % segments);
-        indices.insert(indices.end(), {capCenterBottom, bottom + static_cast<std::uint32_t>(i), bottom + next});
-        indices.insert(indices.end(), {capCenterTop, top + next, top + static_cast<std::uint32_t>(i)});
-    }
-}
-
-void AppendCone(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices, const int segments)
-{
-    const auto baseStart = static_cast<std::uint32_t>(vertices.size());
-    for (int i = 0; i < segments; ++i)
-    {
-        const float angle = glm::two_pi<float>() * static_cast<float>(i) / static_cast<float>(segments);
-        const glm::vec3 radial{std::cos(angle), 0.0F, std::sin(angle)};
-        const glm::vec3 normal = glm::normalize(glm::vec3{radial.x, 0.5F, radial.z});
-        const glm::vec4 tangent{-std::sin(angle), 0.0F, std::cos(angle), 1.0F};
-        const float u = static_cast<float>(i) / static_cast<float>(segments);
-        vertices.push_back({{radial.x * 0.5F, 0.0F, radial.z * 0.5F}, normal, tangent, {u, 0.0F}, {1, 1, 1, 1}});
-    }
-    const auto apex = static_cast<std::uint32_t>(vertices.size());
-    vertices.push_back({{0, 1, 0}, {0, 1, 0}, {1, 0, 0, 1}, {0.5F, 1.0F}, {1, 1, 1, 1}});
-    const auto baseCenter = static_cast<std::uint32_t>(vertices.size());
-    vertices.push_back({{0, 0, 0}, {0, -1, 0}, {1, 0, 0, 1}, {0.5F, 0.5F}, {1, 1, 1, 1}});
-    for (int i = 0; i < segments; ++i)
-    {
-        const std::uint32_t next = static_cast<std::uint32_t>((i + 1) % segments);
-        indices.insert(indices.end(), {baseStart + static_cast<std::uint32_t>(i), apex, baseStart + next});
-        indices.insert(indices.end(), {baseCenter, baseStart + static_cast<std::uint32_t>(i), baseStart + next});
-    }
-}
-
-void AppendSphere(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices, const int slices, const int stacks)
-{
-    const auto start = static_cast<std::uint32_t>(vertices.size());
-    for (int stack = 0; stack <= stacks; ++stack)
-    {
-        const float phi = glm::pi<float>() * static_cast<float>(stack) / static_cast<float>(stacks);
-        const float v = 1.0F - static_cast<float>(stack) / static_cast<float>(stacks);
-        for (int slice = 0; slice <= slices; ++slice)
-        {
-            const float theta = glm::two_pi<float>() * static_cast<float>(slice) / static_cast<float>(slices);
-            const float u = static_cast<float>(slice) / static_cast<float>(slices);
-            const glm::vec3 normal{std::sin(phi) * std::cos(theta), std::cos(phi), std::sin(phi) * std::sin(theta)};
-            const glm::vec4 tangent{-std::sin(theta), 0.0F, std::cos(theta), 1.0F};
-            vertices.push_back({normal * 0.5F, normal, tangent, {u, v}, {1, 1, 1, 1}});
-        }
-    }
-    const auto stride = static_cast<std::uint32_t>(slices + 1);
-    for (int stack = 0; stack < stacks; ++stack)
-    {
-        for (int slice = 0; slice < slices; ++slice)
-        {
-            const std::uint32_t a = start + static_cast<std::uint32_t>(stack) * stride + static_cast<std::uint32_t>(slice);
-            const std::uint32_t b = a + stride;
-            indices.insert(indices.end(), {a, a + 1, b + 1, a, b + 1, b});
-        }
-    }
-}
-
-void AppendTorus(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices, const float tubeRadius, const int majorSegments, const int minorSegments)
-{
-    const auto start = static_cast<std::uint32_t>(vertices.size());
-    for (int major = 0; major <= majorSegments; ++major)
-    {
-        const float u_val = static_cast<float>(major) / static_cast<float>(majorSegments);
-        const float u = glm::two_pi<float>() * u_val;
-        const glm::vec3 center{std::cos(u), std::sin(u), 0.0F};
-        for (int minor = 0; minor <= minorSegments; ++minor)
-        {
-            const float v_val = static_cast<float>(minor) / static_cast<float>(minorSegments);
-            const float v = glm::two_pi<float>() * v_val;
-            const glm::vec3 normal = glm::normalize(center * std::cos(v) + glm::vec3{0.0F, 0.0F, std::sin(v)});
-            const glm::vec4 tangent{-std::sin(u), std::cos(u), 0.0F, 1.0F};
-            vertices.push_back({center + normal * tubeRadius, normal, tangent, {u_val, v_val}, {1, 1, 1, 1}});
-        }
-    }
-    const auto stride = static_cast<std::uint32_t>(minorSegments + 1);
-    for (int major = 0; major < majorSegments; ++major)
-    {
-        for (int minor = 0; minor < minorSegments; ++minor)
-        {
-            const std::uint32_t a = start + static_cast<std::uint32_t>(major) * stride + static_cast<std::uint32_t>(minor);
-            const std::uint32_t b = a + stride;
-            indices.insert(indices.end(), {a, b, a + 1, a + 1, b, b + 1});
-        }
-    }
-}
-
-void AppendQuad(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices)
-{
-    AppendFace(vertices, indices, {0, 0, 1}, {1, 0, 0, 1}, {{{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}}}, {1, 1, 1, 1});
-    AppendFace(vertices, indices, {0, 0, -1}, {-1, 0, 0, 1}, {{{0, 0, 0}, {0, 1, 0}, {1, 1, 0}, {1, 0, 0}}}, {1, 1, 1, 1});
-}
-
-void AppendPlanePrimitive(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices)
-{
-    constexpr float h = 0.5F;
-    AppendFace(vertices, indices, {0, 1, 0}, {1, 0, 0, 1}, {{{-h, 0, h}, {h, 0, h}, {h, 0, -h}, {-h, 0, -h}}}, {1, 1, 1, 1});
-    AppendFace(vertices, indices, {0, -1, 0}, {1, 0, 0, 1}, {{{-h, 0, -h}, {h, 0, -h}, {h, 0, h}, {-h, 0, h}}}, {1, 1, 1, 1});
-}
-
-void AppendCapsule(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices, const int slices, const int stacks)
-{
-    const auto start = static_cast<std::uint32_t>(vertices.size());
-    const auto pushRing = [&](const float phi, const float offset, const float v) {
-        for (int slice = 0; slice <= slices; ++slice)
-        {
-            const float theta = glm::two_pi<float>() * static_cast<float>(slice) / static_cast<float>(slices);
-            const float u = static_cast<float>(slice) / static_cast<float>(slices);
-            const glm::vec3 normal{std::sin(phi) * std::cos(theta), std::cos(phi), std::sin(phi) * std::sin(theta)};
-            const glm::vec4 tangent{-std::sin(theta), 0.0F, std::cos(theta), 1.0F};
-            vertices.push_back({normal * 0.5F + glm::vec3{0.0F, offset, 0.0F}, normal, tangent, {u, v}, {1, 1, 1, 1}});
-        }
-    };
-    for (int stack = 0; stack <= stacks; ++stack)
-    {
-        const float v = static_cast<float>(stack) / static_cast<float>(stacks * 2);
-        pushRing(glm::half_pi<float>() * static_cast<float>(stack) / static_cast<float>(stacks), 0.5F, v);
-    }
-    for (int stack = 0; stack <= stacks; ++stack)
-    {
-        const float v = 0.5F + static_cast<float>(stack) / static_cast<float>(stacks * 2);
-        pushRing(glm::half_pi<float>() + glm::half_pi<float>() * static_cast<float>(stack) / static_cast<float>(stacks), -0.5F, v);
-    }
-    const auto stride = static_cast<std::uint32_t>(slices + 1);
-    const int ringCount = 2 * (stacks + 1);
-    for (int ring = 0; ring < ringCount - 1; ++ring)
-    {
-        for (int slice = 0; slice < slices; ++slice)
-        {
-            const std::uint32_t a = start + static_cast<std::uint32_t>(ring) * stride + static_cast<std::uint32_t>(slice);
-            const std::uint32_t b = a + stride;
-            indices.insert(indices.end(), {a, a + 1, b + 1, a, b + 1, b});
-        }
-    }
-}
-
-[[nodiscard]] glm::mat4 ModelMatrix(const TransformComponent& transform)
-{
-    return glm::translate(glm::mat4{1.0F}, transform.Position) *
-           glm::mat4_cast(transform.Rotation) *
-           glm::scale(glm::mat4{1.0F}, transform.Scale);
-}
-
-[[nodiscard]] glm::mat4 ComposeMatrix(
-    const glm::vec3 position, const glm::quat rotation, const glm::vec3 scale)
-{
-    return glm::translate(glm::mat4{1.0F}, position) * glm::mat4_cast(rotation) *
-        glm::scale(glm::mat4{1.0F}, scale);
-}
-
-[[nodiscard]] glm::quat RotationBetween(const glm::vec3 from, const glm::vec3 to)
-{
-    const glm::vec3 f = glm::normalize(from);
-    const glm::vec3 t = glm::normalize(to);
-    const float cosine = glm::dot(f, t);
-    if (cosine > 0.9999F)
-    {
-        return glm::quat{1.0F, 0.0F, 0.0F, 0.0F};
-    }
-    if (cosine < -0.9999F)
-    {
-        const glm::vec3 orthogonal = std::abs(f.x) < 0.9F
-            ? glm::normalize(glm::cross(f, glm::vec3{1, 0, 0}))
-            : glm::normalize(glm::cross(f, glm::vec3{0, 1, 0}));
-        return glm::angleAxis(glm::pi<float>(), orthogonal);
-    }
-    const glm::vec3 axis = glm::normalize(glm::cross(f, t));
-    return glm::angleAxis(std::acos(std::clamp(cosine, -1.0F, 1.0F)), axis);
-}
-
-[[nodiscard]] bool IntersectAabb(
-    const glm::vec3 origin,
-    const glm::vec3 direction,
-    const glm::vec3 minimum,
-    const glm::vec3 maximum,
-    float& distance)
-{
-    float nearest = 0.0F;
-    float farthest = std::numeric_limits<float>::max();
-    for (int axis = 0; axis < 3; ++axis)
-    {
-        if (std::abs(direction[axis]) < 1.0e-6F)
-        {
-            if (origin[axis] < minimum[axis] || origin[axis] > maximum[axis])
-            {
-                return false;
-            }
-            continue;
-        }
-        const float inverse = 1.0F / direction[axis];
-        float first = (minimum[axis] - origin[axis]) * inverse;
-        float second = (maximum[axis] - origin[axis]) * inverse;
-        if (first > second)
-        {
-            std::swap(first, second);
-        }
-        nearest = std::max(nearest, first);
-        farthest = std::min(farthest, second);
-        if (nearest > farthest)
-        {
-            return false;
-        }
-    }
-    distance = nearest;
-    return true;
-}
-
-constexpr glm::vec3 AxisColorX{0.90F, 0.24F, 0.24F};
-constexpr glm::vec3 AxisColorY{0.32F, 0.80F, 0.32F};
-constexpr glm::vec3 AxisColorZ{0.26F, 0.50F, 0.95F};
+// AxisColorX/Y/Z moved with BuildGizmoParts into ViewportGizmo.cpp.
 constexpr glm::vec3 HighlightColor{1.0F, 0.86F, 0.30F};
 constexpr glm::vec3 SunWarmColor{1.0F, 0.72F, 0.25F};
 constexpr glm::vec3 MoonCoolColor{0.55F, 0.70F, 1.0F};
 
-[[nodiscard]] float SmoothStep(const float edge0, const float edge1, const float value) noexcept
-{
-    const float t = std::clamp((value - edge0) / (edge1 - edge0), 0.0F, 1.0F);
-    return t * t * (3.0F - 2.0F * t);
-}
 constexpr int LineBufferMaxVertices = 16384;
 constexpr float kCameraCutEyeThreshold = 0.75F;
 constexpr float kCameraCutViewAngleDegrees = 20.0F;
 constexpr std::uint32_t kHaltonCycle = 16;
-
-[[nodiscard]] glm::vec3 ViewForwardWorld(const glm::mat4& view) noexcept
-{
-    // GLM lookAtRH stores -forward in column 2 of the view matrix.
-    return glm::normalize(-glm::vec3{view[0][2], view[1][2], view[2][2]});
-}
-
-[[nodiscard]] float HaltonDigit(const std::uint32_t index, const std::uint32_t base) noexcept
-{
-    float f = 1.0F;
-    float r = 0.0F;
-    std::uint32_t i = index;
-    while (i > 0)
-    {
-        f /= static_cast<float>(base);
-        r += f * static_cast<float>(i % base);
-        i /= base;
-    }
-    return r;
-}
-
-// Halton (2,3) in [0,1)^2 for projection jitter.
-[[nodiscard]] glm::vec2 Halton23(const std::uint32_t index) noexcept
-{
-    return {HaltonDigit(index, 2), HaltonDigit(index, 3)};
-}
 
 [[nodiscard]] bool ProbeGpuTimestampSupport(const rhi::Device& device) noexcept
 {
@@ -2889,152 +2502,18 @@ private:
         }
     }
 
-    struct GizmoPart
-    {
-        GizmoHandle Handle;
-        const MeshRange* Mesh;
-        glm::mat4 Model;
-        glm::vec3 Color;
-        float Alpha;
-    };
-
     // Fills m_GizmoParts (reused across frames to avoid per-frame allocation).
     void BuildGizmoParts()
     {
-        namespace layout = gizmo_layout;
-        std::vector<GizmoPart>& parts = m_GizmoParts;
-        parts.clear();
-        const float size = GizmoWorldSize(
-            m_View, m_Projection, m_Gizmo.Position, static_cast<float>(m_Extent.Height));
-        if (size <= 0.0F)
-        {
-            return; // Anchor behind the camera.
-        }
-        const glm::quat orientation = m_Gizmo.Orientation;
-        const glm::vec3 position = m_Gizmo.Position;
-
-        constexpr std::array handles{GizmoHandle::AxisX, GizmoHandle::AxisY, GizmoHandle::AxisZ};
-        constexpr std::array colors{AxisColorX, AxisColorY, AxisColorZ};
-        const auto isHot = [this](const GizmoHandle handle) {
-            return (m_Gizmo.Active && *m_Gizmo.Active == handle) ||
-                (!m_Gizmo.Active && m_Gizmo.Hover && *m_Gizmo.Hover == handle);
-        };
-        const auto axisRotation = [&](const int index) {
-            // Rotate the +Y-aligned primitives onto the requested axis.
-            if (index == 0)
-            {
-                return orientation * glm::angleAxis(-glm::half_pi<float>(), glm::vec3{0, 0, 1});
-            }
-            if (index == 2)
-            {
-                return orientation * glm::angleAxis(glm::half_pi<float>(), glm::vec3{1, 0, 0});
-            }
-            return orientation;
-        };
-
-        if (m_Gizmo.Mode == GizmoMode::Rotate)
-        {
-            for (int index = 0; index < 3; ++index)
-            {
-                const GizmoHandle handle = handles[static_cast<std::size_t>(index)];
-                // Torus circle lies in XY (around Z); rotate Z onto the axis.
-                glm::quat ringRotation = orientation;
-                if (index == 0)
-                {
-                    ringRotation = orientation * glm::angleAxis(glm::half_pi<float>(), glm::vec3{0, 1, 0});
-                }
-                else if (index == 1)
-                {
-                    ringRotation = orientation * glm::angleAxis(-glm::half_pi<float>(), glm::vec3{1, 0, 0});
-                }
-                parts.push_back({handle,
-                    &m_Torus,
-                    ComposeMatrix(position, ringRotation, glm::vec3{size * layout::RingRadius}),
-                    isHot(handle) ? HighlightColor : colors[static_cast<std::size_t>(index)],
-                    1.0F});
-            }
-            return;
-        }
-
-        for (int index = 0; index < 3; ++index)
-        {
-            const GizmoHandle handle = handles[static_cast<std::size_t>(index)];
-            const glm::vec3 color =
-                isHot(handle) ? HighlightColor : colors[static_cast<std::size_t>(index)];
-            const glm::vec3 direction = orientation * GizmoAxisVector(static_cast<GizmoAxis>(index));
-            const glm::quat rotation = axisRotation(index);
-            const float shaftLength = (layout::ShaftEnd - layout::ShaftStart) * size;
-            parts.push_back({handle,
-                &m_Cylinder,
-                ComposeMatrix(position + direction * layout::ShaftStart * size,
-                    rotation,
-                    glm::vec3{layout::ShaftRadius * 2.0F * size,
-                        shaftLength,
-                        layout::ShaftRadius * 2.0F * size}),
-                color,
-                1.0F});
-            if (m_Gizmo.Mode == GizmoMode::Translate)
-            {
-                parts.push_back({handle,
-                    &m_Cone,
-                    ComposeMatrix(position + direction * layout::ShaftEnd * size,
-                        rotation,
-                        glm::vec3{layout::ArrowRadius * 2.0F * size,
-                            layout::ArrowLength * size,
-                            layout::ArrowRadius * 2.0F * size}),
-                    color,
-                    1.0F});
-            }
-            else
-            {
-                parts.push_back({handle,
-                    &m_Cube,
-                    ComposeMatrix(position + direction * layout::ShaftEnd * size,
-                        orientation,
-                        glm::vec3{layout::ScaleCubeHalf * 2.0F * size}),
-                    color,
-                    1.0F});
-            }
-        }
-
-        if (m_Gizmo.Mode == GizmoMode::Translate)
-        {
-            constexpr std::array planeHandles{
-                GizmoHandle::PlaneXY, GizmoHandle::PlaneXZ, GizmoHandle::PlaneYZ};
-            constexpr std::array planeColors{AxisColorZ, AxisColorY, AxisColorX};
-            for (std::size_t index = 0; index < planeHandles.size(); ++index)
-            {
-                const GizmoHandle handle = planeHandles[index];
-                // Quad lives in XY; rotate onto the target plane.
-                glm::quat planeRotation = orientation;
-                if (handle == GizmoHandle::PlaneXZ)
-                {
-                    planeRotation =
-                        orientation * glm::angleAxis(glm::half_pi<float>(), glm::vec3{1, 0, 0});
-                }
-                else if (handle == GizmoHandle::PlaneYZ)
-                {
-                    planeRotation =
-                        orientation * glm::angleAxis(-glm::half_pi<float>(), glm::vec3{0, 1, 0});
-                }
-                const glm::vec3 planeOrigin = position +
-                    planeRotation *
-                        glm::vec3{layout::PlaneOffset * size, layout::PlaneOffset * size, 0.0F};
-                parts.push_back({handle,
-                    &m_Quad,
-                    ComposeMatrix(planeOrigin, planeRotation, glm::vec3{layout::PlaneSize * size}),
-                    isHot(handle) ? HighlightColor : planeColors[index],
-                    0.55F});
-            }
-        }
-        else if (m_Gizmo.Mode == GizmoMode::Scale)
-        {
-            parts.push_back({GizmoHandle::Uniform,
-                &m_Cube,
-                ComposeMatrix(position, orientation, glm::vec3{layout::UniformCubeHalf * 2.0F * size}),
-                isHot(GizmoHandle::Uniform) ? HighlightColor : glm::vec3{0.85F, 0.85F, 0.88F},
-                1.0F});
-        }
+        const viewport_gizmo::GizmoMeshes meshes{
+            &m_Torus, &m_Cylinder, &m_Cone, &m_Cube, &m_Quad};
+        viewport_gizmo::BuildGizmoParts(
+            m_Gizmo,
+            m_View,
+            m_Projection,
+            static_cast<float>(m_Extent.Height),
+            meshes,
+            m_GizmoParts);
     }
 
     void DrawGizmo(rhi::CommandList& list, const bool ldrOverlay = false)
