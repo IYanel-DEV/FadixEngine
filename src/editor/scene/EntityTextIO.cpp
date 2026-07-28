@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
+#include <unordered_map>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -151,6 +152,12 @@ void CopyEntityComponents(
         copy.ClipIndex = -1;
         copy.CurrentTime = 0.0F;
         to.emplace<AnimatorComponent>(destinationEntity, std::move(copy));
+    }
+    if (const auto* value = from.try_get<TransformAnimatorComponent>(sourceEntity))
+    {
+        TransformAnimatorComponent copy = *value;
+        copy.CurrentTime = 0.0F;
+        to.emplace<TransformAnimatorComponent>(destinationEntity, std::move(copy));
     }
 }
 
@@ -358,6 +365,25 @@ void WriteEntityLine(
     {
         out << "AN " << std::quoted(animator->ClipName) << ' ' << animator->Speed << ' '
             << animator->Loop << ' ' << animator->Playing << ' ';
+    }
+    if (const TransformAnimatorComponent* anim =
+            registry.try_get<TransformAnimatorComponent>(entity))
+    {
+        // TA <name> speed loop playing <channelCount> [<propChar> <keyCount> {time x y z w}...]
+        out << "TA " << std::quoted(anim->Clip.Name) << ' ' << anim->Speed << ' ' << anim->Loop
+            << ' ' << anim->Playing << ' ' << anim->Clip.Channels.size() << ' ';
+        for (const AnimationChannel& channel : anim->Clip.Channels)
+        {
+            const char prop = channel.Target == AnimationChannel::Property::Rotation ? 'R'
+                : channel.Target == AnimationChannel::Property::Scale               ? 'S'
+                                                                                    : 'T';
+            out << prop << ' ' << channel.Keyframes.size() << ' ';
+            for (const AnimationKeyframe& key : channel.Keyframes)
+            {
+                out << key.Time << ' ' << key.Value.x << ' ' << key.Value.y << ' ' << key.Value.z
+                    << ' ' << key.Value.w << ' ';
+            }
+        }
     }
     out << "END\n";
 }
@@ -819,6 +845,34 @@ Result<void> ParseEntityLine(std::string_view line, IWorld& world)
             value.CurrentTime = 0.0F;
             registry.emplace<AnimatorComponent>(entity, value);
         }
+        else if (marker == "TA")
+        {
+            TransformAnimatorComponent value;
+            std::size_t channelCount = 0;
+            row >> std::quoted(value.Clip.Name) >> value.Speed >> value.Loop >> value.Playing
+                >> channelCount;
+            for (std::size_t c = 0; c < channelCount && row; ++c)
+            {
+                std::string prop;
+                std::size_t keyCount = 0;
+                row >> prop >> keyCount;
+                AnimationChannel channel;
+                channel.JointIndex = -1;
+                channel.Target = prop == "R" ? AnimationChannel::Property::Rotation
+                    : prop == "S"            ? AnimationChannel::Property::Scale
+                                             : AnimationChannel::Property::Translation;
+                for (std::size_t k = 0; k < keyCount && row; ++k)
+                {
+                    AnimationKeyframe key;
+                    row >> key.Time >> key.Value.x >> key.Value.y >> key.Value.z >> key.Value.w;
+                    channel.Keyframes.push_back(key);
+                    value.Clip.Duration = std::max(value.Clip.Duration, key.Time);
+                }
+                value.Clip.Channels.push_back(std::move(channel));
+            }
+            value.CurrentTime = 0.0F;
+            registry.emplace<TransformAnimatorComponent>(entity, std::move(value));
+        }
         else
         {
             // Unknown component record from a newer build: its argument
@@ -832,5 +886,46 @@ Result<void> ParseEntityLine(std::string_view line, IWorld& world)
         return Result<void>::Error("Truncated entity in scene");
     }
     return Result<void>::Ok();
+}
+
+std::optional<Uuid> FindSceneRootId(const IWorld& world)
+{
+    const entt::registry& registry = world.Registry();
+    std::unordered_map<Uuid, int> childRefs;
+    std::vector<std::pair<Uuid, bool>> parentless; // id, name == legacy "Main Scene"
+
+    for (const auto [entity, id] : registry.view<const UuidComponent>().each())
+    {
+        const RelationshipComponent* rel = registry.try_get<RelationshipComponent>(entity);
+        if (rel != nullptr && rel->Parent.IsValid())
+        {
+            ++childRefs[rel->Parent];
+        }
+        else
+        {
+            const NameComponent* name = registry.try_get<NameComponent>(entity);
+            parentless.push_back({id.Id, name != nullptr && name->Name == "Main Scene"});
+        }
+    }
+    if (parentless.empty())
+    {
+        return std::nullopt;
+    }
+    // Prefer the parentless entity that actually parents others; tiebreak legacy name.
+    std::optional<Uuid> best;
+    int bestRefs = -1;
+    bool bestLegacy = false;
+    for (const auto& [id, legacy] : parentless)
+    {
+        const auto it = childRefs.find(id);
+        const int refs = it != childRefs.end() ? it->second : 0;
+        if (refs > bestRefs || (refs == bestRefs && legacy && !bestLegacy))
+        {
+            best = id;
+            bestRefs = refs;
+            bestLegacy = legacy;
+        }
+    }
+    return best;
 }
 }

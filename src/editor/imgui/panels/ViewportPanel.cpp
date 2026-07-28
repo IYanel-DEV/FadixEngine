@@ -23,7 +23,7 @@ namespace fadix::editor
 {
 namespace
 {
-constexpr std::array<const char*, 10> kDebugViewLabels{
+constexpr std::array<const char*, 11> kDebugViewLabels{
     "None",
     "Base Color",
     "Normals",
@@ -33,7 +33,8 @@ constexpr std::array<const char*, 10> kDebugViewLabels{
     "Depth",
     "Cascade Colors (Experimental)",
     "AO (Experimental)",
-    "Motion Vectors (Experimental)"};
+    "Motion Vectors (Experimental)",
+    "Light Tiles (Forward+)"};
 }
 namespace
 {
@@ -262,6 +263,15 @@ void ViewportPanel::RenderTargets(
     const bool playing,
     const float deltaSeconds)
 {
+    // FDX Animation: advance skeletal animation once per frame (before either view
+    // draws the shared world) so Scene and Game read the same posed skeleton and
+    // time never double-advances. Editor previews live; Play mode drives gameplay.
+    if (ViewportRenderer* animRenderer =
+            m_Scene.Renderer ? m_Scene.Renderer.get() : m_Game.Renderer.get())
+    {
+        animRenderer->UpdateAnimations(world, deltaSeconds);
+    }
+
     if (m_Scene.Visible && m_Scene.Renderer && m_Scene.PixelW > 0 && m_Scene.PixelH > 0)
     {
         EnsureSize(m_Scene);

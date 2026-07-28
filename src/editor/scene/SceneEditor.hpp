@@ -4,6 +4,7 @@
 #include "engine/Uuid.hpp"
 #include "engine/assets/AssetHandle.hpp"
 
+#include <filesystem>
 #include <functional>
 #include <optional>
 #include <string>
@@ -51,6 +52,9 @@ public:
     std::optional<Uuid> CreateEntity(std::string name = "Entity");
     std::optional<Uuid> CreateImportedMeshEntity(
         std::string name, AssetHandle handle, const glm::vec3& gridPosition);
+    // Instantiate a .prefab file into the scene at gridPosition; returns the root.
+    std::optional<Uuid> InstantiatePrefab(
+        const std::filesystem::path& path, const glm::vec3& gridPosition);
     bool DuplicateSelection();
     bool DeleteSelection();
     bool RenameSelection(std::string name);

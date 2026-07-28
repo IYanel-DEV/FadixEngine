@@ -540,6 +540,29 @@ if(WIN32)
     target_link_libraries(fadix_engine_smoke PRIVATE ole32 shell32 uuid)
 endif()
 
+add_executable(fadix_animation_smoke tools/AnimationSmoke.cpp)
+target_include_directories(fadix_animation_smoke PRIVATE src)
+target_link_libraries(fadix_animation_smoke PRIVATE glm::glm)
+if(MSVC)
+    target_compile_options(fadix_animation_smoke PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(fadix_animation_smoke PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_dependencies(fadix_editor fadix_animation_smoke)
+
+# Forward+ tile light-culling stress + correctness check (no GPU needed).
+add_executable(fadix_light_stress_smoke
+    tools/LightStressSmoke.cpp
+    src/render/ForwardPlusLights.cpp)
+target_include_directories(fadix_light_stress_smoke PRIVATE src)
+target_link_libraries(fadix_light_stress_smoke PRIVATE glm::glm)
+if(MSVC)
+    target_compile_options(fadix_light_stress_smoke PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(fadix_light_stress_smoke PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_dependencies(fadix_editor fadix_light_stress_smoke)
+
 add_executable(fadix_scene_persistence_smoke
     tools/ScenePersistenceSmoke.cpp
     src/editor/scene/EntityTextIO.cpp

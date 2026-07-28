@@ -802,6 +802,7 @@ Result<std::unique_ptr<Shader>> SdlDevice::CreateShader(
     info.stage = stage;
     info.num_uniform_buffers = description.NumUniformBuffers;
     info.num_samplers = description.NumSamplers;
+    info.num_storage_buffers = description.NumStorageBuffers;
     SDL_GPUShader* shader = SDL_CreateGPUShader(m_Device, &info);
     if (shader == nullptr)
     {
@@ -1119,6 +1120,25 @@ void BindFragmentSamplers(CommandList& commands, std::uint32_t firstSlot, std::s
         bindings.push_back(binding);
     }
     SDL_BindGPUFragmentSamplers(pass, firstSlot, bindings.data(), static_cast<Uint32>(bindings.size()));
+}
+
+void BindFragmentStorageBuffers(
+    CommandList& commands, std::uint32_t firstSlot, std::span<Buffer* const> buffers)
+{
+    auto& sdlCommands = dynamic_cast<SdlCommandList&>(commands);
+    SDL_GPURenderPass* pass = sdlCommands.NativeRenderPass();
+    if (pass == nullptr || buffers.empty())
+    {
+        return;
+    }
+    std::vector<SDL_GPUBuffer*> natives;
+    natives.reserve(buffers.size());
+    for (Buffer* buffer : buffers)
+    {
+        natives.push_back(static_cast<SdlBuffer*>(buffer)->Native());
+    }
+    SDL_BindGPUFragmentStorageBuffers(
+        pass, firstSlot, natives.data(), static_cast<Uint32>(natives.size()));
 }
 
 DynamicBufferUploader::DynamicBufferUploader(Device& device)

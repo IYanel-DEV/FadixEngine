@@ -6,6 +6,7 @@
 #include "engine/render/ViewportRenderer.hpp"
 #include "render/AssetResourceCache.hpp"
 #include "render/ParticleRenderer.hpp"
+#include "render/ForwardPlusLights.hpp"
 #include "render/ViewportGeometry.hpp"
 #include "render/ViewportGizmo.hpp"
 #include "render/ViewportMath.hpp"
@@ -30,6 +31,7 @@
 #include "engine/rhi/Texture.hpp"
 #include "engine/scene/IWorld.hpp"
 #include "rhi/sdl/SdlRhi.hpp"
+#include "runtime/AnimationRuntime.hpp"
 #include "runtime/Components.hpp"
 
 #include <glm/ext/matrix_clip_space.hpp>
@@ -379,6 +381,18 @@ public:
         m_SimDelta = dt;
     }
 
+    void UpdateAnimations(IWorld& world, const float dt) override
+    {
+        // Entity-transform clips first so a combined entity is posed before its skin.
+        UpdateTransformAnimations(world.Registry(), dt);
+        UpdateWorldAnimations(
+            world.Registry(),
+            [this](const AssetHandle& handle) -> const GltfMeshAsset* {
+                return m_GltfMeshCache != nullptr ? m_GltfMeshCache->Get(handle) : nullptr;
+            },
+            dt);
+    }
+
     void SetAssetDatabase(IAssetDatabase& database) override
     {
         m_Database = &database;
@@ -690,6 +704,25 @@ private:
             m_FrameLights.PointParams[index] = glm::vec4{light.FalloffExponent, 0.0F, 0.0F, 0.0F};
         }
 
+        // Forward+: upload every enabled point light (closest first, soft-capped)
+        // to the storage buffer, not just the eight in the uniform fallback.
+        m_FrameTotalPointLights = static_cast<int>(points.size());
+        const std::size_t gpuCount =
+            std::min<std::size_t>(points.size(), forward_plus::kMaxPointLights);
+        m_FramePointLightsGpu.clear();
+        m_FramePointLightsGpu.reserve(gpuCount);
+        for (std::size_t index = 0; index < gpuCount; ++index)
+        {
+            PointLightComponent light =
+                *static_cast<const PointLightComponent*>(points[index].Component);
+            Sanitize(light);
+            forward_plus::GpuPointLight gpu;
+            gpu.PositionRange = glm::vec4{points[index].Position, light.Range};
+            gpu.ColorIntensity = glm::vec4{light.Color, light.Intensity};
+            gpu.Params = glm::vec4{light.FalloffExponent, 0.0F, 0.0F, 0.0F};
+            m_FramePointLightsGpu.push_back(gpu);
+        }
+
         std::vector<Candidate> spots;
         for (const auto [entity, transform, light, uuid] :
              registry.view<const TransformComponent, const SpotLightComponent,
@@ -723,8 +756,123 @@ private:
         }
         m_FrameLights.Counts =
             glm::vec4{static_cast<float>(pointCount), static_cast<float>(spotCount), 0.0F, 0.0F};
-        m_FrameActivePointLights = static_cast<int>(pointCount);
+        m_FrameTotalSpotLights = static_cast<int>(spots.size());
+        // "Active" now means uploaded to the Forward+ buffer (points) / uniform
+        // set (spots), not the old hard 8-light cap.
+        m_FrameActivePointLights = static_cast<int>(m_FramePointLightsGpu.size());
         m_FrameActiveSpotLights = static_cast<int>(spotCount);
+
+        // Assign uploaded point lights to screen tiles on the CPU.
+        // ponytail: single-threaded scatter, no depth-range slices; move to a
+        // compute pass or clustered slices if the CPU cull dominates the frame.
+        forward_plus::CullView cull;
+        cull.View = m_View;
+        cull.Proj00 = m_BaseProjection[0][0];
+        cull.Proj11 = m_BaseProjection[1][1];
+        cull.ScreenWidth = static_cast<int>(m_Extent.Width);
+        cull.ScreenHeight = static_cast<int>(m_Extent.Height);
+        m_FrameTiles = forward_plus::AssignLightsToTiles(m_FramePointLightsGpu, cull);
+        const bool fpReady = m_FrameTiles.TilesX > 0 && m_FrameTiles.TilesY > 0;
+        m_FrameForwardPlus = glm::vec4{
+            static_cast<float>(forward_plus::kTileSize),
+            static_cast<float>(m_FrameTiles.TilesX),
+            static_cast<float>(m_FramePointLightsGpu.size()),
+            fpReady ? 1.0F : 0.0F};
+
+        // Once-per-second diagnostics when a cap actually clips the scene: the
+        // point soft cap or the 8-light spot uniform cap.
+        const bool pointsClipped = m_FrameTotalPointLights > static_cast<int>(gpuCount);
+        const bool spotsClipped = m_FrameTotalSpotLights > static_cast<int>(spotCount);
+        if (pointsClipped || spotsClipped || m_FrameTiles.OverflowCount > 0)
+        {
+            const auto now = std::chrono::steady_clock::now();
+            if (now - m_LastLightCapLog >= std::chrono::seconds(1))
+            {
+                m_LastLightCapLog = now;
+                if (pointsClipped)
+                {
+                    Report("[Lighting] using " + std::to_string(gpuCount) + "/" +
+                        std::to_string(m_FrameTotalPointLights) + " point lights (soft cap)");
+                }
+                if (spotsClipped)
+                {
+                    Report("[Lighting] using " + std::to_string(spotCount) + "/" +
+                        std::to_string(m_FrameTotalSpotLights) + " spot lights (uniform cap)");
+                }
+                if (m_FrameTiles.OverflowCount > 0)
+                {
+                    Report("[Lighting] " + std::to_string(m_FrameTiles.OverflowCount) +
+                        " tile light slots dropped (per-tile cap " +
+                        std::to_string(forward_plus::kMaxLightsPerTile) + ")");
+                }
+            }
+        }
+    }
+
+    // Grows `buffer` to hold at least `bytes` (with headroom) as a GPU storage
+    // buffer. Never shrinks, so per-frame churn settles after the scene's peak.
+    void EnsureStorageBuffer(
+        std::unique_ptr<rhi::Buffer>& buffer, std::size_t bytes, const char* name)
+    {
+        bytes = std::max<std::size_t>(bytes, 256);
+        if (buffer != nullptr && buffer->Size() >= bytes)
+        {
+            return;
+        }
+        auto result = m_Device.CreateBuffer({bytes + bytes / 2, rhi::BufferUsage::Storage, name});
+        if (!result)
+        {
+            Report(std::string{"Forward+ storage buffer alloc failed: "} + result.ErrorMessage());
+            return;
+        }
+        buffer = std::move(result).Value();
+    }
+
+    // Records copy passes (before any render pass) that push this frame's light,
+    // tile-header and tile-index data into the storage buffers the lit shader
+    // reads. Buffers are always non-empty so they stay bindable with zero lights.
+    void UploadForwardPlusLights(rhi::CommandList& commands)
+    {
+        const std::size_t lightBytes =
+            std::max<std::size_t>(m_FramePointLightsGpu.size(), 1) * sizeof(forward_plus::GpuPointLight);
+        const std::size_t headerBytes =
+            std::max<std::size_t>(m_FrameTiles.Headers.size(), 1) * sizeof(forward_plus::TileHeader);
+        const std::size_t indexBytes =
+            std::max<std::size_t>(m_FrameTiles.Indices.size(), 1) * sizeof(std::uint32_t);
+        EnsureStorageBuffer(m_LightBuffer, lightBytes, "ForwardPlusLights");
+        EnsureStorageBuffer(m_TileHeaderBuffer, headerBytes, "ForwardPlusTileHeaders");
+        EnsureStorageBuffer(m_TileIndexBuffer, indexBytes, "ForwardPlusTileIndices");
+        if (!m_FramePointLightsGpu.empty() && m_LightBuffer != nullptr)
+        {
+            m_Uploader.Upload(commands, *m_LightBuffer,
+                std::as_bytes(std::span{m_FramePointLightsGpu}));
+        }
+        if (!m_FrameTiles.Headers.empty() && m_TileHeaderBuffer != nullptr)
+        {
+            m_Uploader.Upload(commands, *m_TileHeaderBuffer,
+                std::as_bytes(std::span{m_FrameTiles.Headers}));
+        }
+        if (!m_FrameTiles.Indices.empty() && m_TileIndexBuffer != nullptr)
+        {
+            m_Uploader.Upload(commands, *m_TileIndexBuffer,
+                std::as_bytes(std::span{m_FrameTiles.Indices}));
+        }
+    }
+
+    // Binds the Forward+ storage buffers (t8-t10) and the tile-param uniform (b1)
+    // for the lit shader. Every lit draw routes through DrawMesh/DrawMeshRaw, so
+    // calling this there guarantees the resources the shader declares are bound.
+    void BindForwardPlusResources(rhi::CommandList& list)
+    {
+        if (m_LightBuffer == nullptr || m_TileHeaderBuffer == nullptr ||
+            m_TileIndexBuffer == nullptr)
+        {
+            return;
+        }
+        std::array<rhi::Buffer*, 3> buffers = {
+            m_LightBuffer.get(), m_TileHeaderBuffer.get(), m_TileIndexBuffer.get()};
+        rhi::sdl::BindFragmentStorageBuffers(list, 0, buffers);
+        rhi::sdl::PushFragmentUniform(list, 1, &m_FrameForwardPlus, sizeof(m_FrameForwardPlus));
     }
 
     [[nodiscard]] int CountShadowedLights(const IWorld& world, const bool directionalCasts) const
@@ -927,6 +1075,9 @@ private:
             }
         }
 
+        // Push this frame's Forward+ light/tile data before any render pass opens.
+        UploadForwardPlusLights(*commands);
+
         if (m_FrameShadowParams.w > 0.5F)
         {
             DrawShadowPass(*commands, world);
@@ -996,6 +1147,8 @@ private:
         m_Diagnostics.VisibleMeshes = m_FrameVisibleMeshes;
         m_Diagnostics.ActivePointLights = m_FrameActivePointLights;
         m_Diagnostics.ActiveSpotLights = m_FrameActiveSpotLights;
+        m_Diagnostics.TotalPointLights = m_FrameTotalPointLights;
+        m_Diagnostics.TotalSpotLights = m_FrameTotalSpotLights;
         m_Diagnostics.ShadowedLights = m_FrameShadowedLights;
         m_Diagnostics.ShadowPasses = m_FrameShadowPasses;
         m_Diagnostics.ActiveCascades = m_FrameActiveCascades;
@@ -1373,6 +1526,7 @@ private:
         rhi::sdl::PushVertexUniform(list, 0, &vertex, sizeof(vertex));
         PushIdentityBones(list);
         rhi::sdl::PushFragmentUniform(list, 0, &lit, sizeof(lit));
+        BindForwardPlusResources(list);
         SDL_DrawGPUIndexedPrimitives(
             rhi::sdl::NativeRenderPass(list), range.IndexCount, 1, range.FirstIndex, 0, 0);
         RecordDrawCall();
@@ -1401,6 +1555,7 @@ private:
         }
         const FragmentUniform lit = WithFrameDebug(fragment);
         rhi::sdl::PushFragmentUniform(list, 0, &lit, sizeof(lit));
+        BindForwardPlusResources(list);
         SDL_DrawGPUIndexedPrimitives(
             rhi::sdl::NativeRenderPass(list), indexCount, 1, firstIndex, 0, 0);
         RecordDrawCall();
@@ -1519,6 +1674,9 @@ private:
             m_FrameDebugSplits.z = m_FrameShadowDistance;
             break;
         }
+        case ViewportDebugView::LightTiles:
+            m_FrameDebugParams.x = 8.0F;
+            break;
         default:
             break;
         }
@@ -2612,9 +2770,9 @@ private:
     void CreatePipelines()
     {
         const std::vector<std::byte> source = render::ReadShaderSource("viewport.hlsl");
-        const auto makeShader = [&](const char* entry, const char* target, const char* name, std::uint32_t samplers = 0, std::uint32_t uniformBuffers = 1) {
+        const auto makeShader = [&](const char* entry, const char* target, const char* name, std::uint32_t samplers = 0, std::uint32_t uniformBuffers = 1, std::uint32_t storageBuffers = 0) {
             const std::vector<std::byte> code = render::CompileShader(source, entry, target, "viewport.hlsl");
-            auto result = m_Device.CreateShader({entry, name, samplers, uniformBuffers}, code);
+            auto result = m_Device.CreateShader({entry, name, samplers, uniformBuffers, storageBuffers}, code);
             if (!result)
             {
                 throw std::runtime_error(
@@ -2624,8 +2782,10 @@ private:
             return std::move(result).Value();
         };
         m_MeshVertexShader = makeShader("VertexMain", "vs_5_1", "viewport_vertex", 0, 3);
-        // Lit PS samples t0-t3 material maps + t4-t7 the four directional cascades.
-        m_LitFragmentShader = makeShader("FragmentMain", "ps_5_1", "viewport_fragment_lit", 8);
+        // Lit PS samples t0-t3 material maps + t4-t7 the four directional
+        // cascades, plus 3 Forward+ storage buffers (t8-t10) and a second
+        // uniform buffer (b1) for the tile params.
+        m_LitFragmentShader = makeShader("FragmentMain", "ps_5_1", "viewport_fragment_lit", 8, 2, 3);
         m_UnlitFragmentShader = makeShader("UnlitFragmentMain", "ps_5_1", "viewport_fragment_unlit");
         m_UnlitLdrFragmentShader =
             makeShader("UnlitLdrFragmentMain", "ps_5_1", "viewport_fragment_unlit_ldr");
@@ -2931,6 +3091,10 @@ private:
     std::unique_ptr<rhi::Buffer> m_VertexBuffer;
     std::unique_ptr<rhi::Buffer> m_IndexBuffer;
     std::unique_ptr<rhi::Buffer> m_LineBuffer;
+    // Forward+ per-frame GPU light data (grows on demand, never shrinks).
+    std::unique_ptr<rhi::Buffer> m_LightBuffer;
+    std::unique_ptr<rhi::Buffer> m_TileHeaderBuffer;
+    std::unique_ptr<rhi::Buffer> m_TileIndexBuffer;
     std::unique_ptr<rhi::Shader> m_MeshVertexShader;
     std::unique_ptr<rhi::Shader> m_LitFragmentShader;
     std::unique_ptr<rhi::Shader> m_UnlitFragmentShader;
@@ -2976,6 +3140,14 @@ private:
     MeshRange m_PlanePrimitive;
     MeshRange m_Capsule;
     LightSet m_FrameLights;
+    // Forward+ frame state: uploaded point lights + the CPU tile assignment and
+    // the fp_params uniform (tile size, tiles across, count, enabled).
+    std::vector<forward_plus::GpuPointLight> m_FramePointLightsGpu;
+    forward_plus::TileAssignment m_FrameTiles;
+    glm::vec4 m_FrameForwardPlus{0.0F};
+    int m_FrameTotalPointLights{0};
+    int m_FrameTotalSpotLights{0};
+    std::chrono::steady_clock::time_point m_LastLightCapLog{};
     glm::vec4 m_FrameAmbientSky{0.45F, 0.55F, 0.70F, 0.55F};
     glm::vec4 m_FrameAmbientGround{0.28F, 0.25F, 0.22F, 0.0F};
     glm::vec4 m_FrameEnvParams{1.0F, 0.0F, 0.0F, 0.0F};

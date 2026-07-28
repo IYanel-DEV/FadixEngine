@@ -513,6 +513,14 @@ void ImGuiEditorApplication::WireAssetBrowser()
     {
         m_Session.Play().BindAudio(m_AudioEngine.get());
     }
+    // Gameplay world API: Prefab.spawn / Scene.load need a physics factory and a
+    // project-relative path resolver. Both read live state so they follow the
+    // active project and collision meshes.
+    m_Session.Play().SetGameServices(
+        [this]() { return sceneplay::CreatePhysicsWorldAdapter(m_GltfMeshes.get()); },
+        [this](const std::string& relative) {
+            return m_Session.ActiveProject().RootPath / relative;
+        });
 
     if (m_Device)
     {
@@ -890,9 +898,11 @@ void ImGuiEditorApplication::DrawGraphicsWindow()
             diag->VisibleMeshes,
             diag->PostPasses);
         ImGui::Text(
-            "Lights P/S %d/%d  Shadow lights %d  Shadow passes %d",
+            "Lights P %d/%d  S %d/%d  Shadow lights %d  Shadow passes %d",
             diag->ActivePointLights,
+            diag->TotalPointLights,
             diag->ActiveSpotLights,
+            diag->TotalSpotLights,
             diag->ShadowedLights,
             diag->ShadowPasses);
         ImGui::Text(

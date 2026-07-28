@@ -226,6 +226,67 @@ public:
         m_Lua[fxs::kInput] = input;
 
         BindAudioTable();
+        BindGameTables();
+    }
+
+    void SetWorldApi(ScriptWorldApi* api)
+    {
+        m_WorldApi = api;
+        BindGameTables();
+    }
+
+    // World.find / Prefab.spawn / Scene.load. Bound once per Lua state; the
+    // closures read m_WorldApi live, so refreshing the context needs no rebind.
+    void BindGameTables()
+    {
+        sol::table world = m_Lua.create_table();
+        world[fxs::kWorldFind] =
+            [this](const std::string& name, sol::this_state state) -> sol::object {
+            if (m_WorldApi == nullptr || m_WorldApi->Registry == nullptr)
+            {
+                return sol::make_object(state, sol::lua_nil);
+            }
+            for (const auto [entity, component] : m_WorldApi->Registry->view<NameComponent>().each())
+            {
+                if (component.Name == name)
+                {
+                    return sol::make_object(state,
+                        LuaEntity{m_WorldApi->Registry, entity, m_WorldApi->PendingDestroy});
+                }
+            }
+            return sol::make_object(state, sol::lua_nil);
+        };
+        m_Lua[fxs::kWorld] = world;
+
+        sol::table prefab = m_Lua.create_table();
+        prefab[fxs::kPrefabSpawn] = [this](const std::string& path, float x, float y, float z,
+                                        sol::this_state state) -> sol::object {
+            if (m_WorldApi == nullptr || !m_WorldApi->SpawnPrefab)
+            {
+                return sol::make_object(state, sol::lua_nil);
+            }
+            const std::optional<entt::entity> entity = m_WorldApi->SpawnPrefab(path, x, y, z);
+            if (!entity)
+            {
+                return sol::make_object(state, sol::lua_nil);
+            }
+            return sol::make_object(state,
+                LuaEntity{m_WorldApi->Registry, *entity, m_WorldApi->PendingDestroy});
+        };
+        m_Lua[fxs::kPrefab] = prefab;
+
+        sol::table scene = m_Lua.create_table();
+        scene[fxs::kSceneLoad] = [this](const std::string& path) {
+            if (m_WorldApi != nullptr && m_WorldApi->LoadScene)
+            {
+                m_WorldApi->LoadScene(path);
+            }
+            else
+            {
+                Fail("Scene.load unavailable: no active play session");
+            }
+        };
+        m_Lua[fxs::kScene] = scene;
     }
 
     void BindAudio(AudioEngine* engine)
@@ -358,6 +419,7 @@ private:
     sol::state m_Lua;
     LuaVM::LogFn m_Logger;
     AudioEngine* m_AudioEngine{nullptr};
+    ScriptWorldApi* m_WorldApi{nullptr};
     std::unordered_map<std::string, std::string> m_Sources;
     std::vector<std::optional<sol::environment>> m_Instances;
     std::string m_LastError;
@@ -371,6 +433,7 @@ LuaVM& LuaVM::operator=(LuaVM&&) noexcept = default;
 
 void LuaVM::SetLogger(LogFn logger) { m_Impl->SetLogger(std::move(logger)); }
 void LuaVM::BindAudio(AudioEngine* engine) { m_Impl->BindAudio(engine); }
+void LuaVM::SetWorldApi(ScriptWorldApi* api) { m_Impl->SetWorldApi(api); }
 bool LuaVM::Compile(const std::string& name, const std::string& source)
 {
     return m_Impl->Compile(name, source);
@@ -409,6 +472,7 @@ LuaVM& LuaVM::operator=(LuaVM&&) noexcept = default;
 
 void LuaVM::SetLogger(LogFn) {}
 void LuaVM::BindAudio(AudioEngine*) {}
+void LuaVM::SetWorldApi(ScriptWorldApi*) {}
 bool LuaVM::Compile(const std::string&, const std::string&) { return false; }
 int LuaVM::Instantiate(const std::string&) { return -1; }
 void LuaVM::CallStart(int, const ScriptEntityHandle&) {}

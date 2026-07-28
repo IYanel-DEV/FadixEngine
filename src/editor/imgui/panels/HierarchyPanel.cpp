@@ -334,6 +334,10 @@ void HierarchyPanel::DrawTree(SceneEditor& scene, EditorUiState& ui)
             {
                 scene.SetSelection(node.Id, true);
             }
+            if (node.IsRoot && ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Scene file: %s.scene", ui.SceneName.c_str());
+            }
             if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
             {
                 scene.SetSelection(node.Id, true);

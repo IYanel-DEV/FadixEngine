@@ -134,6 +134,7 @@ std::unique_ptr<IWorld> World::Clone() const
         FADIX_CLONE_COMPONENT(TerrainComponent);
         FADIX_CLONE_COMPONENT(SkeletonComponent);
         FADIX_CLONE_COMPONENT(AnimatorComponent);
+        FADIX_CLONE_COMPONENT(TransformAnimatorComponent);
 #undef FADIX_CLONE_COMPONENT
         if (auto* body = result->m_Registry.try_get<JoltBodyComponent>(destination))
         {

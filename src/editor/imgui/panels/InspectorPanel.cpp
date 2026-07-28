@@ -2,7 +2,10 @@
 
 #include "editor/imgui/EditorIcons.hpp"
 #include "editor/assets/AssetBrowserController.hpp"
+#include "assets/GltfMeshCache.hpp"
+#include "engine/assets/GltfMeshAsset.hpp"
 #include "engine/scene/IWorld.hpp"
+#include "runtime/AnimationRuntime.hpp"
 #include "runtime/Components.hpp"
 
 #include <imgui.h>
@@ -103,6 +106,75 @@ void DrawVec3(SceneEditor& scene, const char* label, const char* prefix)
     else if (ImGui::IsItemDeactivated())
     {
         scene.CancelEditTransaction();
+    }
+}
+
+// FDX Animation keying row under the Transform header. Works on any entity with a
+// TransformComponent (no skinned mesh needed). Keys capture the entity's current TRS
+// at the transform animator's scrub time and open FDX Animation for further editing.
+void DrawTransformKeys(
+    SceneEditor& scene, EditorUiState& ui, entt::registry& registry, const entt::entity entity)
+{
+    const auto* transformPtr = registry.try_get<TransformComponent>(entity);
+    if (transformPtr == nullptr)
+    {
+        return;
+    }
+    auto* anim = registry.try_get<TransformAnimatorComponent>(entity);
+    const float time = anim != nullptr ? anim->CurrentTime : 0.0F;
+
+    const auto keyed = [&](const AnimationChannel::Property property) {
+        return anim != nullptr && TransformKeyedAt(anim->Clip, property, time);
+    };
+    const auto ensureAnim = [&]() -> TransformAnimatorComponent& {
+        if (anim == nullptr)
+        {
+            TransformAnimatorComponent created;
+            const NameComponent* name = registry.try_get<NameComponent>(entity);
+            created.Clip.Name = name != nullptr ? name->Name : std::string{"Transform"};
+            created.Playing = false; // authoring: don't auto-run while keying
+            anim = &registry.emplace<TransformAnimatorComponent>(entity, std::move(created));
+        }
+        return *anim;
+    };
+    const auto keyProperty = [&](const AnimationChannel::Property property) {
+        TransformAnimatorComponent& target = ensureAnim();
+        KeyTransformProperty(target, registry.get<TransformComponent>(entity), property, target.CurrentTime);
+        scene.MarkChanged();
+        ui.ShowFdxAnimation = true;
+        ui.FocusFdxAnimation = true;
+    };
+
+    ImGui::TextDisabled("Key @ t=%.3f", static_cast<double>(time));
+    ImGui::SameLine();
+    const ImVec4 on{0.35F, 0.85F, 0.40F, 1.0F};
+    const ImVec4 off{0.55F, 0.55F, 0.55F, 1.0F};
+    ImGui::PushStyleColor(ImGuiCol_Text, keyed(AnimationChannel::Property::Translation) ? on : off);
+    if (ImGui::SmallButton("Pos##keypos")) { keyProperty(AnimationChannel::Property::Translation); }
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Text, keyed(AnimationChannel::Property::Rotation) ? on : off);
+    if (ImGui::SmallButton("Rot##keyrot")) { keyProperty(AnimationChannel::Property::Rotation); }
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Text, keyed(AnimationChannel::Property::Scale) ? on : off);
+    if (ImGui::SmallButton("Scale##keyscl")) { keyProperty(AnimationChannel::Property::Scale); }
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    if (ImGui::SmallButton("All##keyall"))
+    {
+        keyProperty(AnimationChannel::Property::Translation);
+        keyProperty(AnimationChannel::Property::Rotation);
+        keyProperty(AnimationChannel::Property::Scale);
+    }
+    if (anim != nullptr && !anim->Clip.Channels.empty())
+    {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Open FDX##keyopen"))
+        {
+            ui.ShowFdxAnimation = true;
+            ui.FocusFdxAnimation = true;
+        }
     }
 }
 
@@ -265,8 +337,12 @@ void InspectorPanel::Draw(SceneEditor& scene, EditorUiState& ui)
         }
     }
 
-    ImGui::TextUnformatted("Entity");
-    if (ImGui::InputText("Name", m_NameBuf, sizeof(m_NameBuf), ImGuiInputTextFlags_EnterReturnsTrue))
+    const bool isSceneRoot = scene.IsSceneRoot(id);
+    ImGui::TextUnformatted(isSceneRoot ? "Scene" : "Entity");
+    // On the scene root, its name IS the Hierarchy display name; the disk file keeps
+    // its own path (renaming here does not rename the file).
+    const char* nameLabel = isSceneRoot ? "Display Name" : "Name";
+    if (ImGui::InputText(nameLabel, m_NameBuf, sizeof(m_NameBuf), ImGuiInputTextFlags_EnterReturnsTrue))
     {
         scene.RenameSelection(m_NameBuf);
         ui.StatusText = "Renamed entity";
@@ -274,6 +350,10 @@ void InspectorPanel::Draw(SceneEditor& scene, EditorUiState& ui)
     if (ImGui::IsItemDeactivatedAfterEdit())
     {
         scene.RenameSelection(m_NameBuf);
+    }
+    if (isSceneRoot)
+    {
+        ImGui::TextDisabled("File: %s.scene", ui.SceneName.c_str());
     }
 
     if (registry.all_of<TransformComponent>(*entity))
@@ -283,6 +363,7 @@ void InspectorPanel::Draw(SceneEditor& scene, EditorUiState& ui)
             DrawVec3(scene, "Position", "position");
             DrawVec3(scene, "Rotation", "rotation");
             DrawVec3(scene, "Scale", "scale");
+            DrawTransformKeys(scene, ui, registry, *entity);
         }
     }
 
@@ -721,8 +802,49 @@ void InspectorPanel::Draw(SceneEditor& scene, EditorUiState& ui)
     {
         if (ImGui::CollapsingHeader("Animator", ImGuiTreeNodeFlags_DefaultOpen))
         {
+            // Clip picker from the imported model's clips (see FDX Animation panel).
+            const GltfMeshAsset* gltf = nullptr;
+            if (const MeshComponent* mesh = registry.try_get<MeshComponent>(*entity);
+                mesh != nullptr && mesh->ImportedMesh.IsValid() && scene.GltfMeshes() != nullptr)
+            {
+                gltf = scene.GltfMeshes()->Get(mesh->ImportedMesh);
+            }
+            if (gltf != nullptr && !gltf->Animations.empty())
+            {
+                const char* preview = animator->ClipName.empty()
+                    ? gltf->Animations.front().Name.c_str()
+                    : animator->ClipName.c_str();
+                if (ImGui::BeginCombo("Clip", preview))
+                {
+                    for (const AnimationClipAsset& clip : gltf->Animations)
+                    {
+                        // ponytail: clip pick is a direct write, not an undo step.
+                        if (ImGui::Selectable(clip.Name.c_str(), clip.Name == animator->ClipName))
+                        {
+                            animator->ClipName = clip.Name;
+                            animator->CurrentTime = 0.0F;
+                            scene.MarkChanged();
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+            }
+            else
+            {
+                ImGui::TextColored(ImVec4{1.0F, 0.6F, 0.3F, 1.0F}, "%s",
+                    gltf == nullptr
+                        ? "No imported skinned mesh - playback will not run.\n"
+                          "Assign a rigged .glb to Mesh -> Imported Mesh."
+                        : "Imported mesh has 0 animation clips - playback will not run.");
+            }
             DrawBoolToggle(scene, "Playing", animator->Playing, [] {});
+            DrawBoolToggle(scene, "Loop", animator->Loop, [] {});
             DrawFloat(scene, "Speed", "animator-speed");
+            if (ImGui::Button("Open FDX Animation"))
+            {
+                ui.ShowFdxAnimation = true;
+                ui.FocusFdxAnimation = true; // panel follows current selection == this entity
+            }
             RemoveButton(scene, "remove-animator", ui);
         }
     }

@@ -46,8 +46,17 @@ public:
     void SetNativeLoader(NativeScriptLoader* loader) { m_NativeLoader = loader; }
     void BindAudio(AudioEngine* engine);
 
+    // Install the gameplay world callbacks (Prefab.spawn / Scene.load) exposed to
+    // scripts. Kept across VM resets. Leave unset for smoke targets.
+    void SetGameCallbacks(
+        std::function<std::optional<entt::entity>(const std::string&, float, float, float)> spawnPrefab,
+        std::function<void(const std::string&)> loadScene);
+
     // Compile + instantiate every enabled script and fire OnStart.
     void Start(entt::registry& registry, const SourceResolver& resolver);
+    // Compile + instantiate + OnStart the scripts on one entity (used by
+    // Prefab.spawn so a freshly spawned entity's scripts come alive mid-play).
+    void StartEntity(entt::registry& registry, entt::entity entity, const SourceResolver& resolver);
     // Fire OnUpdate on every live instance, then apply deferred destroys.
     void Update(entt::registry& registry, float deltaTime);
     // Fire OnDestroy, drop all instances, and reset the VM.
@@ -67,6 +76,7 @@ private:
     void ApplyPendingDestroy(entt::registry& registry);
 
     LuaVM m_Vm;
+    ScriptWorldApi m_WorldApi;
     NativeScriptLoader* m_NativeLoader{nullptr};
     std::vector<Instance> m_Instances;
     std::vector<NativeInstance> m_NativeInstances;
