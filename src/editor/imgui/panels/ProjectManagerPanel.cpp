@@ -280,7 +280,10 @@ void ProjectManagerPanel::DrawRecents(
         {
             const RecentProject& entry = recents[index];
             const char* templ =
-                entry.Project.Template == ProjectTemplate::Empty2D ? "Empty 2D" : "Empty 3D";
+                entry.Project.Template == ProjectTemplate::Empty2D
+                    ? "Empty 2D"
+                    : (entry.Project.Template == ProjectTemplate::TinyGame ? "Tiny Game"
+                                                                          : "Empty 3D");
             const bool selected = m_SelectedRecent == index;
             const std::string label = std::string{FADIX_ICON_CUBE "  "} + entry.Project.Name +
                 "\n     " + templ;
@@ -362,6 +365,11 @@ void ProjectManagerPanel::DrawCreate(
     if (ImGui::RadioButton("Empty 2D", m_Template == ProjectTemplate::Empty2D))
     {
         m_Template = ProjectTemplate::Empty2D;
+    }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Tiny Game", m_Template == ProjectTemplate::TinyGame))
+    {
+        m_Template = ProjectTemplate::TinyGame;
     }
 
     ImGui::PushStyleColor(ImGuiCol_Button, theme.Accent);

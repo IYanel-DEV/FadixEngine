@@ -849,6 +849,28 @@ void InspectorPanel::Draw(SceneEditor& scene, EditorUiState& ui)
         }
     }
 
+    if (TransformAnimatorComponent* transformAnim =
+            registry.try_get<TransformAnimatorComponent>(*entity))
+    {
+        if (ImGui::CollapsingHeader("Transform Animator", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            ImGui::TextDisabled("Clip: %s  |  %.3f s  |  %zu channels",
+                transformAnim->Clip.Name.c_str(),
+                static_cast<double>(transformAnim->Clip.Duration),
+                transformAnim->Clip.Channels.size());
+            DrawBoolToggle(scene, "Playing##ta", transformAnim->Playing, [] {});
+            DrawBoolToggle(scene, "Loop##ta", transformAnim->Loop, [] {});
+            ImGui::TextDisabled("Speed %.2f  time %.3f", static_cast<double>(transformAnim->Speed),
+                static_cast<double>(transformAnim->CurrentTime));
+            if (ImGui::Button("Open FDX Animation##ta"))
+            {
+                ui.ShowFdxAnimation = true;
+                ui.FocusFdxAnimation = true;
+            }
+            RemoveButton(scene, "remove-transform-animator", ui);
+        }
+    }
+
     ImGui::Separator();
     if (ImGui::BeginCombo("Add Component", "Add Component..."))
     {
@@ -895,6 +917,9 @@ void InspectorPanel::Draw(SceneEditor& scene, EditorUiState& ui)
             {"add-component-animator",
              "Animator",
              !registry.all_of<AnimatorComponent>(*entity)},
+            {"add-component-transform-animator",
+             "Transform Animator",
+             !registry.all_of<TransformAnimatorComponent>(*entity)},
             {"add-component-jolt", "Collider 3D (Jolt)", !registry.all_of<JoltBodyComponent>(*entity)},
             {"add-component-character",
              "Character Controller (Jolt)",

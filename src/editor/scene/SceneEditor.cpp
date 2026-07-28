@@ -462,6 +462,16 @@ bool SceneEditor::AddComponent(const std::string_view id)
         registry.emplace_or_replace<SkeletonComponent>(*entity);
     else if (id == "add-component-animator")
         registry.emplace_or_replace<AnimatorComponent>(*entity);
+    else if (id == "add-component-transform-animator")
+    {
+        TransformAnimatorComponent created;
+        created.Playing = false;
+        if (const NameComponent* name = registry.try_get<NameComponent>(*entity))
+        {
+            created.Clip.Name = name->Name;
+        }
+        registry.emplace_or_replace<TransformAnimatorComponent>(*entity, std::move(created));
+    }
     else if (id == "add-component-jolt")
     {
         JoltBodyComponent body;
@@ -528,6 +538,8 @@ bool SceneEditor::RemoveComponent(const std::string_view removeId)
     else if (removeId == "remove-terrain") registry.remove<TerrainComponent>(*entity);
     else if (removeId == "remove-skeleton") registry.remove<SkeletonComponent>(*entity);
     else if (removeId == "remove-animator") registry.remove<AnimatorComponent>(*entity);
+    else if (removeId == "remove-transform-animator")
+        registry.remove<TransformAnimatorComponent>(*entity);
     else return false;
 
     if (before)
