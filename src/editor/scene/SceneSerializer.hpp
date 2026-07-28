@@ -2,7 +2,10 @@
 
 #include "engine/scene/ISceneSerializer.hpp"
 
+#include <filesystem>
 #include <memory>
+#include <optional>
+#include <string>
 
 namespace fadix
 {
@@ -14,6 +17,12 @@ public:
     [[nodiscard]] Result<void> SaveAutosave(const SceneDocument& document, const IWorld& world);
     [[nodiscard]] bool HasRecoverableAutosave(const SceneDocument& document) const;
     [[nodiscard]] Result<void> RecoverAutosave(const SceneDocument& document, IWorld& world);
+
+    // The scene's Hierarchy display name (root entity name) without loading it into a
+    // live world. Used to resolve Scene.load("Lobby Scene") to a file. nullopt if the
+    // file is not a readable scene.
+    [[nodiscard]] static std::optional<std::string> PeekDisplayName(
+        const std::filesystem::path& path);
 
 private:
     [[nodiscard]] Result<void> SavePath(const std::filesystem::path& path, const IWorld& world);

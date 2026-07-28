@@ -5,12 +5,28 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace fadix
 {
 class AudioEngine;
+
+// The live world context behind the gameplay globals (World / Prefab / Scene).
+// Owned by ScriptRunner; Registry/PendingDestroy are refreshed each Start/Update
+// so scripts always see the current play world, while the two callbacks are
+// installed once by the play session (null on smoke targets = the API no-ops).
+struct ScriptWorldApi
+{
+    entt::registry* Registry{nullptr};
+    std::vector<entt::entity>* PendingDestroy{nullptr};
+    // Instantiate a prefab at (x,y,z); returns the new root entity or nullopt.
+    std::function<std::optional<entt::entity>(const std::string& path, float x, float y, float z)>
+        SpawnPrefab;
+    // Queue a level transition to the project-relative scene path.
+    std::function<void(const std::string& path)> LoadScene;
+};
 
 // A lightweight, non-owning handle to one entity in a specific world registry.
 // It is created fresh for each lifecycle call and handed to Lua so scripts can
@@ -64,6 +80,10 @@ public:
 
     // Bind global `audio` table to an engine (or clear it when null). Re-applied on Reset.
     void BindAudio(AudioEngine* engine);
+
+    // Point the World/Prefab/Scene globals at a context. Not owned; must outlive
+    // the VM. Re-applied on Reset. Null leaves the tables present but inert.
+    void SetWorldApi(ScriptWorldApi* api);
 
     [[nodiscard]] bool HasError() const;
     [[nodiscard]] const std::string& LastError() const;

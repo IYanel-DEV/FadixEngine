@@ -24,7 +24,7 @@ namespace fadix::editor
 {
 namespace
 {
-constexpr std::array<const char*, 10> kDebugViewMenuLabels{
+constexpr std::array<const char*, 11> kDebugViewMenuLabels{
     "None",
     "Unlit Base Color",
     "World Normals",
@@ -34,7 +34,8 @@ constexpr std::array<const char*, 10> kDebugViewMenuLabels{
     "Depth",
     "Cascade Colors (Experimental)",
     "AO (Experimental)",
-    "Motion Vectors (Experimental)"};
+    "Motion Vectors (Experimental)",
+    "Light Tiles (Forward+)"};
 
 void DisabledMenuItem(const char* label, const char* shortcut, const char* reason)
 {
@@ -223,6 +224,7 @@ void EditorShell::DrawMenus(EditorSession& session, EditorUiState& ui)
         ImGui::MenuItem("Output", nullptr, &ui.ShowOutput);
         ImGui::MenuItem("FXS Editor", nullptr, &ui.ShowScriptEditor);
         ImGui::MenuItem("Material Editor", nullptr, &ui.ShowMaterialEditor);
+        ImGui::MenuItem("FDX Animation", nullptr, &ui.ShowFdxAnimation);
         ImGui::MenuItem("Export...", nullptr, &ui.ShowExport);
         if (ImGui::BeginMenu("Rendering"))
         {
@@ -474,6 +476,7 @@ void EditorShell::DrawPanels(
     {
         m_Hierarchy.Draw(*scene, ui);
         m_Inspector.Draw(*scene, ui);
+        m_FdxAnim.Draw(*scene, ui, session.ActiveProject().RootPath);
     }
     if (contentBrowser != nullptr)
     {

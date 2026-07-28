@@ -6,6 +6,8 @@
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
 
+#include <glm/vec3.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -372,6 +374,13 @@ void ContentBrowserPanel::ApplySceneDrop(const AssetDragPayload& payload, SceneE
     else if (payload.AssetType == "Script")
     {
         static_cast<void>(scene->AssignScript(payload.Handle));
+    }
+    else if (payload.AssetType == "Prefab")
+    {
+        if (const auto id = scene->InstantiatePrefab(payload.SourcePath, glm::vec3{0.0F}))
+        {
+            scene->SetSelection(id, true);
+        }
     }
 }
 

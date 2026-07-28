@@ -87,6 +87,24 @@ SamplerState shadow_sampler2 : register(s6, space2);
 Texture2D shadow_map3 : register(t7, space2);  // cascade 3
 SamplerState shadow_sampler3 : register(s7, space2);
 
+// Forward+ light data. Read-only storage buffers occupy the t-registers after
+// the eight sampled textures (t0-t7), so they start at t8 in space2. Bound only
+// for the lit FragmentMain; the unlit/sky entries never reference them.
+struct GpuPointLight
+{
+    float4 position_range;  // xyz world position, w range
+    float4 color_intensity; // rgb color, a intensity
+    float4 params;          // x falloff exponent
+};
+StructuredBuffer<GpuPointLight> fp_point_lights : register(t8, space2);
+StructuredBuffer<uint2> fp_tiles : register(t9, space2);       // per-tile (offset, count)
+StructuredBuffer<uint> fp_tile_indices : register(t10, space2); // packed light indices
+
+cbuffer ForwardPlusUniforms : register(b1, space3)
+{
+    float4 fp_params; // x tile size (px), y tiles across, z uploaded light count, w enabled
+};
+
 struct FragmentOut
 {
     float4 color : SV_Target0;
@@ -405,17 +423,45 @@ FragmentOut FragmentMain(VertexOutput input)
     sun *= ComputeShadow(input.world_position);
     float3 direct = sun;
 
-    const int point_count = (int)light_counts.x;
-    for (int point_index = 0; point_index < point_count; ++point_index)
+    // Forward+: loop only this tile's point lights from the storage buffer.
+    // Falls back to the 8-light uniform path when Forward+ is disabled (extent
+    // not ready, or an incidental draw before the light buffers exist).
+    uint fp_point_count = 0;
+    if (fp_params.w > 0.5)
     {
-        const float3 to_light_vector = point_position_range[point_index].xyz - input.world_position;
-        const float light_distance = length(to_light_vector);
-        const float range = max(point_position_range[point_index].w, 0.001);
-        if (light_distance >= range) continue;
-        const float falloff = max(point_params[point_index].x, 0.01);
-        const float attenuation = DistanceAttenuation(light_distance, range, falloff);
-        const float3 radiance = point_color_intensity[point_index].rgb * point_color_intensity[point_index].a * attenuation;
-        direct += ShadeLight(normal, to_eye, to_light_vector / max(light_distance, 0.001), albedo, metallic, roughness, radiance);
+        const float tile_px = max(fp_params.x, 1.0);
+        const uint tile_x = (uint)(input.position.x / tile_px);
+        const uint tile_y = (uint)(input.position.y / tile_px);
+        const uint tile_index = tile_y * (uint)fp_params.y + tile_x;
+        const uint2 header = fp_tiles[tile_index];
+        fp_point_count = header.y;
+        for (uint k = 0; k < header.y; ++k)
+        {
+            const GpuPointLight lgt = fp_point_lights[fp_tile_indices[header.x + k]];
+            const float3 to_light_vector = lgt.position_range.xyz - input.world_position;
+            const float light_distance = length(to_light_vector);
+            const float range = max(lgt.position_range.w, 0.001);
+            if (light_distance >= range) continue;
+            const float falloff = max(lgt.params.x, 0.01);
+            const float attenuation = DistanceAttenuation(light_distance, range, falloff);
+            const float3 radiance = lgt.color_intensity.rgb * lgt.color_intensity.a * attenuation;
+            direct += ShadeLight(normal, to_eye, to_light_vector / max(light_distance, 0.001), albedo, metallic, roughness, radiance);
+        }
+    }
+    else
+    {
+        const int point_count = (int)light_counts.x;
+        for (int point_index = 0; point_index < point_count; ++point_index)
+        {
+            const float3 to_light_vector = point_position_range[point_index].xyz - input.world_position;
+            const float light_distance = length(to_light_vector);
+            const float range = max(point_position_range[point_index].w, 0.001);
+            if (light_distance >= range) continue;
+            const float falloff = max(point_params[point_index].x, 0.01);
+            const float attenuation = DistanceAttenuation(light_distance, range, falloff);
+            const float3 radiance = point_color_intensity[point_index].rgb * point_color_intensity[point_index].a * attenuation;
+            direct += ShadeLight(normal, to_eye, to_light_vector / max(light_distance, 0.001), albedo, metallic, roughness, radiance);
+        }
     }
 
     const int spot_count = (int)light_counts.y;
@@ -512,6 +558,16 @@ FragmentOut FragmentMain(VertexOutput input)
     else if (debug_mode == 7)
     {
         output.color = float4(CascadeDebugColor(input.world_position), 1.0);
+    }
+    else if (debug_mode == 8)
+    {
+        // Forward+ tile light-count heatmap: dark -> blue -> green -> red as the
+        // number of point lights evaluated in this pixel's tile grows.
+        const float t = saturate(fp_point_count / 32.0);
+        const float3 heat = lerp(
+            lerp(float3(0.02, 0.02, 0.08), float3(0.1, 0.4, 1.0), saturate(t * 2.0)),
+            float3(1.0, 0.2, 0.05), saturate(t * 2.0 - 1.0));
+        output.color = float4(heat, 1.0);
     }
 
     return output;

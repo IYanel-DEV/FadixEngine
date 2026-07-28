@@ -70,7 +70,8 @@ std::optional<EntitySnapshot> EntitySnapshot::Capture(const IWorld& world, const
         CopyComponent<UICanvasComponent>(registry, *entity),
         CopyComponent<TerrainComponent>(registry, *entity),
         CopyComponent<SkeletonComponent>(registry, *entity),
-        CopyComponent<AnimatorComponent>(registry, *entity)};
+        CopyComponent<AnimatorComponent>(registry, *entity),
+        CopyComponent<TransformAnimatorComponent>(registry, *entity)};
 }
 
 entt::entity EntitySnapshot::Restore(IWorld& world) const
@@ -107,6 +108,7 @@ entt::entity EntitySnapshot::Restore(IWorld& world) const
     RestoreComponent(registry, entity, Terrain);
     RestoreComponent(registry, entity, Skeleton);
     RestoreComponent(registry, entity, Animator);
+    RestoreComponent(registry, entity, TransformAnimator);
     return entity;
 }
 

@@ -3,9 +3,12 @@
 #include "assets/AssetDatabase.hpp"
 #include "assets/GltfMeshCache.hpp"
 #include "editor/command/EntityCommands.hpp"
+#include "editor/scene/EntityTextIO.hpp"
+#include "editor/scene/PrefabSerializer.hpp"
 #include "engine/assets/MaterialAsset.hpp"
 #include "engine/command/UndoStack.hpp"
 #include "engine/scene/IWorld.hpp"
+#include "runtime/AnimationRuntime.hpp"
 #include "runtime/Components.hpp"
 
 #include <algorithm>
@@ -108,20 +111,7 @@ void SceneEditor::Report(const std::string_view message) const
 
 std::optional<Uuid> SceneEditor::SceneRootId() const
 {
-    std::optional<Uuid> fallback;
-    for (const auto [entity, id] : m_World.Registry().view<const UuidComponent>().each())
-    {
-        const NameComponent* name = m_World.Registry().try_get<NameComponent>(entity);
-        if (name != nullptr && name->Name == "Main Scene")
-        {
-            return id.Id;
-        }
-        if (!fallback && !m_World.Registry().all_of<RelationshipComponent>(entity))
-        {
-            fallback = id.Id;
-        }
-    }
-    return fallback;
+    return FindSceneRootId(m_World);
 }
 
 bool SceneEditor::IsSceneRoot(const Uuid& id) const
@@ -339,8 +329,36 @@ std::optional<Uuid> SceneEditor::CreateImportedMeshEntity(
     command->SetMesh(mesh);
     const Uuid id = command->EntityId();
     m_History.Push(std::move(command));
+    if (const auto created = m_World.Find(id))
+    {
+        AttachImportedAnimation(m_World.Registry(), *created, *gltf,
+            [this](const std::string& message) { Report(message); });
+    }
     MarkChanged();
     return id.IsValid() ? std::optional<Uuid>{id} : std::nullopt;
+}
+
+std::optional<Uuid> SceneEditor::InstantiatePrefab(
+    const std::filesystem::path& path, const glm::vec3& gridPosition)
+{
+    // ponytail: prefab drop is not a single undo step (Instantiate builds a whole
+    // subtree with no matching command). Delete the root to remove it. Upgrade
+    // path: an InstantiatePrefabCommand capturing the created ids.
+    const Result<Uuid> root = PrefabSerializer::Instantiate(m_World, path, SceneRootId());
+    if (!root)
+    {
+        Report("Prefab drop failed: " + root.ErrorMessage());
+        return std::nullopt;
+    }
+    if (const std::optional<entt::entity> entity = m_World.Find(root.Value()))
+    {
+        if (auto* transform = m_World.Registry().try_get<TransformComponent>(*entity))
+        {
+            transform->Position = gridPosition;
+        }
+    }
+    MarkChanged();
+    return root.Value();
 }
 
 bool SceneEditor::DuplicateSelection()

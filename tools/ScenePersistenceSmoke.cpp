@@ -190,6 +190,22 @@ int main()
         Check(false, "Older scene entity is restored");
     }
 
+    // Scene.load-by-display-name: the root can be renamed away from "Main Scene" and
+    // is still identified structurally (parentless entity that others hang under).
+    {
+        const Uuid rootId = Uuid::Generate();
+        const Uuid childId = Uuid::Generate();
+        std::ofstream named{path, std::ios::trunc};
+        named << "FADIX_SCENE 1\n"
+              << "ENTITY " << rootId.ToString()
+              << " \"Lobby Scene\" 1 0 0 0 1 0 0 0 1 1 1 - END\n"
+              << "ENTITY " << childId.ToString() << " \"Camera\" 1 0 0 0 1 0 0 0 1 1 1 "
+              << rootId.ToString() << " END\n";
+    }
+    const auto display = SceneSerializer::PeekDisplayName(path);
+    Check(display.has_value() && *display == "Lobby Scene",
+        "PeekDisplayName returns the renamed scene root display name");
+
     std::error_code cleanup;
     std::filesystem::remove(path, cleanup);
     return failures == 0 ? 0 : 1;

@@ -6,6 +6,7 @@
 #include "runtime/World.hpp"
 
 #include <fstream>
+#include <optional>
 #include <string>
 
 namespace fadix
@@ -145,6 +146,43 @@ Result<void> SceneSerializer::LoadPath(const std::filesystem::path& path, IWorld
     world.Clear();
     CopyWorldInto(staging, world);
     return Result<void>::Ok();
+}
+
+std::optional<std::string> SceneSerializer::PeekDisplayName(const std::filesystem::path& path)
+{
+    std::ifstream input{path};
+    std::string header;
+    unsigned version = 0;
+    if (!(input >> header >> version) || header != "FADIX_SCENE" || version < 1)
+    {
+        return std::nullopt;
+    }
+    World staging{false};
+    std::string line;
+    std::getline(input, line); // rest of header line
+    while (std::getline(input, line))
+    {
+        if (line.empty())
+        {
+            continue;
+        }
+        if (!ParseEntityLine(line, staging))
+        {
+            return std::nullopt;
+        }
+    }
+    const std::optional<Uuid> root = FindSceneRootId(staging);
+    if (!root)
+    {
+        return std::nullopt;
+    }
+    const std::optional<entt::entity> entity = staging.Find(*root);
+    if (!entity)
+    {
+        return std::nullopt;
+    }
+    const NameComponent* name = staging.Registry().try_get<NameComponent>(*entity);
+    return name != nullptr ? std::optional<std::string>{name->Name} : std::nullopt;
 }
 
 SceneService::SceneService(std::unique_ptr<ISceneSerializer> serializer)

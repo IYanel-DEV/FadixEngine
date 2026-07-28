@@ -26,6 +26,11 @@ void WriteEntityLine(
 
 [[nodiscard]] Result<void> ParseEntityLine(std::string_view line, IWorld& world);
 
+// The scene root is the parentless entity that other entities hang under. Survives
+// renaming the root away from the legacy "Main Scene" label; that name is only a
+// tiebreak. nullopt when the world has no entities.
+[[nodiscard]] std::optional<Uuid> FindSceneRootId(const IWorld& world);
+
 void CopyWorldInto(const IWorld& source, IWorld& destination);
 
 void CopyEntityComponents(

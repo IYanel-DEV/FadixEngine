@@ -191,6 +191,28 @@ std::vector<FxsApiEntry> BuildCatalog()
         "audio.setMusicVolume(volume)", {{"volume", "number"}}, "nil",
         "Set music bus volume."));
 
+    // Gameplay world API (LuaVM::BindGameTables).
+    out.push_back(Make(names::kWorld, "", FxsCompletionKind::Module,
+        "World", {}, "table", "Runtime world queries."));
+    out.push_back(Make(names::kWorldFind, names::kWorld, FxsCompletionKind::Function,
+        "World.find(name)", {{"name", "string"}}, "Entity|nil",
+        "First entity whose NameComponent equals name, or nil."));
+
+    out.push_back(Make(names::kPrefab, "", FxsCompletionKind::Module,
+        "Prefab", {}, "table", "Prefab instantiation."));
+    out.push_back(Make(names::kPrefabSpawn, names::kPrefab, FxsCompletionKind::Function,
+        "Prefab.spawn(path, x, y, z)",
+        {{"path", "string"}, {"x", "number"}, {"y", "number"}, {"z", "number"}}, "Entity|nil",
+        "Instantiate a .prefab at the position; returns the root entity or nil."));
+
+    out.push_back(Make(names::kScene, "", FxsCompletionKind::Module,
+        "Scene", {}, "table", "Scene / level control."));
+    out.push_back(Make(names::kSceneLoad, names::kScene, FxsCompletionKind::Function,
+        "Scene.load(pathOrName)", {{"pathOrName", "string"}}, "nil",
+        "Load a scene at end of tick. Accepts a project-relative path "
+        "(\"Scenes/Level2.scene\") or a scene display name (\"Lobby Scene\"); "
+        "display-name match is case-insensitive and must be unique."));
+
     // Libraries actually opened by LuaVM::open_libraries (table names only).
     out.push_back(Make("math", "", FxsCompletionKind::Module, "math", {}, "table",
         "Standard Lua math library (opened by LuaVM)."));
@@ -395,6 +417,9 @@ std::vector<std::string> FxsApiCatalog::RequiredPublicApiKeys()
         std::string(names::kAudio) + "/" + names::kAudioSetMasterVolume,
         std::string(names::kAudio) + "/" + names::kAudioSetSoundVolume,
         std::string(names::kAudio) + "/" + names::kAudioSetMusicVolume,
+        std::string(names::kWorld) + "/" + names::kWorldFind,
+        std::string(names::kPrefab) + "/" + names::kPrefabSpawn,
+        std::string(names::kScene) + "/" + names::kSceneLoad,
         "/math",
         "/string",
         "/table",

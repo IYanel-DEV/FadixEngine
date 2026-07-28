@@ -8,6 +8,7 @@
 #include "engine/assets/MaterialAsset.hpp"
 #include "engine/command/UndoStack.hpp"
 #include "engine/scene/IWorld.hpp"
+#include "runtime/AnimationRuntime.hpp"
 #include "runtime/Components.hpp"
 
 #include <algorithm>
@@ -107,15 +108,17 @@ bool SceneEditor::AssignImportedMesh(const AssetHandle handle)
     const std::filesystem::path& path = !metadata->SourcePath.empty()
         ? metadata->SourcePath
         : metadata->ImportedPath;
-    if (m_GltfMeshes->Load(handle, path.string(), [this](const std::string& message) {
-            Report(message);
-        }) == nullptr)
+    const GltfMeshAsset* gltf = m_GltfMeshes->Load(
+        handle, path.string(), [this](const std::string& message) { Report(message); });
+    if (gltf == nullptr)
     {
         Report("Could not load imported mesh " + path.filename().string());
         return false;
     }
     auto before = EntitySnapshot::Capture(m_World, *m_Selection);
     mesh->ImportedMesh = handle;
+    AttachImportedAnimation(m_World.Registry(), *entity, *gltf,
+        [this](const std::string& message) { Report(message); });
     if (auto after = EntitySnapshot::Capture(m_World, *m_Selection); before && after)
     {
         m_History.Push(std::make_unique<SnapshotEntityCommand>(

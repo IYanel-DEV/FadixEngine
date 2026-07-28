@@ -68,6 +68,9 @@ private:
 void PushVertexUniform(CommandList& commands, std::uint32_t slot, const void* data, std::uint32_t size);
 void PushFragmentUniform(CommandList& commands, std::uint32_t slot, const void* data, std::uint32_t size);
 void BindFragmentSamplers(CommandList& commands, std::uint32_t firstSlot, std::span<Texture*> textures, std::span<Sampler*> samplers);
+// Binds read-only storage buffers to the fragment stage (Forward+ light/tile
+// data). Slot N maps to the t-register after the sampled textures.
+void BindFragmentStorageBuffers(CommandList& commands, std::uint32_t firstSlot, std::span<Buffer* const> buffers);
 void BindIndexBuffer(CommandList& commands, Buffer& buffer);
 void DrawIndexed(CommandList& commands, std::uint32_t indexCount);
 

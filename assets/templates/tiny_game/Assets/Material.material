@@ -1,0 +1,31 @@
+{
+  "EmissiveIntensity": 0,
+  "BaseColor": [
+    3.88000011444092,
+    3.3199999332428,
+    3.49000000953674,
+    4.23000001907349
+  ],
+  "Version": 1,
+  "RoughnessFactor": 3.75999999046326,
+  "Name": "Material",
+  "OcclusionStrength": 1,
+  "MetallicFactor": 3.08999991416931,
+  "EmissiveFactor": [
+    1.74000000953674,
+    0,
+    0
+  ],
+  "NormalScale": 1,
+  "AlphaMode": "Opaque",
+  "AlphaCutoff": 0.5,
+  "DoubleSided": false,
+  "UVScale": [
+    1,
+    1
+  ],
+  "UVOffset": [
+    0,
+    0
+  ]
+}

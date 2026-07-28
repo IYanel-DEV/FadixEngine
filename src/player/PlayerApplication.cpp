@@ -277,6 +277,11 @@ int PlayerApplication::Run()
                       << '\n';
         },
         nullptr);
+    // Gameplay world API for the shipped runtime: same Prefab.spawn / Scene.load
+    // the editor exposes, backed by the player's mesh cache and project root.
+    play.SetGameServices(
+        [&gltf]() { return sceneplay::CreatePhysicsWorldAdapter(gltf.get()); },
+        [&project](const std::string& relative) { return project.RootPath / relative; });
 
     std::unique_ptr<AudioEngine> audio = std::make_unique<AudioEngine>();
     std::unique_ptr<AudioPlayback> audioPlayback;

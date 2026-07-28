@@ -33,6 +33,16 @@ inline constexpr const char* kAudioSetMasterVolume = "setMasterVolume";
 inline constexpr const char* kAudioSetSoundVolume = "setSoundVolume";
 inline constexpr const char* kAudioSetMusicVolume = "setMusicVolume";
 
+// Gameplay world API. Global tables bound in LuaVM::BindGameTables, backed by
+// the play session's runtime world (World.find), prefab loader (Prefab.spawn)
+// and scene loader (Scene.load).
+inline constexpr const char* kWorld = "World";
+inline constexpr const char* kWorldFind = "find";
+inline constexpr const char* kPrefab = "Prefab";
+inline constexpr const char* kPrefabSpawn = "spawn";
+inline constexpr const char* kScene = "Scene";
+inline constexpr const char* kSceneLoad = "load";
+
 inline constexpr const char* kOnStart = "OnStart";
 inline constexpr const char* kOnUpdate = "OnUpdate";
 inline constexpr const char* kOnDestroy = "OnDestroy";

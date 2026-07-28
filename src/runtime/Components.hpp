@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/Uuid.hpp"
+#include "engine/animation/AnimationClip.hpp"
 #include "engine/camera/CameraComponent.hpp"
 #include "engine/physics/IPhysicsWorld.hpp"
 #include "engine/reflection/PropertyRegistry.hpp"
@@ -593,6 +594,19 @@ struct AnimatorComponent
     bool Loop{true};
     bool Playing{true};
     int ClipIndex{-1};
+    float CurrentTime{0.0F};
+};
+
+// FDX Animation for any entity's own transform (no skinned mesh required). The clip
+// is embedded so a bare cube/light/empty can be keyed and reloaded self-contained.
+// Channels reuse AnimationChannel with JointIndex ignored: Translation -> Position,
+// Rotation -> Rotation (quat), Scale -> Scale of the entity's TransformComponent.
+struct TransformAnimatorComponent
+{
+    AnimationClipAsset Clip;
+    float Speed{1.0F};
+    bool Loop{true};
+    bool Playing{true};
     float CurrentTime{0.0F};
 };
 
