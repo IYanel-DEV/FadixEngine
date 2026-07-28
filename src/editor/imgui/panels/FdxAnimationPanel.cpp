@@ -304,6 +304,7 @@ void DrawTransformSection(SceneEditor& scene, entt::registry& registry, const en
                 SortKeyframes(ch);
                 RecomputeDuration(clip);
                 scene.MarkChanged();
+                ApplyTransformClip(clip, anim.CurrentTime, transform);
                 selKey = -1;
             }
             if (ch.Target == AnimationChannel::Property::Rotation)
@@ -314,17 +315,20 @@ void DrawTransformSection(SceneEditor& scene, entt::registry& registry, const en
                         glm::quat{key.Value.w, key.Value.x, key.Value.y, key.Value.z});
                     key.Value = glm::vec4{q.x, q.y, q.z, q.w};
                     scene.MarkChanged();
+                    ApplyTransformClip(clip, anim.CurrentTime, transform);
                 }
             }
             else if (ImGui::DragFloat3("Value##tv", &key.Value.x, 0.01F))
             {
                 scene.MarkChanged();
+                ApplyTransformClip(clip, anim.CurrentTime, transform);
             }
             if (ImGui::Button("Delete Key##tv"))
             {
                 ch.Keyframes.erase(ch.Keyframes.begin() + selKey);
                 RecomputeDuration(clip);
                 scene.MarkChanged();
+                ApplyTransformClip(clip, anim.CurrentTime, transform);
                 selKey = -1;
             }
         }
@@ -429,7 +433,9 @@ void FdxAnimationPanel::Draw(
 
     if (!entity)
     {
-        ImGui::TextWrapped("Select a skinned entity in the Hierarchy (or pin one).");
+        ImGui::TextWrapped(
+            "Select any entity in the Hierarchy (or pin one). Cubes use Transform Animation; "
+            "rigged meshes also show skeletal clips.");
         ImGui::End();
         return;
     }
@@ -694,6 +700,23 @@ void FdxAnimationPanel::Draw(
     }
 
     // Coexistence: a skinned entity may also carry an entity-transform clip.
+    if (transformAnim == nullptr)
+    {
+        ImGui::Separator();
+        if (ImGui::Button("Add Transform Animation"))
+        {
+            TransformAnimatorComponent created;
+            created.Clip.Name = entityName;
+            created.Playing = false;
+            transformAnim =
+                &registry.emplace<TransformAnimatorComponent>(*entity, std::move(created));
+            scene.MarkChanged();
+        }
+        else
+        {
+            ImGui::TextDisabled("Optional: key this entity's own XYZ (in addition to skin clips).");
+        }
+    }
     if (transformAnim != nullptr)
     {
         DrawTransformSection(

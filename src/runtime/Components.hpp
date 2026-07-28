@@ -606,7 +606,8 @@ struct TransformAnimatorComponent
     AnimationClipAsset Clip;
     float Speed{1.0F};
     bool Loop{true};
-    bool Playing{true};
+    // Authoring default: off so Inspector keying does not fight the gizmo.
+    bool Playing{false};
     float CurrentTime{0.0F};
 };
 
@@ -761,6 +762,10 @@ inline void RegisterRuntimeComponentProperties(PropertyRegistry& registry)
     registry.AddProperty<AnimatorComponent>("speed");
     registry.AddProperty<AnimatorComponent>("loop");
     registry.AddProperty<AnimatorComponent>("playing");
+    registry.RegisterComponent<TransformAnimatorComponent>("TransformAnimator");
+    registry.AddProperty<TransformAnimatorComponent>("speed");
+    registry.AddProperty<TransformAnimatorComponent>("loop");
+    registry.AddProperty<TransformAnimatorComponent>("playing");
 }
 }
 

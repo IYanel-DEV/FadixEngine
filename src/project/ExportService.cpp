@@ -290,7 +290,9 @@ ExportResult ExportProject(const ExportOptions& options, const ExportProgressFn&
         root["name"] = project_json::Value::MakeString(project.Name);
         root["engineVersion"] = project_json::Value::MakeString(std::string{EngineVersion});
         root["template"] = project_json::Value::MakeString(
-            project.Template == ProjectTemplate::Empty2D ? "Empty2D" : "Empty3D");
+            project.Template == ProjectTemplate::Empty2D
+                ? "Empty2D"
+                : (project.Template == ProjectTemplate::TinyGame ? "TinyGame" : "Empty3D"));
         root["defaultScene"] = project_json::Value::MakeString(bootScene);
         project_json::Value folders = project_json::Value::MakeObject();
         folders["assets"] = project_json::Value::MakeString("Assets");
