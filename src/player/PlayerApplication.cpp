@@ -218,9 +218,12 @@ int PlayerApplication::Run()
     auto device = CreateDeviceFromWindow(window);
     if (!device)
     {
+        const std::string gpuError = SDL_GetError();
         SDL_DestroyWindow(window);
         SDL_Quit();
-        throw std::runtime_error("CreateDeviceFromWindow failed");
+        throw std::runtime_error(
+            "CreateDeviceFromWindow failed: " +
+            (gpuError.empty() ? std::string{"unknown SDL GPU error"} : gpuError));
     }
     auto* nativeDevice = static_cast<SDL_GPUDevice*>(GetNativeDeviceHandle(*device));
     if (m_Options.VSync)
