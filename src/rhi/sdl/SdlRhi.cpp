@@ -1230,6 +1230,9 @@ std::unique_ptr<rhi::Device> CreateDeviceFromWindow(void* sdlWindow)
     SDL_SetBooleanProperty(properties, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_SPIRV_BOOLEAN, true);
     SDL_SetBooleanProperty(properties, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_DXBC_BOOLEAN, true);
     SDL_SetBooleanProperty(properties, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_DXIL_BOOLEAN, true);
+    // Fadix uses three storage buffers, so D3D12 Tier-1 resource binding is sufficient.
+    SDL_SetBooleanProperty(
+        properties, SDL_PROP_GPU_DEVICE_CREATE_D3D12_ALLOW_FEWER_RESOURCE_SLOTS_BOOLEAN, true);
 #ifndef NDEBUG
     SDL_SetBooleanProperty(properties, SDL_PROP_GPU_DEVICE_CREATE_DEBUGMODE_BOOLEAN, true);
 #endif
@@ -1241,7 +1244,9 @@ std::unique_ptr<rhi::Device> CreateDeviceFromWindow(void* sdlWindow)
     }
     if (!SDL_ClaimWindowForGPUDevice(nativeDevice, static_cast<SDL_Window*>(sdlWindow)))
     {
+        const std::string claimError = SDL_GetError();
         SDL_DestroyGPUDevice(nativeDevice);
+        SDL_SetError("%s", claimError.c_str());
         return nullptr;
     }
     return std::make_unique<rhi::sdl::SdlDevice>(

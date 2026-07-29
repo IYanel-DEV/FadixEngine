@@ -1616,8 +1616,11 @@ int ImGuiEditorApplication::Run()
     m_Device = CreateDeviceFromWindow(m_Window);
     if (!m_Device)
     {
+        const std::string gpuError = SDL_GetError();
         Shutdown();
-        throw std::runtime_error("CreateDeviceFromWindow failed");
+        throw std::runtime_error(
+            "CreateDeviceFromWindow failed: " +
+            (gpuError.empty() ? std::string{"unknown SDL GPU error"} : gpuError));
     }
 
     auto* nativeDevice = static_cast<SDL_GPUDevice*>(GetNativeDeviceHandle(*m_Device));
