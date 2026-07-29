@@ -66,11 +66,12 @@ set "Path="
 set "PATH=%FADIX_PATH%"
 
 set "CMAKE_EXE=C:\Program Files\CMake\bin\cmake.exe"
+if not defined FADIX_RELEASE_JOBS set "FADIX_RELEASE_JOBS=1"
 "%CMAKE_EXE%" -S . -B .build\release-cmake -DFADIX_ENABLE_PHYSICS=ON -DFADIX_PORTABLE_BUILD=ON -DFADIX_STATIC_MSVC_RUNTIME=ON
 if errorlevel 1 exit /b %errorlevel%
-"%CMAKE_EXE%" --build .build\release-cmake --config Release --target fadix_editor --parallel 8
+"%CMAKE_EXE%" --build .build\release-cmake --config Release --target fadix_editor --parallel %FADIX_RELEASE_JOBS%
 if errorlevel 1 exit /b %errorlevel%
-"%CMAKE_EXE%" --build .build\release-cmake --config Release --target fadix_player --parallel 8
+"%CMAKE_EXE%" --build .build\release-cmake --config Release --target fadix_player --parallel %FADIX_RELEASE_JOBS%
 if errorlevel 1 exit /b %errorlevel%
 
 if not exist artifacts mkdir artifacts
