@@ -16,6 +16,9 @@
 #include "project/ProjectService.hpp"
 #include "render/ViewportRendererFactory.hpp"
 #include "rhi/sdl/SdlRhi.hpp"
+#ifdef _WIN32
+#include "rhi/d3d11/D3D11Rhi.hpp"
+#endif
 #include "runtime/Components.hpp"
 #include "scripting/ScriptRunner.hpp"
 
@@ -226,7 +229,7 @@ int PlayerApplication::Run()
             (gpuError.empty() ? std::string{"unknown SDL GPU error"} : gpuError));
     }
     auto* nativeDevice = static_cast<SDL_GPUDevice*>(GetNativeDeviceHandle(*device));
-    if (m_Options.VSync)
+    if (nativeDevice != nullptr && m_Options.VSync)
     {
         static_cast<void>(SDL_SetGPUSwapchainParameters(
             nativeDevice,
@@ -234,7 +237,7 @@ int PlayerApplication::Run()
             SDL_GPU_SWAPCHAINCOMPOSITION_SDR,
             SDL_GPU_PRESENTMODE_VSYNC));
     }
-    else
+    else if (nativeDevice != nullptr)
     {
         static_cast<void>(SDL_SetGPUSwapchainParameters(
             nativeDevice,
@@ -318,7 +321,8 @@ int PlayerApplication::Run()
     std::unique_ptr<GameUIOverlay> gameUi;
     constexpr SDL_GPUShaderFormat rmlShaderFormats =
         SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXIL | SDL_GPU_SHADERFORMAT_MSL;
-    if ((SDL_GetGPUShaderFormats(nativeDevice) & rmlShaderFormats) != 0)
+    if (nativeDevice != nullptr &&
+        (SDL_GetGPUShaderFormats(nativeDevice) & rmlShaderFormats) != 0)
     {
         system = std::make_unique<SystemInterface_SDL>();
         system->SetWindow(window);
@@ -341,7 +345,7 @@ int PlayerApplication::Run()
     }
     else
     {
-        std::clog << "[FadixPlayer] Game UI overlay disabled: GPU supports DXBC only.\n";
+        std::clog << "[FadixPlayer] Game UI overlay disabled on compatibility renderer.\n";
     }
 
     bool running = true;
@@ -442,6 +446,16 @@ int PlayerApplication::Run()
 
         // Fix blit source extents to the color target size.
         rhi::Texture* color = viewport->ColorTarget();
+#ifdef _WIN32
+        if (auto* d3d11 = rhi::d3d11::AsD3D11Device(*device); d3d11 != nullptr)
+        {
+            d3d11->ResizeBackbuffer(
+                static_cast<std::uint32_t>(std::max(pixelW, 1)),
+                static_cast<std::uint32_t>(std::max(pixelH, 1)));
+            d3d11->PresentTexture(color, m_Options.VSync);
+        }
+        else
+#endif
         if (color != nullptr && nativeDevice != nullptr)
         {
             SDL_GPUCommandBuffer* commandBuffer = SDL_AcquireGPUCommandBuffer(nativeDevice);

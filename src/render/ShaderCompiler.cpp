@@ -11,6 +11,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 
@@ -64,8 +65,27 @@ std::vector<std::byte> CompileShader(
 #else
         D3DCOMPILE_OPTIMIZATION_LEVEL3;
 #endif
+    std::string compatibleSource;
+    const void* compileData = source.data();
+    std::size_t compileSize = source.size();
+    if (std::strcmp(target, "vs_5_0") == 0 || std::strcmp(target, "ps_5_0") == 0)
+    {
+        compatibleSource.assign(reinterpret_cast<const char*>(source.data()), source.size());
+        std::size_t position = 0;
+        while ((position = compatibleSource.find(", space", position)) != std::string::npos)
+        {
+            const std::size_t closing = compatibleSource.find(')', position);
+            if (closing == std::string::npos)
+            {
+                break;
+            }
+            compatibleSource.erase(position, closing - position);
+        }
+        compileData = compatibleSource.data();
+        compileSize = compatibleSource.size();
+    }
     const HRESULT result = compile(
-        source.data(), source.size(), sourceName, nullptr, nullptr,
+        compileData, compileSize, sourceName, nullptr, nullptr,
         entryPoint, target, flags, 0, &bytecode, &errors);
     std::string errorMessage;
     if (errors != nullptr)

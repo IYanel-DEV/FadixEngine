@@ -1,9 +1,14 @@
 #include "rhi/sdl/SdlRhi.hpp"
 
+#ifdef _WIN32
+#include "rhi/d3d11/D3D11Rhi.hpp"
+#endif
+
 #include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <cstring>
+#include <cstdlib>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -525,24 +530,67 @@ public:
         }
     }
 
-    void PushVertexUniform(const std::uint32_t slot, const void* data, const std::uint32_t size)
+    void PushVertexUniform(const std::uint32_t slot, const void* data, const std::uint32_t size) override
     {
         SDL_PushGPUVertexUniformData(m_Commands, slot, data, size);
     }
-    void PushFragmentUniform(const std::uint32_t slot, const void* data, const std::uint32_t size)
+    void PushFragmentUniform(const std::uint32_t slot, const void* data, const std::uint32_t size) override
     {
         SDL_PushGPUFragmentUniformData(m_Commands, slot, data, size);
     }
-    void BindIndexBuffer(Buffer& buffer)
+    void BindIndexBuffer(Buffer& buffer) override
     {
         auto& sdlBuffer = dynamic_cast<SdlBuffer&>(buffer);
         SDL_GPUBufferBinding binding{};
         binding.buffer = sdlBuffer.Native();
         SDL_BindGPUIndexBuffer(m_RenderPass, &binding, SDL_GPU_INDEXELEMENTSIZE_32BIT);
     }
-    void DrawIndexed(const std::uint32_t indexCount)
+    void BindFragmentSamplers(
+        const std::uint32_t firstSlot,
+        std::span<Texture*> textures,
+        std::span<Sampler*> samplers) override
     {
-        SDL_DrawGPUIndexedPrimitives(m_RenderPass, indexCount, 1, 0, 0, 0);
+        if (m_RenderPass == nullptr || textures.empty() || textures.size() != samplers.size())
+        {
+            return;
+        }
+        std::vector<SDL_GPUTextureSamplerBinding> bindings;
+        bindings.reserve(textures.size());
+        for (std::size_t i = 0; i < textures.size(); ++i)
+        {
+            SDL_GPUTextureSamplerBinding binding{};
+            binding.texture = dynamic_cast<SdlTexture&>(*textures[i]).Native();
+            binding.sampler = dynamic_cast<SdlSampler&>(*samplers[i]).Native();
+            bindings.push_back(binding);
+        }
+        SDL_BindGPUFragmentSamplers(
+            m_RenderPass, firstSlot, bindings.data(), static_cast<Uint32>(bindings.size()));
+    }
+
+    void BindFragmentStorageBuffers(
+        const std::uint32_t firstSlot,
+        std::span<Buffer* const> buffers) override
+    {
+        if (m_RenderPass == nullptr || buffers.empty())
+        {
+            return;
+        }
+        std::vector<SDL_GPUBuffer*> natives;
+        natives.reserve(buffers.size());
+        for (Buffer* buffer : buffers)
+        {
+            natives.push_back(dynamic_cast<SdlBuffer&>(*buffer).Native());
+        }
+        SDL_BindGPUFragmentStorageBuffers(
+            m_RenderPass, firstSlot, natives.data(), static_cast<Uint32>(natives.size()));
+    }
+
+    void DrawIndexed(
+        const std::uint32_t indexCount,
+        const std::uint32_t firstIndex,
+        const std::int32_t vertexOffset) override
+    {
+        SDL_DrawGPUIndexedPrimitives(m_RenderPass, indexCount, 1, firstIndex, vertexOffset, 0);
     }
 
     [[nodiscard]] SDL_GPUCommandBuffer* NativeCommands() const noexcept { return m_Commands; }
@@ -1143,12 +1191,9 @@ void BindFragmentStorageBuffers(
 
 DynamicBufferUploader::DynamicBufferUploader(Device& device)
 {
+    m_RhiDevice = &device;
     auto* sdlDevice = AsSdlDevice(device);
-    if (sdlDevice == nullptr)
-    {
-        throw std::invalid_argument("DynamicBufferUploader requires the SDL GPU RHI backend");
-    }
-    m_Device = sdlDevice->NativeDevice();
+    m_Device = sdlDevice != nullptr ? sdlDevice->NativeDevice() : nullptr;
 }
 
 DynamicBufferUploader::~DynamicBufferUploader()
@@ -1164,6 +1209,15 @@ bool DynamicBufferUploader::Upload(
 {
     if (data.empty())
     {
+        return true;
+    }
+    if (m_Device == nullptr)
+    {
+        if (m_RhiDevice == nullptr || data.size() > destination.Size())
+        {
+            return false;
+        }
+        destination.Upload(data);
         return true;
     }
     auto* sdlCommands = AsSdlCommandList(commands);
@@ -1226,6 +1280,13 @@ std::unique_ptr<rhi::Device> CreateDeviceFromWindow(void* sdlWindow)
     {
         return nullptr;
     }
+    const char* requested = std::getenv("FADIX_RENDERER");
+#ifdef _WIN32
+    if (requested != nullptr && std::strcmp(requested, "d3d11") == 0)
+    {
+        return rhi::d3d11::CreateDeviceFromWindow(sdlWindow);
+    }
+#endif
     SDL_PropertiesID properties = SDL_CreateProperties();
     SDL_SetBooleanProperty(properties, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_SPIRV_BOOLEAN, true);
     SDL_SetBooleanProperty(properties, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_DXBC_BOOLEAN, true);
@@ -1240,8 +1301,24 @@ std::unique_ptr<rhi::Device> CreateDeviceFromWindow(void* sdlWindow)
     SDL_DestroyProperties(properties);
     if (nativeDevice == nullptr)
     {
+#ifdef _WIN32
+        SDL_Log("[Fadix] SDL GPU unavailable; trying Direct3D 11 compatibility renderer");
+        return rhi::d3d11::CreateDeviceFromWindow(sdlWindow);
+#else
         return nullptr;
+#endif
     }
+#ifdef _WIN32
+    const bool forceModern = requested != nullptr && std::strcmp(requested, "d3d12") == 0;
+    const bool legacyD3D12 = std::strcmp(SDL_GetGPUDeviceDriver(nativeDevice), "direct3d12") == 0 &&
+        (SDL_GetGPUShaderFormats(nativeDevice) & SDL_GPU_SHADERFORMAT_DXIL) == 0;
+    if (legacyD3D12 && !forceModern)
+    {
+        SDL_Log("[Fadix] D3D12 GPU exposes DXBC only; switching to Direct3D 11");
+        SDL_DestroyGPUDevice(nativeDevice);
+        return rhi::d3d11::CreateDeviceFromWindow(sdlWindow);
+    }
+#endif
     if (!SDL_ClaimWindowForGPUDevice(nativeDevice, static_cast<SDL_Window*>(sdlWindow)))
     {
         const std::string claimError = SDL_GetError();
@@ -1270,6 +1347,14 @@ void* GetNativeDeviceHandle(rhi::Device& device) noexcept
 
 void* GetNativeTextureHandle(rhi::Texture& texture) noexcept
 {
-    return rhi::sdl::NativeTexture(texture);
+    if (void* native = rhi::sdl::NativeTexture(texture); native != nullptr)
+    {
+        return native;
+    }
+#ifdef _WIN32
+    return rhi::d3d11::NativeTextureView(texture);
+#else
+    return nullptr;
+#endif
 }
 }

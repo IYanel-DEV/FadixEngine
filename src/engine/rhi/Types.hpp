@@ -57,6 +57,7 @@ struct BufferDesc
     std::size_t Size{0};
     BufferUsage Usage{BufferUsage::Vertex};
     std::string DebugName;
+    std::uint32_t StructureStride{0};
 };
 
 struct TextureDesc

@@ -1,15 +1,22 @@
 #include "editor/imgui/ImGuiLayer.hpp"
 
 #include "render/ShaderCompiler.hpp"
+#include "rhi/d3d11/D3D11Rhi.hpp"
+#include "rhi/sdl/SdlRhi.hpp"
 
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_sdlgpu3.h>
+#ifdef _WIN32
+#include <imgui_impl_dx11.h>
+#include <d3d11.h>
+#endif
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
 
 #include <cstddef>
+#include <algorithm>
 #include <cstring>
 #include <exception>
 #include <span>
@@ -66,9 +73,9 @@ ImGuiLayer::~ImGuiLayer()
     Shutdown();
 }
 
-bool ImGuiLayer::Initialize(SDL_Window* window, SDL_GPUDevice* device)
+bool ImGuiLayer::Initialize(SDL_Window* window, rhi::Device& device)
 {
-    if (window == nullptr || device == nullptr)
+    if (window == nullptr)
     {
         return false;
     }
@@ -88,6 +95,34 @@ bool ImGuiLayer::Initialize(SDL_Window* window, SDL_GPUDevice* device)
     // Multi-viewports stay off: the script editor owns a native Win32 child HWND.
     // Style + fonts are applied by EditorTheme after Initialize.
 
+    m_Window = window;
+    m_RhiDevice = &device;
+#ifdef _WIN32
+    m_D3D11Device = rhi::d3d11::AsD3D11Device(device);
+    if (m_D3D11Device != nullptr)
+    {
+        if (!ImGui_ImplSDL3_InitForD3D(window) ||
+            !ImGui_ImplDX11_Init(
+                m_D3D11Device->NativeDevice(), m_D3D11Device->NativeContext()))
+        {
+            ImGui_ImplSDL3_Shutdown();
+            ImGui::DestroyContext();
+            m_Window = nullptr;
+            m_RhiDevice = nullptr;
+            m_D3D11Device = nullptr;
+            return false;
+        }
+        m_Ready = true;
+        return true;
+    }
+#endif
+    auto* nativeDevice = rhi::sdl::AsSdlDevice(device);
+    if (nativeDevice == nullptr)
+    {
+        ImGui::DestroyContext();
+        return false;
+    }
+    m_Device = nativeDevice->NativeDevice();
     if (!ImGui_ImplSDL3_InitForSDLGPU(window))
     {
         ImGui::DestroyContext();
@@ -95,8 +130,8 @@ bool ImGuiLayer::Initialize(SDL_Window* window, SDL_GPUDevice* device)
     }
 
     ImGui_ImplSDLGPU3_InitInfo initInfo{};
-    initInfo.Device = device;
-    initInfo.ColorTargetFormat = SDL_GetGPUSwapchainTextureFormat(device, window);
+    initInfo.Device = m_Device;
+    initInfo.ColorTargetFormat = SDL_GetGPUSwapchainTextureFormat(m_Device, window);
     initInfo.MSAASamples = SDL_GPU_SAMPLECOUNT_1;
     if (!ImGui_ImplSDLGPU3_Init(&initInfo))
     {
@@ -105,10 +140,8 @@ bool ImGuiLayer::Initialize(SDL_Window* window, SDL_GPUDevice* device)
         return false;
     }
 
-    const bool legacyDxbc = std::strcmp(SDL_GetGPUDeviceDriver(device), "direct3d12") == 0 &&
-        (SDL_GetGPUShaderFormats(device) & SDL_GPU_SHADERFORMAT_DXIL) == 0;
-    m_Window = window;
-    m_Device = device;
+    const bool legacyDxbc = std::strcmp(SDL_GetGPUDeviceDriver(m_Device), "direct3d12") == 0 &&
+        (SDL_GetGPUShaderFormats(m_Device) & SDL_GPU_SHADERFORMAT_DXIL) == 0;
     if (legacyDxbc && !CreateLegacyDxbcPipeline())
     {
         ImGui_ImplSDLGPU3_Shutdown();
@@ -247,11 +280,24 @@ void ImGuiLayer::Shutdown()
         SDL_WaitForGPUIdle(m_Device);
     }
     ImGui_ImplSDL3_Shutdown();
-    ImGui_ImplSDLGPU3_Shutdown();
-    DestroyLegacyDxbcPipeline();
+#ifdef _WIN32
+    if (m_D3D11Device != nullptr)
+    {
+        ImGui_ImplDX11_Shutdown();
+    }
+    else
+#endif
+    {
+        ImGui_ImplSDLGPU3_Shutdown();
+        DestroyLegacyDxbcPipeline();
+    }
     ImGui::DestroyContext();
     m_Window = nullptr;
+    m_RhiDevice = nullptr;
     m_Device = nullptr;
+    m_D3D11Device = nullptr;
+    m_BackbufferWidth = 0;
+    m_BackbufferHeight = 0;
     m_Ready = false;
 }
 
@@ -269,14 +315,23 @@ void ImGuiLayer::BeginFrame()
     {
         return;
     }
-    ImGui_ImplSDLGPU3_NewFrame();
+#ifdef _WIN32
+    if (m_D3D11Device != nullptr)
+    {
+        ImGui_ImplDX11_NewFrame();
+    }
+    else
+#endif
+    {
+        ImGui_ImplSDLGPU3_NewFrame();
+    }
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
 }
 
 void ImGuiLayer::RenderAndSubmit(const AfterImGuiPass& afterImGui)
 {
-    if (!m_Ready || m_Device == nullptr || m_Window == nullptr)
+    if (!m_Ready || m_Window == nullptr)
     {
         return;
     }
@@ -285,6 +340,41 @@ void ImGuiLayer::RenderAndSubmit(const AfterImGuiPass& afterImGui)
     ImDrawData* drawData = ImGui::GetDrawData();
     const bool minimized =
         drawData == nullptr || drawData->DisplaySize.x <= 0.0F || drawData->DisplaySize.y <= 0.0F;
+
+#ifdef _WIN32
+    if (m_D3D11Device != nullptr)
+    {
+        if (!minimized)
+        {
+            int width = 0;
+            int height = 0;
+            SDL_GetWindowSizeInPixels(m_Window, &width, &height);
+            const auto pixelWidth = static_cast<std::uint32_t>(std::max(width, 1));
+            const auto pixelHeight = static_cast<std::uint32_t>(std::max(height, 1));
+            if (pixelWidth != m_BackbufferWidth || pixelHeight != m_BackbufferHeight)
+            {
+                if (!m_D3D11Device->ResizeBackbuffer(pixelWidth, pixelHeight))
+                {
+                    return;
+                }
+                m_BackbufferWidth = pixelWidth;
+                m_BackbufferHeight = pixelHeight;
+            }
+            ID3D11RenderTargetView* view = m_D3D11Device->BackbufferView();
+            const float clear[4]{0.08F, 0.09F, 0.10F, 1.0F};
+            m_D3D11Device->NativeContext()->OMSetRenderTargets(1, &view, nullptr);
+            m_D3D11Device->NativeContext()->ClearRenderTargetView(view, clear);
+            ImGui_ImplDX11_RenderDrawData(drawData);
+        }
+        m_D3D11Device->Present();
+        return;
+    }
+#endif
+
+    if (m_Device == nullptr)
+    {
+        return;
+    }
 
     SDL_GPUCommandBuffer* commandBuffer = SDL_AcquireGPUCommandBuffer(m_Device);
     if (commandBuffer == nullptr)
