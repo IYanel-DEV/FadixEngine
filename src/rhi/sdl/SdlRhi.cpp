@@ -1147,7 +1147,7 @@ void BindIndexBuffer(CommandList& commands, Buffer& buffer)
 void DrawIndexed(CommandList& commands, const std::uint32_t indexCount)
 {
     auto& sdlCommands = dynamic_cast<SdlCommandList&>(commands);
-    sdlCommands.DrawIndexed(indexCount);
+    sdlCommands.DrawIndexed(indexCount, 0, 0);
 }
 
 void BindFragmentSamplers(CommandList& commands, std::uint32_t firstSlot, std::span<Texture*> textures, std::span<Sampler*> samplers)
