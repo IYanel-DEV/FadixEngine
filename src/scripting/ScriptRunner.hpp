@@ -73,6 +73,7 @@ private:
         entt::entity Entity;
         NativeScriptLoader::Loaded Loaded;
     };
+    void DispatchAnimationEvents(entt::registry& registry);
     void ApplyPendingDestroy(entt::registry& registry);
 
     LuaVM m_Vm;

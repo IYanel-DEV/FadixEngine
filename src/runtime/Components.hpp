@@ -589,26 +589,80 @@ struct SkeletonComponent
 
 struct AnimatorComponent
 {
+    AnimatorController Controller;
+    std::string ActiveState;
     std::string ClipName;
     float Speed{1.0F};
     bool Loop{true};
-    bool Playing{true};
+    // Animation data is attached at authoring time, but gameplay code must
+    // explicitly start playback (matching an AnimationPlayer-style workflow).
+    bool Playing{false};
+    bool Paused{false};
     int ClipIndex{-1};
     float CurrentTime{0.0F};
+    // Transient two-clip crossfade state. Scene persistence intentionally ignores it.
+    std::string BlendFromClipName;
+    float BlendFromTime{0.0F};
+    float BlendDuration{0.0F};
+    float BlendElapsed{0.0F};
+    bool EmitStartEvents{false};
+    std::vector<AnimationEvent> PendingEvents;
+
+    void ClearBlend() noexcept
+    {
+        BlendFromClipName.clear();
+        BlendFromTime = 0.0F;
+        BlendDuration = 0.0F;
+        BlendElapsed = 0.0F;
+    }
+
+    void ClearEventState()
+    {
+        EmitStartEvents = false;
+        PendingEvents.clear();
+    }
+
+    void ClearControllerRuntime() { ActiveState.clear(); }
 };
 
-// FDX Animation for any entity's own transform (no skinned mesh required). The clip
-// is embedded so a bare cube/light/empty can be keyed and reloaded self-contained.
+// FDX Animation for any entity's own transform (no skinned mesh required). Clips
+// are embedded so a bare cube/light/empty can own a small named animation library.
 // Channels reuse AnimationChannel with JointIndex ignored: Translation -> Position,
 // Rotation -> Rotation (quat), Scale -> Scale of the entity's TransformComponent.
 struct TransformAnimatorComponent
 {
-    AnimationClipAsset Clip;
+    AnimatorController Controller;
+    std::string ActiveState;
+    std::vector<AnimationClipAsset> Clips;
+    std::string ClipName;
     float Speed{1.0F};
     bool Loop{true};
     // Authoring default: off so Inspector keying does not fight the gizmo.
     bool Playing{false};
+    bool Paused{false};
     float CurrentTime{0.0F};
+    std::string BlendFromClipName;
+    float BlendFromTime{0.0F};
+    float BlendDuration{0.0F};
+    float BlendElapsed{0.0F};
+    bool EmitStartEvents{false};
+    std::vector<AnimationEvent> PendingEvents;
+
+    void ClearBlend() noexcept
+    {
+        BlendFromClipName.clear();
+        BlendFromTime = 0.0F;
+        BlendDuration = 0.0F;
+        BlendElapsed = 0.0F;
+    }
+
+    void ClearEventState()
+    {
+        EmitStartEvents = false;
+        PendingEvents.clear();
+    }
+
+    void ClearControllerRuntime() { ActiveState.clear(); }
 };
 
 inline void RegisterRuntimeComponentProperties(PropertyRegistry& registry)

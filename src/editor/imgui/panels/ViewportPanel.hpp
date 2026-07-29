@@ -70,6 +70,11 @@ public:
         SceneDocument& document,
         SDL_Window* window);
 
+    /// Embedded animation-workspace preview. Uses its own renderer, camera, and
+    /// render target; the Scene and Game views remain completely independent.
+    void DrawAnimationPreview(IWorld& world, std::optional<Uuid> target, float height,
+        float skeletalTime, float transformTime);
+
     void HandleEvent(
         const SDL_Event& event,
         SceneEditor& scene,
@@ -162,6 +167,14 @@ private:
 
     View m_Scene;
     View m_Game;
+    View m_Animation;
+    std::unique_ptr<IWorld> m_AnimationWorld;
+    const IWorld* m_AnimationSourceWorld{nullptr};
+    std::optional<Uuid> m_AnimationTarget;
+    glm::vec3 m_AnimationCenter{0.0F};
+    float m_AnimationYaw{0.65F};
+    float m_AnimationPitch{0.25F};
+    float m_AnimationDistance{6.0F};
     bool m_GizmoLocalSpace{false};
     int m_GizmoTool{1};
     bool m_GizmoDragging{false};
