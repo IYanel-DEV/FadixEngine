@@ -8,6 +8,8 @@
 
 #include <cmath>
 #include <cstdio>
+#include <string>
+#include <vector>
 
 using namespace fadix;
 
@@ -69,6 +71,7 @@ int main()
     player.SetTime(0.0F);
     player.Update(0.0F, 1.0F, false, pose);
     const glm::mat4 atStart = pose.Skeleton.GetJointMatrices()[0];
+    const SkeletonPose startPose = pose;
 
     player.Update(0.5F, 1.0F, false, pose);
     Check(std::abs(player.GetTime() - 0.5F) < 1e-4F, "player time advanced to 0.5s");
@@ -78,8 +81,16 @@ int main()
     player.SetTime(1.0F);
     player.Update(0.0F, 1.0F, false, pose);
     const glm::mat4 atEnd = pose.Skeleton.GetJointMatrices()[0];
+    const SkeletonPose endPose = pose;
     const glm::mat4 expected = glm::mat4_cast(glm::normalize(q1));
     Check(!MatricesDiffer(atEnd, expected, 1e-3F), "end pose matches final keyframe rotation");
+
+    SkeletonPose blendedPose;
+    BlendSkeletonPoses(startPose, endPose, 0.5F, blendedPose);
+    const glm::mat4 expectedBlend = glm::mat4_cast(
+        glm::angleAxis(glm::radians(45.0F), glm::vec3{0.0F, 1.0F, 0.0F}));
+    Check(!MatricesDiffer(blendedPose.Skeleton.GetJointMatrices()[0], expectedBlend, 1e-3F),
+        "crossfade blends skeletal poses in local TRS space");
 
     // Looping wraps time back into range.
     player.SetTime(0.0F);
@@ -104,7 +115,35 @@ int main()
         Check(std::abs(t.x - 5.0F) < 1e-4F, "transform translation at t=1 interpolates to midpoint");
         move.Sample(2.0F, t, r, s);
         Check(std::abs(t.x - 10.0F) < 1e-4F, "transform translation at t=2 is end key");
+
+        move.InterpolationMode = AnimationChannel::Interpolation::Step;
+        move.Sample(1.0F, t, r, s);
+        Check(std::abs(t.x) < 1e-4F, "step interpolation holds the previous key value");
+
+        move.InterpolationMode = AnimationChannel::Interpolation::Smooth;
+        move.Sample(0.5F, t, r, s);
+        Check(std::abs(t.x - 1.5625F) < 1e-4F, "smooth interpolation eases between keys");
     }
+
+    AnimationClipAsset eventClip;
+    eventClip.Duration = 1.0F;
+    eventClip.Events = {{0.0F, "Start", ""}, {0.25F, "Footstep", "left"},
+        {0.75F, "Footstep", "right"}};
+    std::vector<std::string> events;
+    ForEachAnimationEventCrossed(eventClip, 0.0F, 0.5F, false, true,
+        [&](const AnimationEvent& event) { events.push_back(event.Name + ":" + event.Payload); });
+    Check(events == std::vector<std::string>{"Start:", "Footstep:left"},
+        "animation events fire at start and across a forward step");
+    events.clear();
+    ForEachAnimationEventCrossed(eventClip, 0.8F, 0.45F, true, false,
+        [&](const AnimationEvent& event) { events.push_back(event.Name + ":" + event.Payload); });
+    Check(events == std::vector<std::string>{"Start:", "Footstep:left"},
+        "looping animation events fire in wrapped playback order");
+    events.clear();
+    ForEachAnimationEventCrossed(eventClip, 0.2F, -0.5F, true, false,
+        [&](const AnimationEvent& event) { events.push_back(event.Name + ":" + event.Payload); });
+    Check(events == std::vector<std::string>{"Start:", "Footstep:right"},
+        "reverse looping animation events fire in reverse playback order");
 
     std::printf(g_fail == 0 ? "ALL PASS\n" : "%d CHECK(S) FAILED\n", g_fail);
     return g_fail == 0 ? 0 : 1;

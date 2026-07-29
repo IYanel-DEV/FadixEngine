@@ -476,7 +476,7 @@ void EditorShell::DrawPanels(
     {
         m_Hierarchy.Draw(*scene, ui);
         m_Inspector.Draw(*scene, ui);
-        m_FdxAnim.Draw(*scene, ui, session.ActiveProject().RootPath);
+        m_FdxAnim.Draw(*scene, ui, session.ActiveProject().RootPath, viewports);
     }
     if (contentBrowser != nullptr)
     {

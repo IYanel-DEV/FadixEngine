@@ -72,6 +72,8 @@ public:
 
     void CallStart(int instance, const ScriptEntityHandle& entity);
     void CallUpdate(int instance, const ScriptEntityHandle& entity, float deltaTime);
+    void CallAnimationEvent(int instance, const ScriptEntityHandle& entity,
+        const std::string& name, const std::string& payload);
     void CallDestroy(int instance, const ScriptEntityHandle& entity);
     void DestroyInstance(int instance);
 

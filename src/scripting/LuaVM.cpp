@@ -3,6 +3,7 @@
 #ifdef FADIX_ENABLE_LUA
 
 #include "engine/audio/AudioEngine.hpp"
+#include "runtime/AnimationRuntime.hpp"
 #include "runtime/Components.hpp"
 #include "scripting/FxsApiNames.hpp"
 
@@ -124,6 +125,395 @@ struct LuaEntity
         return character != nullptr && character->Grounded;
     }
 
+    [[nodiscard]] bool startAnimator()
+    {
+        if (reg == nullptr)
+        {
+            return false;
+        }
+        if (auto* animator = reg->try_get<TransformAnimatorComponent>(e);
+            animator != nullptr && !animator->Controller.States.empty())
+        {
+            const std::string& entryName = animator->Controller.EntryState.empty()
+                ? animator->Controller.States.front().Name
+                : animator->Controller.EntryState;
+            const AnimatorState* entry = FindAnimatorState(animator->Controller, entryName);
+            if (entry == nullptr || FindTransformClip(
+                    static_cast<const TransformAnimatorComponent&>(*animator),
+                    entry->ClipName) == nullptr)
+            {
+                return false;
+            }
+            if (!StartAnimatorController(*animator))
+            {
+                return false;
+            }
+            if (auto* skeletal = reg->try_get<AnimatorComponent>(e))
+            {
+                skeletal->Playing = false;
+                skeletal->Paused = false;
+                skeletal->ClearControllerRuntime();
+            }
+            return true;
+        }
+        if (auto* animator = reg->try_get<AnimatorComponent>(e);
+            animator != nullptr && !animator->Controller.States.empty())
+        {
+            if (!StartAnimatorController(*animator))
+            {
+                return false;
+            }
+            if (auto* transform = reg->try_get<TransformAnimatorComponent>(e))
+            {
+                transform->Playing = false;
+                transform->Paused = false;
+                transform->ClearControllerRuntime();
+            }
+            return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool setAnimatorBool(const std::string& name, const bool value)
+    {
+        bool changed = false;
+        if (auto* animator = reg ? reg->try_get<AnimatorComponent>(e) : nullptr)
+        {
+            changed = SetAnimatorBool(*animator, name, value) || changed;
+        }
+        if (auto* animator = reg ? reg->try_get<TransformAnimatorComponent>(e) : nullptr)
+        {
+            changed = SetAnimatorBool(*animator, name, value) || changed;
+        }
+        return changed;
+    }
+
+    [[nodiscard]] bool setAnimatorFloat(const std::string& name, const float value)
+    {
+        bool changed = false;
+        if (auto* animator = reg ? reg->try_get<AnimatorComponent>(e) : nullptr)
+        {
+            changed = SetAnimatorFloat(*animator, name, value) || changed;
+        }
+        if (auto* animator = reg ? reg->try_get<TransformAnimatorComponent>(e) : nullptr)
+        {
+            changed = SetAnimatorFloat(*animator, name, value) || changed;
+        }
+        return changed;
+    }
+
+    [[nodiscard]] bool setAnimatorInt(const std::string& name, const int value)
+    {
+        bool changed = false;
+        if (auto* animator = reg ? reg->try_get<AnimatorComponent>(e) : nullptr)
+        {
+            changed = SetAnimatorInt(*animator, name, value) || changed;
+        }
+        if (auto* animator = reg ? reg->try_get<TransformAnimatorComponent>(e) : nullptr)
+        {
+            changed = SetAnimatorInt(*animator, name, value) || changed;
+        }
+        return changed;
+    }
+
+    [[nodiscard]] bool triggerAnimator(const std::string& name)
+    {
+        return setAnimatorBool(name, true);
+    }
+
+    [[nodiscard]] bool playAnimation(const sol::optional<std::string>& requestedClip)
+    {
+        if (reg == nullptr)
+        {
+            return false;
+        }
+        auto* transformAnimator = reg->try_get<TransformAnimatorComponent>(e);
+        if (requestedClip && !requestedClip->empty() && transformAnimator != nullptr)
+        {
+            if (AnimationClipAsset* clip = FindTransformClip(*transformAnimator, *requestedClip))
+            {
+                if (auto* skeletal = reg->try_get<AnimatorComponent>(e))
+                {
+                    skeletal->Playing = false;
+                    skeletal->Paused = false;
+                    skeletal->CurrentTime = 0.0F;
+                    ClearAnimationBlend(*skeletal);
+                    skeletal->ClearEventState();
+                    skeletal->ClearControllerRuntime();
+                }
+                transformAnimator->ClipName = clip->Name;
+                transformAnimator->ClearControllerRuntime();
+                transformAnimator->CurrentTime = 0.0F;
+                transformAnimator->Paused = false;
+                transformAnimator->Playing = true;
+                ClearAnimationBlend(*transformAnimator);
+                transformAnimator->ClearEventState();
+                transformAnimator->EmitStartEvents = true;
+                return true;
+            }
+        }
+        if (auto* animator = reg->try_get<AnimatorComponent>(e))
+        {
+            if (requestedClip && !requestedClip->empty())
+            {
+                animator->ClipName = *requestedClip;
+            }
+            animator->CurrentTime = 0.0F;
+            animator->ClearControllerRuntime();
+            animator->Paused = false;
+            animator->Playing = true;
+            ClearAnimationBlend(*animator);
+            animator->ClearEventState();
+            animator->EmitStartEvents = true;
+            if (transformAnimator != nullptr)
+            {
+                transformAnimator->Playing = false;
+                transformAnimator->Paused = false;
+                transformAnimator->CurrentTime = 0.0F;
+                ClearAnimationBlend(*transformAnimator);
+                transformAnimator->ClearEventState();
+                transformAnimator->ClearControllerRuntime();
+            }
+            return true;
+        }
+        if (transformAnimator != nullptr)
+        {
+            if (requestedClip && !requestedClip->empty() &&
+                FindTransformClip(*transformAnimator, *requestedClip) == nullptr)
+            {
+                return false;
+            }
+            if (FindTransformClip(*transformAnimator) == nullptr)
+            {
+                return false;
+            }
+            transformAnimator->CurrentTime = 0.0F;
+            transformAnimator->ClearControllerRuntime();
+            transformAnimator->Paused = false;
+            transformAnimator->Playing = true;
+            ClearAnimationBlend(*transformAnimator);
+            transformAnimator->ClearEventState();
+            transformAnimator->EmitStartEvents = true;
+            return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool crossFadeAnimation(const std::string& requestedClip,
+        const sol::optional<float>& requestedDuration)
+    {
+        if (reg == nullptr || requestedClip.empty())
+        {
+            return false;
+        }
+        const float duration = std::max(requestedDuration.value_or(0.25F), 0.0F);
+        auto* transformAnimator = reg->try_get<TransformAnimatorComponent>(e);
+        if (transformAnimator != nullptr)
+        {
+            if (const AnimationClipAsset* target = FindTransformClip(
+                    static_cast<const TransformAnimatorComponent&>(*transformAnimator),
+                    requestedClip))
+            {
+                const bool hasSource = (transformAnimator->Playing || transformAnimator->Paused) &&
+                    !transformAnimator->ClipName.empty() && duration > 0.0F;
+                const std::string fromName = transformAnimator->ClipName;
+                const float fromTime = transformAnimator->CurrentTime;
+                transformAnimator->ClearControllerRuntime();
+                transformAnimator->ClipName = target->Name;
+                transformAnimator->CurrentTime = 0.0F;
+                transformAnimator->Playing = true;
+                transformAnimator->Paused = false;
+                ClearAnimationBlend(*transformAnimator);
+                transformAnimator->ClearEventState();
+                transformAnimator->EmitStartEvents = true;
+                if (hasSource)
+                {
+                    transformAnimator->BlendFromClipName = fromName;
+                    transformAnimator->BlendFromTime = fromTime;
+                    transformAnimator->BlendDuration = duration;
+                }
+                if (auto* skeletal = reg->try_get<AnimatorComponent>(e))
+                {
+                    skeletal->Playing = false;
+                    skeletal->Paused = false;
+                    skeletal->CurrentTime = 0.0F;
+                    ClearAnimationBlend(*skeletal);
+                    skeletal->ClearEventState();
+                    skeletal->ClearControllerRuntime();
+                }
+                return true;
+            }
+        }
+        if (auto* animator = reg->try_get<AnimatorComponent>(e))
+        {
+            const bool hasSource = (animator->Playing || animator->Paused) &&
+                !animator->ClipName.empty() && duration > 0.0F;
+            const std::string fromName = animator->ClipName;
+            const float fromTime = animator->CurrentTime;
+            animator->ClearControllerRuntime();
+            animator->ClipName = requestedClip;
+            animator->CurrentTime = 0.0F;
+            animator->Playing = true;
+            animator->Paused = false;
+            ClearAnimationBlend(*animator);
+            animator->ClearEventState();
+            animator->EmitStartEvents = true;
+            if (hasSource)
+            {
+                animator->BlendFromClipName = fromName;
+                animator->BlendFromTime = fromTime;
+                animator->BlendDuration = duration;
+            }
+            if (transformAnimator != nullptr)
+            {
+                transformAnimator->Playing = false;
+                transformAnimator->Paused = false;
+                transformAnimator->CurrentTime = 0.0F;
+                ClearAnimationBlend(*transformAnimator);
+                transformAnimator->ClearEventState();
+                transformAnimator->ClearControllerRuntime();
+            }
+            return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool pauseAnimation()
+    {
+        bool paused = false;
+        if (auto* animator = reg ? reg->try_get<AnimatorComponent>(e) : nullptr;
+            animator != nullptr && animator->Playing)
+        {
+            animator->Playing = false;
+            animator->Paused = true;
+            paused = true;
+        }
+        if (auto* animator = reg ? reg->try_get<TransformAnimatorComponent>(e) : nullptr;
+            animator != nullptr && animator->Playing)
+        {
+            animator->Playing = false;
+            animator->Paused = true;
+            paused = true;
+        }
+        return paused;
+    }
+
+    [[nodiscard]] bool resumeAnimation()
+    {
+        bool resumed = false;
+        if (auto* animator = reg ? reg->try_get<AnimatorComponent>(e) : nullptr;
+            animator != nullptr && animator->Paused)
+        {
+            animator->Paused = false;
+            animator->Playing = true;
+            resumed = true;
+        }
+        if (auto* animator = reg ? reg->try_get<TransformAnimatorComponent>(e) : nullptr;
+            animator != nullptr && animator->Paused)
+        {
+            animator->Paused = false;
+            animator->Playing = true;
+            resumed = true;
+        }
+        return resumed;
+    }
+
+    void stopAnimation()
+    {
+        if (auto* animator = reg ? reg->try_get<AnimatorComponent>(e) : nullptr)
+        {
+            animator->Playing = false;
+            animator->Paused = false;
+            animator->CurrentTime = 0.0F;
+            ClearAnimationBlend(*animator);
+            animator->ClearEventState();
+            animator->ClearControllerRuntime();
+        }
+        if (auto* animator = reg ? reg->try_get<TransformAnimatorComponent>(e) : nullptr)
+        {
+            animator->Playing = false;
+            animator->Paused = false;
+            animator->CurrentTime = 0.0F;
+            ClearAnimationBlend(*animator);
+            animator->ClearEventState();
+            animator->ClearControllerRuntime();
+        }
+    }
+
+    [[nodiscard]] bool seekAnimation(const float seconds)
+    {
+        bool found = false;
+        const float time = std::max(seconds, 0.0F);
+        if (auto* animator = reg ? reg->try_get<AnimatorComponent>(e) : nullptr)
+        {
+            animator->CurrentTime = time;
+            found = true;
+        }
+        if (auto* animator = reg ? reg->try_get<TransformAnimatorComponent>(e) : nullptr)
+        {
+            const AnimationClipAsset* clip = FindTransformClip(*animator);
+            animator->CurrentTime = clip != nullptr && clip->Duration > 0.0F
+                ? std::min(time, clip->Duration)
+                : time;
+            found = true;
+        }
+        return found;
+    }
+
+    [[nodiscard]] bool setAnimationSpeed(const float speed)
+    {
+        bool found = false;
+        if (auto* animator = reg ? reg->try_get<AnimatorComponent>(e) : nullptr)
+        {
+            animator->Speed = speed;
+            found = true;
+        }
+        if (auto* animator = reg ? reg->try_get<TransformAnimatorComponent>(e) : nullptr)
+        {
+            animator->Speed = speed;
+            found = true;
+        }
+        return found;
+    }
+
+    [[nodiscard]] std::string getCurrentAnimation() const
+    {
+        const auto* skeletal = reg ? reg->try_get<AnimatorComponent>(e) : nullptr;
+        const auto* transform = reg ? reg->try_get<TransformAnimatorComponent>(e) : nullptr;
+        if (transform != nullptr && (transform->Playing || transform->Paused))
+        {
+            return transform->ClipName;
+        }
+        if (skeletal != nullptr)
+        {
+            return skeletal->ClipName;
+        }
+        return transform != nullptr ? transform->ClipName : std::string{};
+    }
+
+    [[nodiscard]] float getAnimationTime() const
+    {
+        const auto* skeletal = reg ? reg->try_get<AnimatorComponent>(e) : nullptr;
+        const auto* transform = reg ? reg->try_get<TransformAnimatorComponent>(e) : nullptr;
+        if (transform != nullptr && (transform->Playing || transform->Paused))
+        {
+            return transform->CurrentTime;
+        }
+        if (skeletal != nullptr)
+        {
+            return skeletal->CurrentTime;
+        }
+        return transform != nullptr ? transform->CurrentTime : 0.0F;
+    }
+
+    [[nodiscard]] bool isAnimationPlaying() const
+    {
+        const auto* skeletal = reg ? reg->try_get<AnimatorComponent>(e) : nullptr;
+        const auto* transformAnimator = reg ? reg->try_get<TransformAnimatorComponent>(e) : nullptr;
+        return (skeletal != nullptr && skeletal->Playing) ||
+            (transformAnimator != nullptr && transformAnimator->Playing);
+    }
+
     void destroy()
     {
         if (pendingDestroy)
@@ -198,6 +588,21 @@ public:
             fxs::kEntityMoveCharacter, &LuaEntity::moveCharacter,
             fxs::kEntityJumpCharacter, &LuaEntity::jumpCharacter,
             fxs::kEntityIsCharacterGrounded, &LuaEntity::isCharacterGrounded,
+            fxs::kEntityPlayAnimation, &LuaEntity::playAnimation,
+            fxs::kEntityCrossFadeAnimation, &LuaEntity::crossFadeAnimation,
+            fxs::kEntityPauseAnimation, &LuaEntity::pauseAnimation,
+            fxs::kEntityResumeAnimation, &LuaEntity::resumeAnimation,
+            fxs::kEntityStopAnimation, &LuaEntity::stopAnimation,
+            fxs::kEntityIsAnimationPlaying, &LuaEntity::isAnimationPlaying,
+            fxs::kEntitySeekAnimation, &LuaEntity::seekAnimation,
+            fxs::kEntitySetAnimationSpeed, &LuaEntity::setAnimationSpeed,
+            fxs::kEntityGetCurrentAnimation, &LuaEntity::getCurrentAnimation,
+            fxs::kEntityGetAnimationTime, &LuaEntity::getAnimationTime,
+            fxs::kEntityStartAnimator, &LuaEntity::startAnimator,
+            fxs::kEntitySetAnimatorBool, &LuaEntity::setAnimatorBool,
+            fxs::kEntitySetAnimatorFloat, &LuaEntity::setAnimatorFloat,
+            fxs::kEntitySetAnimatorInt, &LuaEntity::setAnimatorInt,
+            fxs::kEntityTriggerAnimator, &LuaEntity::triggerAnimator,
             fxs::kEntityDestroy, &LuaEntity::destroy,
             fxs::kEntityGetTarget, &LuaEntity::getTarget);
 
@@ -386,6 +791,29 @@ public:
         }
     }
 
+    void CallAnimationEvent(int instance, const ScriptEntityHandle& handle,
+        const std::string& name, const std::string& payload)
+    {
+        if (instance < 0 || instance >= static_cast<int>(m_Instances.size()) ||
+            !m_Instances[static_cast<std::size_t>(instance)])
+        {
+            return;
+        }
+        sol::environment& environment = *m_Instances[static_cast<std::size_t>(instance)];
+        sol::protected_function callback = environment[fxs::kOnAnimationEvent];
+        if (!callback.valid())
+        {
+            return;
+        }
+        const LuaEntity entity{handle.Registry, handle.Entity, handle.PendingDestroy};
+        const sol::protected_function_result result = callback(entity, name, payload);
+        if (!result.valid())
+        {
+            const sol::error error = result;
+            Fail(error.what());
+        }
+    }
+
     void DestroyInstance(int instance)
     {
         if (instance >= 0 && instance < static_cast<int>(m_Instances.size()))
@@ -447,6 +875,11 @@ void LuaVM::CallUpdate(int instance, const ScriptEntityHandle& entity, float del
 {
     m_Impl->Call(instance, fxs::kOnUpdate, entity, &deltaTime);
 }
+void LuaVM::CallAnimationEvent(int instance, const ScriptEntityHandle& entity,
+    const std::string& name, const std::string& payload)
+{
+    m_Impl->CallAnimationEvent(instance, entity, name, payload);
+}
 void LuaVM::CallDestroy(int instance, const ScriptEntityHandle& entity)
 {
     m_Impl->Call(instance, fxs::kOnDestroy, entity, nullptr);
@@ -477,6 +910,7 @@ bool LuaVM::Compile(const std::string&, const std::string&) { return false; }
 int LuaVM::Instantiate(const std::string&) { return -1; }
 void LuaVM::CallStart(int, const ScriptEntityHandle&) {}
 void LuaVM::CallUpdate(int, const ScriptEntityHandle&, float) {}
+void LuaVM::CallAnimationEvent(int, const ScriptEntityHandle&, const std::string&, const std::string&) {}
 void LuaVM::CallDestroy(int, const ScriptEntityHandle&) {}
 void LuaVM::DestroyInstance(int) {}
 void LuaVM::Reset() {}

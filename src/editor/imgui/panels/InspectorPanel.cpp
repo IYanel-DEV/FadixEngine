@@ -124,23 +124,26 @@ void DrawTransformKeys(
     const float time = anim != nullptr ? anim->CurrentTime : 0.0F;
 
     const auto keyed = [&](const AnimationChannel::Property property) {
-        return anim != nullptr && TransformKeyedAt(anim->Clip, property, time);
+        const AnimationClipAsset* clip = anim != nullptr ? FindTransformClip(*anim) : nullptr;
+        return clip != nullptr && TransformKeyedAt(*clip, property, time);
     };
     const auto ensureAnim = [&]() -> TransformAnimatorComponent& {
         if (anim == nullptr)
         {
             TransformAnimatorComponent created;
             const NameComponent* name = registry.try_get<NameComponent>(entity);
-            created.Clip.Name = name != nullptr ? name->Name : std::string{"Transform"};
+            static_cast<void>(EnsureTransformClip(
+                created, name != nullptr ? name->Name : std::string{"Transform"}));
             created.Playing = false; // authoring: don't auto-run while keying
             anim = &registry.emplace<TransformAnimatorComponent>(entity, std::move(created));
         }
         return *anim;
     };
     const auto keyProperty = [&](const AnimationChannel::Property property) {
+        scene.BeginEditTransaction();
         TransformAnimatorComponent& target = ensureAnim();
         KeyTransformProperty(target, registry.get<TransformComponent>(entity), property, target.CurrentTime);
-        scene.MarkChanged();
+        scene.EndEditTransaction("Insert Transform Animation Key");
         ui.ShowFdxAnimation = true;
         ui.FocusFdxAnimation = true;
     };
@@ -167,7 +170,8 @@ void DrawTransformKeys(
         keyProperty(AnimationChannel::Property::Rotation);
         keyProperty(AnimationChannel::Property::Scale);
     }
-    if (anim != nullptr && !anim->Clip.Channels.empty())
+    const AnimationClipAsset* activeClip = anim != nullptr ? FindTransformClip(*anim) : nullptr;
+    if (activeClip != nullptr && !activeClip->Channels.empty())
     {
         ImGui::SameLine();
         if (ImGui::SmallButton("Open FDX##keyopen"))
@@ -837,7 +841,7 @@ void InspectorPanel::Draw(SceneEditor& scene, EditorUiState& ui)
                           "Assign a rigged .glb to Mesh -> Imported Mesh."
                         : "Imported mesh has 0 animation clips - playback will not run.");
             }
-            DrawBoolToggle(scene, "Playing", animator->Playing, [] {});
+            ImGui::TextDisabled("Starts stopped. Call entity:playAnimation(...) from code.");
             DrawBoolToggle(scene, "Loop", animator->Loop, [] {});
             DrawFloat(scene, "Speed", "animator-speed");
             if (ImGui::Button("Open FDX Animation"))
@@ -854,11 +858,12 @@ void InspectorPanel::Draw(SceneEditor& scene, EditorUiState& ui)
     {
         if (ImGui::CollapsingHeader("Transform Animator", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            ImGui::TextDisabled("Clip: %s  |  %.3f s  |  %zu channels",
-                transformAnim->Clip.Name.c_str(),
-                static_cast<double>(transformAnim->Clip.Duration),
-                transformAnim->Clip.Channels.size());
-            DrawBoolToggle(scene, "Playing##ta", transformAnim->Playing, [] {});
+            const AnimationClipAsset* clip = FindTransformClip(*transformAnim);
+            ImGui::TextDisabled("Clip: %s  |  %zu clips  |  %.3f s  |  %zu channels",
+                clip != nullptr ? clip->Name.c_str() : "None", transformAnim->Clips.size(),
+                clip != nullptr ? static_cast<double>(clip->Duration) : 0.0,
+                clip != nullptr ? clip->Channels.size() : 0U);
+            ImGui::TextDisabled("Starts stopped. Call entity:playAnimation() from code.");
             DrawBoolToggle(scene, "Loop##ta", transformAnim->Loop, [] {});
             ImGui::TextDisabled("Speed %.2f  time %.3f", static_cast<double>(transformAnim->Speed),
                 static_cast<double>(transformAnim->CurrentTime));

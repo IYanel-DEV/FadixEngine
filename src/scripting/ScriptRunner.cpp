@@ -61,6 +61,56 @@ void ScriptRunner::Start(entt::registry& registry, const SourceResolver& resolve
     ApplyPendingDestroy(registry);
 }
 
+void ScriptRunner::DispatchAnimationEvents(entt::registry& registry)
+{
+    const auto dispatch = [&](const entt::entity entity, const auto& callback) {
+        if (const auto* animator = registry.try_get<AnimatorComponent>(entity))
+        {
+            for (const AnimationEvent& event : animator->PendingEvents)
+            {
+                callback(event);
+            }
+        }
+        if (const auto* animator = registry.try_get<TransformAnimatorComponent>(entity))
+        {
+            for (const AnimationEvent& event : animator->PendingEvents)
+            {
+                callback(event);
+            }
+        }
+    };
+    for (const Instance& instance : m_Instances)
+    {
+        if (!registry.valid(instance.Entity))
+        {
+            continue;
+        }
+        const ScriptEntityHandle handle{&registry, instance.Entity, &m_PendingDestroy};
+        dispatch(instance.Entity, [&](const AnimationEvent& event) {
+            m_Vm.CallAnimationEvent(instance.Id, handle, event.Name, event.Payload);
+        });
+    }
+    for (const NativeInstance& instance : m_NativeInstances)
+    {
+        if (!registry.valid(instance.Entity) || instance.Loaded.Instance == nullptr)
+        {
+            continue;
+        }
+        ScriptEntity handle{ScriptEntityHandle{&registry, instance.Entity, &m_PendingDestroy}};
+        dispatch(instance.Entity, [&](const AnimationEvent& event) {
+            instance.Loaded.Instance->OnAnimationEvent(handle, event.Name, event.Payload);
+        });
+    }
+    for (auto&& [entity, animator] : registry.view<AnimatorComponent>().each())
+    {
+        animator.PendingEvents.clear();
+    }
+    for (auto&& [entity, animator] : registry.view<TransformAnimatorComponent>().each())
+    {
+        animator.PendingEvents.clear();
+    }
+}
+
 void ScriptRunner::StartEntity(
     entt::registry& registry, const entt::entity entity, const SourceResolver& resolver)
 {
@@ -130,6 +180,7 @@ void ScriptRunner::Update(entt::registry& registry, const float deltaTime)
     }
     m_WorldApi.Registry = &registry;
     m_WorldApi.PendingDestroy = &m_PendingDestroy;
+    DispatchAnimationEvents(registry);
     // Index over a snapshot count with copies: an OnUpdate may Prefab.spawn, which
     // StartEntity's push_back can reallocate m_Instances. New instances already
     // got OnStart and are picked up next frame; skip them this frame.

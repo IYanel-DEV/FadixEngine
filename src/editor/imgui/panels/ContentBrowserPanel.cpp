@@ -63,6 +63,14 @@ namespace
     {
         return FADIX_ICON_FILE;
     }
+    if (entry.AssetType == "Animation")
+    {
+        return FADIX_ICON_FILM;
+    }
+    if (entry.AssetType == "AnimatorController")
+    {
+        return FADIX_ICON_SITEMAP;
+    }
     return FADIX_ICON_FILE;
 }
 

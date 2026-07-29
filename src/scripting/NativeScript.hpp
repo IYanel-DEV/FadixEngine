@@ -141,6 +141,8 @@ public:
     virtual ~NativeScript() = default;
     virtual void OnStart(ScriptEntity& /*entity*/) {}
     virtual void OnUpdate(ScriptEntity& /*entity*/, float /*deltaTime*/) {}
+    virtual void OnAnimationEvent(ScriptEntity& /*entity*/, const std::string& /*name*/,
+        const std::string& /*payload*/) {}
     virtual void OnDestroy(ScriptEntity& /*entity*/) {}
 };
 

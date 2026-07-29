@@ -16,14 +16,259 @@
 #include <cmath>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace fadix
 {
+template <typename Animator>
+inline void ClearAnimationBlend(Animator& animator)
+{
+    animator.ClearBlend();
+}
+
+[[nodiscard]] inline float AdvanceClipTime(float time, const AnimationClipAsset& clip,
+    const float dt, const float speed, const bool loop)
+{
+    time += dt * speed;
+    if (clip.Duration <= 0.0F)
+    {
+        return time;
+    }
+    if (!loop)
+    {
+        return std::clamp(time, 0.0F, clip.Duration);
+    }
+    time = std::fmod(time, clip.Duration);
+    return time < 0.0F ? time + clip.Duration : time;
+}
+
+inline void BlendTransformPoses(const TransformComponent& from, const TransformComponent& to,
+    const float requestedWeight, TransformComponent& result)
+{
+    const float weight = std::clamp(requestedWeight, 0.0F, 1.0F);
+    result.Position = glm::mix(from.Position, to.Position, weight);
+    result.Rotation = glm::normalize(glm::slerp(from.Rotation, to.Rotation, weight));
+    result.Scale = glm::mix(from.Scale, to.Scale, weight);
+}
+
+template <typename Animator>
+inline void QueueClipEvents(Animator& animator, const AnimationClipAsset& clip,
+    const float previousTime, const float deltaTime)
+{
+    // Destination notifies remain deterministic during a crossfade. Source-clip
+    // notify weighting belongs with the later layered animator/state-machine stage.
+    ForEachAnimationEventCrossed(clip, previousTime, deltaTime, animator.Loop,
+        animator.EmitStartEvents,
+        [&](const AnimationEvent& event) { animator.PendingEvents.push_back(event); });
+    animator.EmitStartEvents = false;
+}
+
+[[nodiscard]] inline const AnimatorState* FindAnimatorState(
+    const AnimatorController& controller, const std::string_view name)
+{
+    const auto found = std::find_if(controller.States.begin(), controller.States.end(),
+        [&](const AnimatorState& state) { return state.Name == name; });
+    return found == controller.States.end() ? nullptr : &*found;
+}
+
+template <typename Animator>
+[[nodiscard]] inline bool StartAnimatorController(Animator& animator)
+{
+    const AnimatorState* entry = FindAnimatorState(animator.Controller,
+        animator.Controller.EntryState.empty() && !animator.Controller.States.empty()
+            ? animator.Controller.States.front().Name
+            : animator.Controller.EntryState);
+    if (entry == nullptr || entry->ClipName.empty())
+    {
+        return false;
+    }
+    animator.ActiveState = entry->Name;
+    animator.ClipName = entry->ClipName;
+    animator.CurrentTime = 0.0F;
+    animator.Playing = true;
+    animator.Paused = false;
+    animator.ClearBlend();
+    animator.ClearEventState();
+    animator.EmitStartEvents = true;
+    return true;
+}
+
+template <typename Animator>
+[[nodiscard]] inline bool SetAnimatorBool(Animator& animator, const std::string& name,
+    const bool value)
+{
+    AnimatorParameter* parameter = FindAnimatorParameter(animator.Controller, name);
+    if (parameter == nullptr || (parameter->Type != AnimatorParameterType::Bool &&
+            parameter->Type != AnimatorParameterType::Trigger))
+    {
+        return false;
+    }
+    parameter->BoolValue = value;
+    return true;
+}
+
+template <typename Animator>
+[[nodiscard]] inline bool SetAnimatorFloat(Animator& animator, const std::string& name,
+    const float value)
+{
+    AnimatorParameter* parameter = FindAnimatorParameter(animator.Controller, name);
+    if (parameter == nullptr || parameter->Type != AnimatorParameterType::Float)
+    {
+        return false;
+    }
+    parameter->FloatValue = value;
+    return true;
+}
+
+template <typename Animator>
+[[nodiscard]] inline bool SetAnimatorInt(Animator& animator, const std::string& name,
+    const int value)
+{
+    AnimatorParameter* parameter = FindAnimatorParameter(animator.Controller, name);
+    if (parameter == nullptr || parameter->Type != AnimatorParameterType::Int)
+    {
+        return false;
+    }
+    parameter->IntValue = value;
+    return true;
+}
+
+template <typename Animator>
+[[nodiscard]] inline const AnimatorTransition* FindAnimatorTransition(
+    const Animator& animator, const float clipDuration, const float lookAheadSeconds = 0.0F)
+{
+    if (animator.ActiveState.empty())
+    {
+        return nullptr;
+    }
+    for (const AnimatorTransition& transition : animator.Controller.Transitions)
+    {
+        if (transition.From != animator.ActiveState || transition.To.empty())
+        {
+            continue;
+        }
+        if (transition.HasExitTime)
+        {
+            const float normalized = clipDuration > 1.0e-5F
+                ? (animator.CurrentTime + std::max(lookAheadSeconds, 0.0F)) / clipDuration
+                : 1.0F;
+            if (normalized < transition.ExitTime)
+            {
+                continue;
+            }
+        }
+        if (!std::all_of(transition.Conditions.begin(), transition.Conditions.end(),
+                [&](const AnimatorCondition& condition) {
+                    return AnimatorConditionPasses(animator.Controller, condition);
+                }))
+        {
+            continue;
+        }
+        return &transition;
+    }
+    return nullptr;
+}
+
+template <typename Animator>
+inline void BeginAnimatorTransition(Animator& animator, const AnimatorTransition& transition,
+    const AnimatorState& destination)
+{
+    const std::string fromClip = animator.ClipName;
+    const float fromTime = animator.CurrentTime;
+    animator.ActiveState = destination.Name;
+    animator.ClipName = destination.ClipName;
+    animator.CurrentTime = 0.0F;
+    animator.ClearBlend();
+    animator.ClearEventState();
+    animator.EmitStartEvents = true;
+    if (transition.Duration > 0.0F && !fromClip.empty())
+    {
+        animator.BlendFromClipName = fromClip;
+        animator.BlendFromTime = fromTime;
+        animator.BlendDuration = transition.Duration;
+    }
+    for (const AnimatorCondition& condition : transition.Conditions)
+    {
+        AnimatorParameter* parameter = FindAnimatorParameter(animator.Controller, condition.Parameter);
+        if (parameter != nullptr && parameter->Type == AnimatorParameterType::Trigger)
+        {
+            parameter->BoolValue = false;
+        }
+    }
+}
+
 // --- Transform animation (any entity, no skinned mesh required) --------------
 // Reuses AnimationChannel: JointIndex is ignored, Target picks which part of the
 // entity's TransformComponent the channel drives. Kept header-only so the editor
 // viewport, fadix_player and the smoke test all share one implementation.
+
+[[nodiscard]] inline AnimationClipAsset* FindTransformClip(
+    TransformAnimatorComponent& animator, const std::string_view requestedName = {})
+{
+    if (animator.Clips.empty())
+    {
+        return nullptr;
+    }
+    const std::string_view name = requestedName.empty()
+        ? std::string_view{animator.ClipName}
+        : requestedName;
+    if (!name.empty())
+    {
+        for (AnimationClipAsset& clip : animator.Clips)
+        {
+            if (clip.Name == name)
+            {
+                animator.ClipName = clip.Name;
+                return &clip;
+            }
+        }
+        if (!requestedName.empty())
+        {
+            return nullptr;
+        }
+    }
+    animator.ClipName = animator.Clips.front().Name;
+    return &animator.Clips.front();
+}
+
+[[nodiscard]] inline const AnimationClipAsset* FindTransformClip(
+    const TransformAnimatorComponent& animator, const std::string_view requestedName = {})
+{
+    if (animator.Clips.empty())
+    {
+        return nullptr;
+    }
+    const std::string_view name = requestedName.empty()
+        ? std::string_view{animator.ClipName}
+        : requestedName;
+    for (const AnimationClipAsset& clip : animator.Clips)
+    {
+        if (!name.empty() && clip.Name == name)
+        {
+            return &clip;
+        }
+    }
+    return requestedName.empty() ? &animator.Clips.front() : nullptr;
+}
+
+[[nodiscard]] inline AnimationClipAsset& EnsureTransformClip(
+    TransformAnimatorComponent& animator, std::string name = "Transform")
+{
+    if (AnimationClipAsset* clip = FindTransformClip(animator))
+    {
+        return *clip;
+    }
+    if (name.empty())
+    {
+        name = "Transform";
+    }
+    AnimationClipAsset clip;
+    clip.Name = std::move(name);
+    animator.Clips.push_back(std::move(clip));
+    animator.ClipName = animator.Clips.back().Name;
+    return animator.Clips.back();
+}
 
 // Locate the channel that drives `property`, or create an empty one.
 [[nodiscard]] inline AnimationChannel& FindOrCreateTransformChannel(
@@ -63,7 +308,8 @@ namespace fadix
 inline void KeyTransformProperty(TransformAnimatorComponent& anim, const TransformComponent& transform,
     const AnimationChannel::Property property, const float time)
 {
-    AnimationChannel& channel = FindOrCreateTransformChannel(anim.Clip, property);
+    AnimationClipAsset& clip = EnsureTransformClip(anim);
+    AnimationChannel& channel = FindOrCreateTransformChannel(clip, property);
     const glm::vec4 value = TransformPropertyValue(transform, property);
     for (AnimationKeyframe& key : channel.Keyframes)
     {
@@ -76,7 +322,7 @@ inline void KeyTransformProperty(TransformAnimatorComponent& anim, const Transfo
     channel.Keyframes.push_back({time, value});
     std::sort(channel.Keyframes.begin(), channel.Keyframes.end(),
         [](const AnimationKeyframe& a, const AnimationKeyframe& b) { return a.Time < b.Time; });
-    anim.Clip.Duration = std::max(anim.Clip.Duration, time);
+    clip.Duration = std::max(clip.Duration, time);
 }
 
 [[nodiscard]] inline bool TransformKeyedAt(const AnimationClipAsset& clip,
@@ -134,27 +380,62 @@ inline void UpdateTransformAnimations(entt::registry& registry, const float dt)
         // Only a playing animator drives the transform; a paused one leaves it
         // editable so the Inspector can re-pose and key (the panel one-shot-applies
         // for scrub preview). Mirrors how skeletal advance is gated on Playing.
-        if (anim.Clip.Channels.empty() || !anim.Playing)
+        AnimationClipAsset* clip = FindTransformClip(anim);
+        if (!anim.Playing)
         {
             continue;
         }
-        anim.CurrentTime += dt * anim.Speed;
-        if (anim.Clip.Duration > 0.0F)
+        if (clip != nullptr)
         {
-            if (anim.Loop)
+            if (const AnimatorTransition* transition = FindAnimatorTransition(
+                    anim, clip->Duration, std::abs(dt * anim.Speed)))
             {
-                anim.CurrentTime = std::fmod(anim.CurrentTime, anim.Clip.Duration);
-                if (anim.CurrentTime < 0.0F)
+                const AnimatorState* destination =
+                    FindAnimatorState(anim.Controller, transition->To);
+                const AnimationClipAsset* target = destination == nullptr
+                    ? nullptr
+                    : FindTransformClip(
+                          static_cast<const TransformAnimatorComponent&>(anim),
+                          destination->ClipName);
+                if (destination != nullptr && target != nullptr)
                 {
-                    anim.CurrentTime += anim.Clip.Duration;
+                    BeginAnimatorTransition(anim, *transition, *destination);
+                    clip = FindTransformClip(anim);
                 }
             }
-            else
+        }
+        if (clip == nullptr)
+        {
+            continue;
+        }
+        const float previousTime = anim.CurrentTime;
+        QueueClipEvents(anim, *clip, previousTime, dt * anim.Speed);
+        anim.CurrentTime = AdvanceClipTime(anim.CurrentTime, *clip, dt, anim.Speed, anim.Loop);
+        const AnimationClipAsset* fromClip = anim.BlendFromClipName.empty()
+            ? nullptr
+            : FindTransformClip(
+                  static_cast<const TransformAnimatorComponent&>(anim), anim.BlendFromClipName);
+        if (fromClip != nullptr && anim.BlendDuration > 0.0F)
+        {
+            anim.BlendFromTime =
+                AdvanceClipTime(anim.BlendFromTime, *fromClip, dt, anim.Speed, anim.Loop);
+            TransformComponent fromPose = transform;
+            TransformComponent toPose = transform;
+            ApplyTransformClip(*fromClip, anim.BlendFromTime, fromPose);
+            ApplyTransformClip(*clip, anim.CurrentTime, toPose);
+            anim.BlendElapsed += std::abs(dt);
+            const float weight = anim.BlendElapsed / anim.BlendDuration;
+            BlendTransformPoses(fromPose, toPose, weight, transform);
+            if (weight >= 1.0F)
             {
-                anim.CurrentTime = std::clamp(anim.CurrentTime, 0.0F, anim.Clip.Duration);
+                ClearAnimationBlend(anim);
             }
         }
-        ApplyTransformClip(anim.Clip, anim.CurrentTime, transform);
+        else
+        {
+            ClearAnimationBlend(anim);
+            ApplyTransformClip(*clip, anim.CurrentTime, transform);
+        }
     }
 }
 
@@ -243,19 +524,66 @@ inline void UpdateWorldAnimations(
         {
             continue;
         }
+        if (!animator->Playing)
+        {
+            continue;
+        }
         const AnimationClipAsset* clip = FindAnimationClip(*gltf, animator->ClipName);
         if (clip == nullptr)
         {
             continue;
         }
+        if (const AnimatorTransition* transition = FindAnimatorTransition(
+                *animator, clip->Duration, std::abs(dt * animator->Speed)))
+        {
+            const AnimatorState* destination =
+                FindAnimatorState(animator->Controller, transition->To);
+            const AnimationClipAsset* target = destination == nullptr
+                ? nullptr
+                : FindAnimationClip(*gltf, destination->ClipName);
+            if (destination != nullptr && target != nullptr)
+            {
+                BeginAnimatorTransition(*animator, *transition, *destination);
+                clip = target;
+            }
+        }
 
-        SkeletonPose pose;
-        pose.Skeleton = gltf->Skeleton;
-        AnimationPlayer player;
-        player.SetClip(clip);
-        player.SetTime(animator->CurrentTime);
-        player.Update(animator->Playing ? dt : 0.0F, animator->Speed, animator->Loop, pose);
-        animator->CurrentTime = player.GetTime();
+        const float previousTime = animator->CurrentTime;
+        QueueClipEvents(*animator, *clip, previousTime, dt * animator->Speed);
+
+        SkeletonPose targetPose;
+        targetPose.Skeleton = gltf->Skeleton;
+        AnimationPlayer targetPlayer;
+        targetPlayer.SetClip(clip);
+        targetPlayer.SetTime(animator->CurrentTime);
+        targetPlayer.Update(dt, animator->Speed, animator->Loop, targetPose);
+        animator->CurrentTime = targetPlayer.GetTime();
+
+        SkeletonPose pose = targetPose;
+        const AnimationClipAsset* fromClip = animator->BlendFromClipName.empty()
+            ? nullptr
+            : FindAnimationClip(*gltf, animator->BlendFromClipName);
+        if (fromClip != nullptr && animator->BlendDuration > 0.0F)
+        {
+            SkeletonPose fromPose;
+            fromPose.Skeleton = gltf->Skeleton;
+            AnimationPlayer fromPlayer;
+            fromPlayer.SetClip(fromClip);
+            fromPlayer.SetTime(animator->BlendFromTime);
+            fromPlayer.Update(dt, animator->Speed, animator->Loop, fromPose);
+            animator->BlendFromTime = fromPlayer.GetTime();
+            animator->BlendElapsed += std::abs(dt);
+            const float weight = animator->BlendElapsed / animator->BlendDuration;
+            BlendSkeletonPoses(fromPose, targetPose, weight, pose);
+            if (weight >= 1.0F)
+            {
+                ClearAnimationBlend(*animator);
+            }
+        }
+        else
+        {
+            ClearAnimationBlend(*animator);
+        }
 
         skeleton->HasSkeleton = true;
         skeleton->JointCount = static_cast<int>(pose.Skeleton.Joints.size());

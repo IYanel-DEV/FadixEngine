@@ -11,6 +11,52 @@
 
 namespace fadix
 {
+// Blend two sampled poses in local TRS space. Both poses are expected to use the
+// same skeleton; a mismatch safely selects the destination pose.
+inline void BlendSkeletonPoses(const SkeletonPose& from, const SkeletonPose& to,
+    const float requestedWeight, SkeletonPose& result)
+{
+    result = to;
+    if (from.Skeleton.Joints.size() != to.Skeleton.Joints.size())
+    {
+        return;
+    }
+    const float weight = std::clamp(requestedWeight, 0.0F, 1.0F);
+    for (std::size_t i = 0; i < result.Skeleton.Joints.size(); ++i)
+    {
+        const glm::mat4& fromMatrix = from.Skeleton.Joints[i].LocalTransform;
+        const glm::mat4& toMatrix = to.Skeleton.Joints[i].LocalTransform;
+        const glm::vec3 fromScale{glm::length(glm::vec3{fromMatrix[0]}),
+            glm::length(glm::vec3{fromMatrix[1]}), glm::length(glm::vec3{fromMatrix[2]})};
+        const glm::vec3 toScale{glm::length(glm::vec3{toMatrix[0]}),
+            glm::length(glm::vec3{toMatrix[1]}), glm::length(glm::vec3{toMatrix[2]})};
+        if (fromScale.x <= 1.0e-6F || fromScale.y <= 1.0e-6F || fromScale.z <= 1.0e-6F ||
+            toScale.x <= 1.0e-6F || toScale.y <= 1.0e-6F || toScale.z <= 1.0e-6F)
+        {
+            continue;
+        }
+        glm::mat3 fromRotationMatrix;
+        fromRotationMatrix[0] = glm::vec3{fromMatrix[0]} / fromScale.x;
+        fromRotationMatrix[1] = glm::vec3{fromMatrix[1]} / fromScale.y;
+        fromRotationMatrix[2] = glm::vec3{fromMatrix[2]} / fromScale.z;
+        glm::mat3 toRotationMatrix;
+        toRotationMatrix[0] = glm::vec3{toMatrix[0]} / toScale.x;
+        toRotationMatrix[1] = glm::vec3{toMatrix[1]} / toScale.y;
+        toRotationMatrix[2] = glm::vec3{toMatrix[2]} / toScale.z;
+        const glm::quat fromRotation = glm::normalize(glm::quat_cast(fromRotationMatrix));
+        const glm::quat toRotation = glm::normalize(glm::quat_cast(toRotationMatrix));
+        const glm::vec3 fromTranslation{fromMatrix[3]};
+        const glm::vec3 toTranslation{toMatrix[3]};
+        const glm::quat rotation =
+            glm::normalize(glm::slerp(fromRotation, toRotation, weight));
+        result.Skeleton.Joints[i].LocalTransform =
+            glm::translate(glm::mat4{1.0F}, glm::mix(fromTranslation, toTranslation, weight)) *
+            glm::mat4_cast(rotation) *
+            glm::scale(glm::mat4{1.0F}, glm::mix(fromScale, toScale, weight));
+    }
+    result.ComputePose();
+}
+
 class AnimationPlayer
 {
 public:

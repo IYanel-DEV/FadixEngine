@@ -16,6 +16,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace fadix::editor
 {
@@ -53,6 +54,13 @@ const char* HierarchyGlyph(const std::string_view icon)
     return FADIX_ICON_CUBE;
 }
 
+[[nodiscard]] bool IsLightIcon(const char* icon)
+{
+    return icon != nullptr &&
+        (std::strcmp(icon, "light") == 0 || std::strcmp(icon, "point-light") == 0 ||
+            std::strcmp(icon, "spot-light") == 0);
+}
+
 std::string ComponentBadges(SceneEditor& scene, const Uuid& id)
 {
     const auto entity = scene.World().Find(id);
@@ -71,6 +79,154 @@ std::string ComponentBadges(SceneEditor& scene, const Uuid& id)
 }
 }
 
+void HierarchyPanel::SyncMultiFromPrimary(SceneEditor& scene)
+{
+    if (const auto primary = scene.Selection())
+    {
+        if (!IsMultiSelected(*primary))
+        {
+            m_Multi = {*primary};
+            m_RangeAnchor = *primary;
+        }
+    }
+    else
+    {
+        m_Multi.clear();
+        m_RangeAnchor.reset();
+    }
+}
+
+bool HierarchyPanel::IsMultiSelected(const Uuid& id) const
+{
+    return std::find(m_Multi.begin(), m_Multi.end(), id) != m_Multi.end();
+}
+
+void HierarchyPanel::SelectOnly(SceneEditor& scene, const Uuid& id, const bool recordUndo)
+{
+    m_Multi = {id};
+    m_RangeAnchor = id;
+    scene.SetSelection(id, recordUndo);
+}
+
+void HierarchyPanel::ToggleMulti(SceneEditor& scene, const Uuid& id)
+{
+    const auto it = std::find(m_Multi.begin(), m_Multi.end(), id);
+    if (it != m_Multi.end())
+    {
+        m_Multi.erase(it);
+        if (m_Multi.empty())
+        {
+            scene.SetSelection(std::nullopt, false);
+            m_RangeAnchor.reset();
+            return;
+        }
+        scene.SetSelection(m_Multi.back(), false);
+        m_RangeAnchor = m_Multi.back();
+        return;
+    }
+    m_Multi.push_back(id);
+    m_RangeAnchor = id;
+    scene.SetSelection(id, false);
+}
+
+void HierarchyPanel::SelectRange(
+    SceneEditor& scene, const std::vector<Uuid>& visibleOrder, const Uuid& id)
+{
+    if (!m_RangeAnchor || visibleOrder.empty())
+    {
+        SelectOnly(scene, id, true);
+        return;
+    }
+    std::size_t a = static_cast<std::size_t>(-1);
+    std::size_t b = static_cast<std::size_t>(-1);
+    for (std::size_t i = 0; i < visibleOrder.size(); ++i)
+    {
+        if (visibleOrder[i] == *m_RangeAnchor) a = i;
+        if (visibleOrder[i] == id) b = i;
+    }
+    if (a == static_cast<std::size_t>(-1) || b == static_cast<std::size_t>(-1))
+    {
+        SelectOnly(scene, id, true);
+        return;
+    }
+    if (a > b)
+    {
+        std::swap(a, b);
+    }
+    m_Multi.clear();
+    for (std::size_t i = a; i <= b; ++i)
+    {
+        m_Multi.push_back(visibleOrder[i]);
+    }
+    scene.SetSelection(id, false);
+}
+
+bool HierarchyPanel::DeleteMulti(SceneEditor& scene, EditorUiState& ui)
+{
+    SyncMultiFromPrimary(scene);
+    if (m_Multi.empty())
+    {
+        return false;
+    }
+    int deleted = 0;
+    // Copy: commands mutate the world and selection as we go.
+    const std::vector<Uuid> targets = m_Multi;
+    for (const Uuid& id : targets)
+    {
+        if (scene.IsSceneRoot(id))
+        {
+            continue;
+        }
+        scene.SetSelection(id, false);
+        if (scene.DeleteSelection())
+        {
+            ++deleted;
+        }
+    }
+    m_Multi.clear();
+    m_RangeAnchor.reset();
+    scene.SetSelection(std::nullopt, false);
+    if (deleted > 0)
+    {
+        ui.StatusText = "Deleted " + std::to_string(deleted) + " entit" + (deleted == 1 ? "y" : "ies");
+        return true;
+    }
+    ui.StatusText = "Nothing deletable (scene root protected)";
+    return false;
+}
+
+bool HierarchyPanel::DuplicateMulti(SceneEditor& scene, EditorUiState& ui)
+{
+    SyncMultiFromPrimary(scene);
+    if (m_Multi.empty())
+    {
+        return false;
+    }
+    std::vector<Uuid> created;
+    created.reserve(m_Multi.size());
+    const std::vector<Uuid> targets = m_Multi;
+    for (const Uuid& id : targets)
+    {
+        scene.SetSelection(id, false);
+        if (scene.DuplicateSelection())
+        {
+            if (const auto sel = scene.Selection())
+            {
+                created.push_back(*sel);
+            }
+        }
+    }
+    if (created.empty())
+    {
+        return false;
+    }
+    m_Multi = created;
+    m_RangeAnchor = created.back();
+    scene.SetSelection(created.back(), false);
+    ui.StatusText = "Duplicated " + std::to_string(created.size());
+    return true;
+}
+
 void HierarchyPanel::DrawToolbar(SceneEditor& scene, EditorUiState& ui)
 {
     if (ImGui::Button(FADIX_ICON_PLUS " Create"))
@@ -85,7 +241,7 @@ void HierarchyPanel::DrawToolbar(SceneEditor& scene, EditorUiState& ui)
             const Uuid created = command->EntityId();
             setup(*command);
             scene.History().Push(std::move(command));
-            scene.SetSelection(created, true);
+            SelectOnly(scene, created, true);
             ui.StatusText = std::string{"Created "} + name;
             ImGui::CloseCurrentPopup();
         };
@@ -93,7 +249,7 @@ void HierarchyPanel::DrawToolbar(SceneEditor& scene, EditorUiState& ui)
         {
             if (const auto id = scene.CreateEntity("Entity"))
             {
-                scene.SetSelection(id, true);
+                SelectOnly(scene, *id, true);
                 ui.StatusText = "Created entity";
             }
         }
@@ -188,14 +344,12 @@ void HierarchyPanel::DrawToolbar(SceneEditor& scene, EditorUiState& ui)
         ImGui::EndPopup();
     }
     ImGui::SameLine();
-    if (scene.Selection())
+    SyncMultiFromPrimary(scene);
+    if (!m_Multi.empty())
     {
         if (ImGui::Button("Duplicate"))
         {
-            if (scene.DuplicateSelection())
-            {
-                ui.StatusText = "Duplicated entity";
-            }
+            DuplicateMulti(scene, ui);
         }
     }
     else
@@ -203,21 +357,28 @@ void HierarchyPanel::DrawToolbar(SceneEditor& scene, EditorUiState& ui)
         DisabledButton("Duplicate", "Select an entity first");
     }
     ImGui::SameLine();
-    if (scene.Selection() && !scene.IsSceneRoot(*scene.Selection()))
+    const bool canDelete = std::any_of(m_Multi.begin(), m_Multi.end(), [&](const Uuid& id) {
+        return !scene.IsSceneRoot(id);
+    });
+    if (canDelete)
     {
         if (ImGui::Button("Delete"))
         {
-            if (scene.DeleteSelection())
-            {
-                ui.StatusText = "Deleted entity";
-            }
+            DeleteMulti(scene, ui);
         }
     }
     else
     {
         DisabledButton(
             "Delete",
-            scene.Selection() ? "Cannot delete the scene root" : "Select an entity first");
+            m_Multi.empty() ? "Select an entity first" : "Cannot delete the scene root");
+    }
+    ImGui::SameLine();
+    ImGui::Checkbox("Hide lights", &m_HideLights);
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Hide directional / point / spot lights from this list.\n"
+                          "Create > Light still adds them; they keep affecting the scene.");
     }
 }
 
@@ -241,29 +402,46 @@ void HierarchyPanel::DrawContextMenu(SceneEditor& scene, const Uuid& id, EditorU
     }
     if (ImGui::MenuItem("Duplicate"))
     {
-        scene.SetSelection(id, false);
-        if (scene.DuplicateSelection())
+        if (!IsMultiSelected(id))
         {
-            ui.StatusText = "Duplicated entity";
+            SelectOnly(scene, id, false);
         }
+        DuplicateMulti(scene, ui);
     }
     if (ImGui::MenuItem("Create Child"))
     {
         if (const auto child = scene.CreateEntity("Entity"))
         {
             scene.Reparent(*child, id);
-            scene.SetSelection(child, true);
+            SelectOnly(scene, *child, true);
             ui.StatusText = "Created child entity";
         }
     }
-    const bool canDelete = !scene.IsSceneRoot(id);
-    if (canDelete && ImGui::MenuItem("Delete"))
+    if (ImGui::MenuItem("Select Children"))
     {
-        scene.SetSelection(id, false);
-        if (scene.DeleteSelection())
+        m_Multi.clear();
+        for (const auto& node : scene.BuildHierarchy())
         {
-            ui.StatusText = "Deleted entity";
+            if (node.Parent == id)
+            {
+                m_Multi.push_back(node.Id);
+            }
         }
+        if (!m_Multi.empty())
+        {
+            m_RangeAnchor = m_Multi.front();
+            scene.SetSelection(m_Multi.front(), false);
+            ui.StatusText = "Selected " + std::to_string(m_Multi.size()) + " children";
+        }
+    }
+    const bool canDelete = !scene.IsSceneRoot(id);
+    if (canDelete && ImGui::MenuItem(m_Multi.size() > 1 ? "Delete Selected" : "Delete"))
+    {
+        if (!IsMultiSelected(id))
+        {
+            SelectOnly(scene, id, false);
+        }
+        DeleteMulti(scene, ui);
     }
     else if (!canDelete)
     {
@@ -281,16 +459,53 @@ void HierarchyPanel::DrawContextMenu(SceneEditor& scene, const Uuid& id, EditorU
 void HierarchyPanel::DrawTree(SceneEditor& scene, EditorUiState& ui)
 {
     scene.EnsureOrphansAdopted();
+    SyncMultiFromPrimary(scene);
     if (const auto selection = scene.Selection())
     {
         if (!scene.World().Find(*selection))
         {
             scene.SetSelection(std::nullopt, false);
+            m_Multi.clear();
+            m_RangeAnchor.reset();
         }
     }
 
     const auto nodes = scene.BuildHierarchy();
+    std::vector<SceneEditor::HierarchyNode> visible;
+    visible.reserve(nodes.size());
+    int hiddenLights = 0;
     for (const auto& node : nodes)
+    {
+        if (m_HideLights && !node.IsRoot && IsLightIcon(node.Icon))
+        {
+            ++hiddenLights;
+            continue;
+        }
+        visible.push_back(node);
+    }
+
+    std::vector<Uuid> visibleOrder;
+    visibleOrder.reserve(visible.size());
+    for (const auto& node : visible)
+    {
+        visibleOrder.push_back(node.Id);
+    }
+
+    {
+        std::string status = std::to_string(visible.size()) + " shown";
+        if (hiddenLights > 0)
+        {
+            status += " · " + std::to_string(hiddenLights) + " lights hidden";
+        }
+        if (m_Multi.size() > 1)
+        {
+            status += " · " + std::to_string(m_Multi.size()) + " selected";
+        }
+        ImGui::TextDisabled("%s", status.c_str());
+        ImGui::TextDisabled("Ctrl+click multi · Shift+click range · Del delete · F2 rename");
+    }
+
+    for (const auto& node : visible)
     {
         ImGui::PushID(node.Id.ToString().c_str());
         const int indentLevels = node.IsRoot ? 0 : std::max(node.Depth, 1);
@@ -300,7 +515,7 @@ void HierarchyPanel::DrawTree(SceneEditor& scene, EditorUiState& ui)
         label += node.Name;
         label += ComponentBadges(scene, node.Id);
 
-        const bool selected = scene.Selection() && *scene.Selection() == node.Id;
+        const bool selected = IsMultiSelected(node.Id);
         if (m_RenameTarget && *m_RenameTarget == node.Id)
         {
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + static_cast<float>(indentLevels) * 16.0F);
@@ -317,11 +532,6 @@ void HierarchyPanel::DrawTree(SceneEditor& scene, EditorUiState& ui)
                 m_RenameTarget.reset();
                 ui.StatusText = "Renamed entity";
             }
-            if (!ImGui::IsItemActive() && !ImGui::IsItemFocused() &&
-                ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-            {
-                // click away cancels — keep editing until enter or explicit cancel
-            }
             if (ImGui::IsKeyPressed(ImGuiKey_Escape))
             {
                 m_RenameTarget.reset();
@@ -332,7 +542,19 @@ void HierarchyPanel::DrawTree(SceneEditor& scene, EditorUiState& ui)
             const ImGuiSelectableFlags flags = ImGuiSelectableFlags_AllowDoubleClick;
             if (ImGui::Selectable(label.c_str(), selected, flags))
             {
-                scene.SetSelection(node.Id, true);
+                const ImGuiIO& io = ImGui::GetIO();
+                if (io.KeyShift)
+                {
+                    SelectRange(scene, visibleOrder, node.Id);
+                }
+                else if (io.KeyCtrl)
+                {
+                    ToggleMulti(scene, node.Id);
+                }
+                else
+                {
+                    SelectOnly(scene, node.Id, true);
+                }
             }
             if (node.IsRoot && ImGui::IsItemHovered())
             {
@@ -340,7 +562,7 @@ void HierarchyPanel::DrawTree(SceneEditor& scene, EditorUiState& ui)
             }
             if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
             {
-                scene.SetSelection(node.Id, true);
+                SelectOnly(scene, node.Id, true);
                 ui.RequestFocusSelection = true;
             }
             if (ImGui::IsItemHovered() && ImGui::IsKeyPressed(ImGuiKey_F2))
@@ -392,9 +614,15 @@ void HierarchyPanel::DrawTree(SceneEditor& scene, EditorUiState& ui)
         ImGui::PopID();
     }
 
-    if (nodes.empty())
+    if (!m_RenameTarget && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+        ImGui::IsKeyPressed(ImGuiKey_Delete) && !m_Multi.empty())
     {
-        ImGui::TextDisabled("No entities");
+        DeleteMulti(scene, ui);
+    }
+
+    if (visible.empty())
+    {
+        ImGui::TextDisabled(m_HideLights ? "No entities (lights hidden)" : "No entities");
     }
 }
 
@@ -417,7 +645,7 @@ void HierarchyPanel::Draw(SceneEditor& scene, EditorUiState& ui)
     }
     if (ImGui::InputTextWithHint("##filter", "Search...", m_FilterBuf, sizeof(m_FilterBuf)))
     {
-        scene.SetFilter(Lower(m_FilterBuf));
+        scene.SetFilter(m_FilterBuf);
     }
 
     DrawToolbar(scene, ui);

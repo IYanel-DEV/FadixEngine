@@ -1,9 +1,11 @@
 #include "editor/scene/EntityTextIO.hpp"
 
+#include "engine/animation/AnimatorControllerIO.hpp"
 #include "engine/scene/IWorld.hpp"
 #include "runtime/Components.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <iomanip>
 #include <sstream>
 #include <unordered_map>
@@ -26,6 +28,18 @@ template <typename Component>
 bool Has(const entt::registry& registry, const entt::entity entity)
 {
     return registry.all_of<Component>(entity);
+}
+
+void WriteAnimatorController(std::ostream& out, const char* marker,
+    const AnimatorController& controller)
+{
+    out << marker << ' ';
+    WriteAnimatorControllerData(out, controller);
+}
+
+bool ReadAnimatorController(std::istream& row, AnimatorController& controller)
+{
+    return ReadAnimatorControllerData(row, controller);
 }
 }
 
@@ -150,13 +164,23 @@ void CopyEntityComponents(
     {
         AnimatorComponent copy = *value;
         copy.ClipIndex = -1;
+        copy.Playing = false;
+        copy.Paused = false;
         copy.CurrentTime = 0.0F;
+        copy.ClearBlend();
+        copy.ClearEventState();
+        copy.ClearControllerRuntime();
         to.emplace<AnimatorComponent>(destinationEntity, std::move(copy));
     }
     if (const auto* value = from.try_get<TransformAnimatorComponent>(sourceEntity))
     {
         TransformAnimatorComponent copy = *value;
+        copy.Playing = false;
+        copy.Paused = false;
         copy.CurrentTime = 0.0F;
+        copy.ClearBlend();
+        copy.ClearEventState();
+        copy.ClearControllerRuntime();
         to.emplace<TransformAnimatorComponent>(destinationEntity, std::move(copy));
     }
 }
@@ -364,26 +388,44 @@ void WriteEntityLine(
     if (const AnimatorComponent* animator = registry.try_get<AnimatorComponent>(entity))
     {
         out << "AN " << std::quoted(animator->ClipName) << ' ' << animator->Speed << ' '
-            << animator->Loop << ' ' << animator->Playing << ' ';
+            << animator->Loop << ' ' << false << ' ';
+        WriteAnimatorController(out, "SC", animator->Controller);
     }
     if (const TransformAnimatorComponent* anim =
             registry.try_get<TransformAnimatorComponent>(entity))
     {
-        // TA <name> speed loop playing <channelCount> [<propChar> <keyCount> {time x y z w}...]
-        out << "TA " << std::quoted(anim->Clip.Name) << ' ' << anim->Speed << ' ' << anim->Loop
-            << ' ' << anim->Playing << ' ' << anim->Clip.Channels.size() << ' ';
-        for (const AnimationChannel& channel : anim->Clip.Channels)
+        // T2 <activeName> speed loop playing <clipCount>
+        //    [<clipName> <channelCount> <eventCount> [channels...] [time name payload...]]
+        out << "T2 " << std::quoted(anim->ClipName) << ' ' << anim->Speed << ' ' << anim->Loop
+            << ' ' << false << ' ' << anim->Clips.size() << ' ';
+        for (const AnimationClipAsset& clip : anim->Clips)
         {
-            const char prop = channel.Target == AnimationChannel::Property::Rotation ? 'R'
-                : channel.Target == AnimationChannel::Property::Scale               ? 'S'
-                                                                                    : 'T';
-            out << prop << ' ' << channel.Keyframes.size() << ' ';
-            for (const AnimationKeyframe& key : channel.Keyframes)
+            out << std::quoted(clip.Name) << ' ' << clip.Channels.size() << ' '
+                << clip.Events.size() << ' ';
+            for (const AnimationChannel& channel : clip.Channels)
             {
-                out << key.Time << ' ' << key.Value.x << ' ' << key.Value.y << ' ' << key.Value.z
-                    << ' ' << key.Value.w << ' ';
+                const char prop = channel.Target == AnimationChannel::Property::Rotation ? 'R'
+                    : channel.Target == AnimationChannel::Property::Scale               ? 'S'
+                                                                                        : 'T';
+                const char* interpolation =
+                    channel.InterpolationMode == AnimationChannel::Interpolation::Step ? "Step"
+                    : channel.InterpolationMode == AnimationChannel::Interpolation::Smooth
+                    ? "Smooth"
+                    : "Linear";
+                out << prop << ' ' << interpolation << ' ' << channel.Keyframes.size() << ' ';
+                for (const AnimationKeyframe& key : channel.Keyframes)
+                {
+                    out << key.Time << ' ' << key.Value.x << ' ' << key.Value.y << ' '
+                        << key.Value.z << ' ' << key.Value.w << ' ';
+                }
+            }
+            for (const AnimationEvent& event : clip.Events)
+            {
+                out << event.Time << ' ' << std::quoted(event.Name) << ' '
+                    << std::quoted(event.Payload) << ' ';
             }
         }
+        WriteAnimatorController(out, "TC", anim->Controller);
     }
     out << "END\n";
 }
@@ -840,38 +882,130 @@ Result<void> ParseEntityLine(std::string_view line, IWorld& world)
         else if (marker == "AN")
         {
             AnimatorComponent value;
-            row >> std::quoted(value.ClipName) >> value.Speed >> value.Loop >> value.Playing;
+            bool serializedPlaying = false;
+            row >> std::quoted(value.ClipName) >> value.Speed >> value.Loop >> serializedPlaying;
+            value.Playing = false;
+            value.Paused = false;
             value.ClipIndex = -1;
             value.CurrentTime = 0.0F;
             registry.emplace<AnimatorComponent>(entity, value);
         }
-        else if (marker == "TA")
+        else if (marker == "SC")
+        {
+            AnimatorController controller;
+            if (!ReadAnimatorController(row, controller))
+            {
+                break;
+            }
+            if (auto* animator = registry.try_get<AnimatorComponent>(entity))
+            {
+                animator->Controller = std::move(controller);
+                animator->ClearControllerRuntime();
+            }
+        }
+        else if (marker == "TA" || marker == "TL" || marker == "T2")
         {
             TransformAnimatorComponent value;
-            std::size_t channelCount = 0;
-            row >> std::quoted(value.Clip.Name) >> value.Speed >> value.Loop >> value.Playing
-                >> channelCount;
-            for (std::size_t c = 0; c < channelCount && row; ++c)
+            bool serializedPlaying = false;
+            std::size_t clipCount = 1;
+            std::string legacyClipName;
+            if (marker == "TL" || marker == "T2")
             {
-                std::string prop;
-                std::size_t keyCount = 0;
-                row >> prop >> keyCount;
-                AnimationChannel channel;
-                channel.JointIndex = -1;
-                channel.Target = prop == "R" ? AnimationChannel::Property::Rotation
-                    : prop == "S"            ? AnimationChannel::Property::Scale
-                                             : AnimationChannel::Property::Translation;
-                for (std::size_t k = 0; k < keyCount && row; ++k)
+                row >> std::quoted(value.ClipName) >> value.Speed >> value.Loop >> serializedPlaying
+                    >> clipCount;
+            }
+            else
+            {
+                row >> std::quoted(legacyClipName) >> value.Speed >> value.Loop >> serializedPlaying;
+            }
+            value.Playing = false;
+            value.Paused = false;
+            for (std::size_t clipIndex = 0; clipIndex < clipCount && row; ++clipIndex)
+            {
+                AnimationClipAsset clip;
+                std::size_t channelCount = 0;
+                std::size_t eventCount = 0;
+                if (marker == "TL" || marker == "T2")
                 {
-                    AnimationKeyframe key;
-                    row >> key.Time >> key.Value.x >> key.Value.y >> key.Value.z >> key.Value.w;
-                    channel.Keyframes.push_back(key);
-                    value.Clip.Duration = std::max(value.Clip.Duration, key.Time);
+                    row >> std::quoted(clip.Name) >> channelCount;
+                    if (marker == "T2")
+                    {
+                        row >> eventCount;
+                    }
                 }
-                value.Clip.Channels.push_back(std::move(channel));
+                else
+                {
+                    clip.Name = legacyClipName;
+                    row >> channelCount;
+                }
+                for (std::size_t c = 0; c < channelCount && row; ++c)
+                {
+                    std::string prop;
+                    std::string interpolationOrCount;
+                    std::size_t keyCount = 0;
+                    row >> prop >> interpolationOrCount;
+                    AnimationChannel channel;
+                    channel.JointIndex = -1;
+                    channel.Target = prop == "R" ? AnimationChannel::Property::Rotation
+                        : prop == "S"            ? AnimationChannel::Property::Scale
+                                                 : AnimationChannel::Property::Translation;
+                    if (interpolationOrCount == "Step" || interpolationOrCount == "Linear" ||
+                        interpolationOrCount == "Smooth")
+                    {
+                        channel.InterpolationMode = interpolationOrCount == "Step"
+                            ? AnimationChannel::Interpolation::Step
+                            : interpolationOrCount == "Smooth"
+                            ? AnimationChannel::Interpolation::Smooth
+                            : AnimationChannel::Interpolation::Linear;
+                        row >> keyCount;
+                    }
+                    else
+                    {
+                        const char* begin = interpolationOrCount.data();
+                        const char* end = begin + interpolationOrCount.size();
+                        const auto parsed = std::from_chars(begin, end, keyCount);
+                        if (parsed.ec != std::errc{} || parsed.ptr != end)
+                        {
+                            row.setstate(std::ios::failbit);
+                        }
+                    }
+                    for (std::size_t k = 0; k < keyCount && row; ++k)
+                    {
+                        AnimationKeyframe key;
+                        row >> key.Time >> key.Value.x >> key.Value.y >> key.Value.z >> key.Value.w;
+                        channel.Keyframes.push_back(key);
+                        clip.Duration = std::max(clip.Duration, key.Time);
+                    }
+                    clip.Channels.push_back(std::move(channel));
+                }
+                for (std::size_t eventIndex = 0; eventIndex < eventCount && row; ++eventIndex)
+                {
+                    AnimationEvent event;
+                    row >> event.Time >> std::quoted(event.Name) >> std::quoted(event.Payload);
+                    clip.Duration = std::max(clip.Duration, event.Time);
+                    clip.Events.push_back(std::move(event));
+                }
+                value.Clips.push_back(std::move(clip));
+            }
+            if (value.ClipName.empty() && !value.Clips.empty())
+            {
+                value.ClipName = value.Clips.front().Name;
             }
             value.CurrentTime = 0.0F;
             registry.emplace<TransformAnimatorComponent>(entity, std::move(value));
+        }
+        else if (marker == "TC")
+        {
+            AnimatorController controller;
+            if (!ReadAnimatorController(row, controller))
+            {
+                break;
+            }
+            if (auto* animator = registry.try_get<TransformAnimatorComponent>(entity))
+            {
+                animator->Controller = std::move(controller);
+                animator->ClearControllerRuntime();
+            }
         }
         else
         {

@@ -468,8 +468,10 @@ bool SceneEditor::AddComponent(const std::string_view id)
         created.Playing = false;
         if (const NameComponent* name = registry.try_get<NameComponent>(*entity))
         {
-            created.Clip.Name = name->Name;
+            static_cast<void>(EnsureTransformClip(created, name->Name));
         }
+        else
+            static_cast<void>(EnsureTransformClip(created));
         registry.emplace_or_replace<TransformAnimatorComponent>(*entity, std::move(created));
     }
     else if (id == "add-component-jolt")

@@ -34,8 +34,8 @@ struct LauncherUpdate
 };
 
 constexpr std::array<LauncherUpdate, 2> News{{
-    {"CURRENT RELEASE", "Fadix 0.9.125 is here",
-        "A faster editor workflow with scene placement previews, reliable imports and clearer tools."},
+    {"CURRENT RELEASE", "Fadix 0.9.126 is here",
+        "Professional animation timelines, events and Animator Controller state machines."},
     {"EDITOR UPDATE", "Build worlds with less friction",
         "New collision tools, character physics, improved lighting and the advanced FXS Editor."},
 }};
@@ -59,8 +59,8 @@ constexpr std::array<LauncherUpdate, 10> DevLog{{
         "FBX, GLB and glTF importing, external file drops and multiple scene assets."},
     {"0.9.104", "World and editor polish",
         "Sun and moon cycle, persistent settings, hierarchy icons and improved gizmos."},
-    {"0.9.125  CURRENT", "Creation workflow update",
-        "Hologram mesh placement, through-object tool proxies and a redesigned launcher."},
+    {"0.9.126  CURRENT", "Animation workflow update",
+        "Animation timelines, events, crossfades and visual Animator Controller state machines."},
 }};
 
 [[nodiscard]] std::vector<std::byte> MakeToneWave(

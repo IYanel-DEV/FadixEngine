@@ -533,6 +533,9 @@ void LoadAnimations(
 
             const tinygltf::AnimationSampler& sampler =
                 animation.samplers[static_cast<std::size_t>(channel.sampler)];
+            out.InterpolationMode = sampler.interpolation == "STEP"
+                ? AnimationChannel::Interpolation::Step
+                : AnimationChannel::Interpolation::Linear;
             const AccessorView times = ViewAccessor(model, sampler.input);
             const AccessorView values = ViewAccessor(model, sampler.output);
             if (times.Data == nullptr || values.Data == nullptr || times.Count == 0)

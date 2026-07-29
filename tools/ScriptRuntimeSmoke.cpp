@@ -33,6 +33,12 @@ const char* MoverSource()
            "function OnUpdate(entity, dt)\n"
            "  local x, y, z = entity:getPosition()\n"
            "  entity:setPosition(x + dt, y, z)\n"
+           "end\n"
+           "function OnAnimationEvent(entity, name, payload)\n"
+           "  if name == 'Footstep' and payload == 'left' then\n"
+           "    local x, y, z = entity:getPosition()\n"
+           "    entity:setPosition(x, 3.0, z)\n"
+           "  end\n"
            "end\n";
 }
 
@@ -77,6 +83,7 @@ int main()
     registry.emplace<fadix::TransformComponent>(mover);
     registry.emplace<fadix::ScriptComponent>(
         mover, fadix::ScriptComponent{std::vector<std::string>{"mover"}, true});
+    auto& moverAnimator = registry.emplace<fadix::TransformAnimatorComponent>(mover);
 
     const entt::entity doomed = registry.create();
     registry.emplace<fadix::NameComponent>(doomed, fadix::NameComponent{"Doomed"});
@@ -176,9 +183,13 @@ int main()
         "disabled script did not run");
     Check(registry.valid(doomed), "doomed entity alive before update");
 
+    moverAnimator.PendingEvents.push_back({0.25F, "Footstep", "left"});
     runner.Update(registry, 0.5F);
     Check(std::fabs(registry.get<fadix::TransformComponent>(mover).Position.x - 1.5F) < 1e-4F,
         "OnUpdate advanced mover.x to 1.5");
+    Check(std::fabs(registry.get<fadix::TransformComponent>(mover).Position.y - 3.0F) < 1e-4F &&
+            moverAnimator.PendingEvents.empty(),
+        "OnAnimationEvent received name/payload and consumed the runtime queue");
     Check(!registry.valid(doomed), "entity:destroy() removed the doomed entity");
     Check(loadedScene == "Scenes/Level2.scene", "Scene.load requested the level transition");
 
