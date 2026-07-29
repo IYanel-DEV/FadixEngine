@@ -339,7 +339,7 @@ SceneViewSource MaterialEditorController::PreviewSource() const
     {
         if (rhi::Texture* color = m_Preview->ColorTarget())
         {
-            source.Texture = static_cast<SDL_GPUTexture*>(GetNativeTextureHandle(*color));
+            source.Texture = GetNativeTextureHandle(*color);
             source.Width = m_PreviewWidth;
             source.Height = m_PreviewHeight;
         }

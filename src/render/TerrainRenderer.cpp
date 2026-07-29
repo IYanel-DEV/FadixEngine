@@ -92,7 +92,7 @@ void TerrainRenderer::Initialize()
     const std::vector<std::byte> source = render::ReadShaderSource("terrain.hlsl");
     {
         const std::vector<std::byte> code =
-            render::CompileShader(source, "VertexMain", "vs_5_1", "terrain.hlsl");
+            render::CompileShader(source, "VertexMain", m_Device.ShaderTarget(false), "terrain.hlsl");
         auto result = m_Device.CreateShader({"VertexMain", "terrain_vertex"}, code);
         if (!result)
         {
@@ -102,7 +102,7 @@ void TerrainRenderer::Initialize()
     }
     {
         const std::vector<std::byte> code =
-            render::CompileShader(source, "FragmentMain", "ps_5_1", "terrain.hlsl");
+            render::CompileShader(source, "FragmentMain", m_Device.ShaderTarget(true), "terrain.hlsl");
         auto result = m_Device.CreateShader({"FragmentMain", "terrain_fragment", 4}, code);
         if (!result)
         {
@@ -286,11 +286,11 @@ void TerrainRenderer::Draw(
 
     list.BindPipeline(*m_Pipeline);
     list.BindVertexBuffer(*it->second.VertexBuffer);
-    rhi::sdl::BindIndexBuffer(list, *it->second.IndexBuffer);
+    list.BindIndexBuffer(*it->second.IndexBuffer);
 
     const TerrainVertexUniform vertex{
         data.ViewProjection, data.PrevViewProjection, data.Model, data.PrevModel};
-    rhi::sdl::PushVertexUniform(list, 0, &vertex, sizeof(vertex));
+    list.PushVertexUniform(0, &vertex, sizeof(vertex));
 
     TerrainFragmentUniform fragment{};
     fragment.CameraPosHeightScale = glm::vec4{data.CameraPos, data.HeightScale};
@@ -303,13 +303,13 @@ void TerrainRenderer::Draw(
     fragment.LayerMaxHeight = data.LayerMaxHeight;
     fragment.LayerMinSlope = data.LayerMinSlope;
     fragment.LayerMaxSlope = data.LayerMaxSlope;
-    rhi::sdl::PushFragmentUniform(list, 0, &fragment, sizeof(fragment));
+    list.PushFragmentUniform(0, &fragment, sizeof(fragment));
 
     std::array<rhi::Texture*, 4> textures = {
         layerTextures[0], layerTextures[1], layerTextures[2], layerTextures[3]};
     std::array<rhi::Sampler*, 4> samplers = {sampler, sampler, sampler, sampler};
-    rhi::sdl::BindFragmentSamplers(list, 0, textures, samplers);
-    rhi::sdl::DrawIndexed(list, it->second.IndexCount);
+    list.BindFragmentSamplers(0, textures, samplers);
+    list.DrawIndexed(it->second.IndexCount);
 }
 
 void TerrainRenderer::DrawShadow(
@@ -324,9 +324,9 @@ void TerrainRenderer::DrawShadow(
         return;
     }
     list.BindVertexBuffer(*it->second.VertexBuffer);
-    rhi::sdl::BindIndexBuffer(list, *it->second.IndexBuffer);
+    list.BindIndexBuffer(*it->second.IndexBuffer);
     const ShadowVertexUniform vertex{lightSpace, model};
-    rhi::sdl::PushVertexUniform(list, 0, &vertex, sizeof(vertex));
-    rhi::sdl::DrawIndexed(list, it->second.IndexCount);
+    list.PushVertexUniform(0, &vertex, sizeof(vertex));
+    list.DrawIndexed(it->second.IndexCount);
 }
 }

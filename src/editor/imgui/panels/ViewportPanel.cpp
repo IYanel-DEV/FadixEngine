@@ -46,7 +46,7 @@ namespace
     {
         return {};
     }
-    auto* native = static_cast<SDL_GPUTexture*>(GetNativeTextureHandle(*color));
+    void* native = GetNativeTextureHandle(*color);
     return ImTextureRef{static_cast<ImTextureID>(reinterpret_cast<intptr_t>(native))};
 }
 

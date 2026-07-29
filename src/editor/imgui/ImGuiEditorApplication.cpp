@@ -165,6 +165,11 @@ bool ImGuiEditorApplication::InitializeGameUi()
         return false;
     }
     auto* nativeDevice = static_cast<SDL_GPUDevice*>(GetNativeDeviceHandle(*m_Device));
+    if (nativeDevice == nullptr)
+    {
+        std::clog << "[Fadix] Game UI overlay disabled on Direct3D 11 compatibility renderer.\n";
+        return true;
+    }
     constexpr SDL_GPUShaderFormat rmlShaderFormats =
         SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXIL | SDL_GPU_SHADERFORMAT_MSL;
     if ((SDL_GetGPUShaderFormats(nativeDevice) & rmlShaderFormats) == 0)
@@ -1634,7 +1639,7 @@ int ImGuiEditorApplication::Run()
     }
 
     auto* nativeDevice = static_cast<SDL_GPUDevice*>(GetNativeDeviceHandle(*m_Device));
-    if (!m_ImGui.Initialize(m_Window, nativeDevice))
+    if (!m_ImGui.Initialize(m_Window, *m_Device))
     {
         const std::string imguiError = SDL_GetError();
         Shutdown();
@@ -1662,7 +1667,10 @@ int ImGuiEditorApplication::Run()
 
     m_Theme.Apply();
     static_cast<void>(m_Theme.LoadFonts(m_AssetRoot));
-    static_cast<void>(m_Theme.LoadLogo(nativeDevice, m_AssetRoot));
+    if (nativeDevice != nullptr)
+    {
+        static_cast<void>(m_Theme.LoadLogo(nativeDevice, m_AssetRoot));
+    }
     ImGui::GetIO().ConfigDpiScaleFonts = true;
     m_AppliedDpiScale = 1.0F;
     OnDisplayScaleChanged();

@@ -147,17 +147,13 @@ constexpr std::uint32_t kHaltonCycle = 16;
 }
 }
 
-class SdlViewportRenderer final : public ViewportRenderer
+class RhiViewportRenderer final : public ViewportRenderer
 {
 public:
-    explicit SdlViewportRenderer(rhi::Device& device, IAssetDatabase& database)
+    explicit RhiViewportRenderer(rhi::Device& device, IAssetDatabase& database)
         : m_Device(device), m_Cache(std::make_unique<AssetResourceCache>(device, database)),
           m_Database(&database), m_Uploader(device)
     {
-        if (rhi::sdl::AsSdlDevice(device) == nullptr)
-        {
-            throw std::invalid_argument("Viewport renderer requires the SDL GPU RHI backend");
-        }
         CreateGeometry();
         CreatePipelines();
         m_PostProcessor = std::make_unique<PostProcessor>();
@@ -812,14 +808,19 @@ private:
     // Grows `buffer` to hold at least `bytes` (with headroom) as a GPU storage
     // buffer. Never shrinks, so per-frame churn settles after the scene's peak.
     void EnsureStorageBuffer(
-        std::unique_ptr<rhi::Buffer>& buffer, std::size_t bytes, const char* name)
+        std::unique_ptr<rhi::Buffer>& buffer,
+        std::size_t bytes,
+        std::uint32_t stride,
+        const char* name)
     {
         bytes = std::max<std::size_t>(bytes, 256);
         if (buffer != nullptr && buffer->Size() >= bytes)
         {
             return;
         }
-        auto result = m_Device.CreateBuffer({bytes + bytes / 2, rhi::BufferUsage::Storage, name});
+        const std::size_t capacity = ((bytes + bytes / 2 + stride - 1) / stride) * stride;
+        auto result = m_Device.CreateBuffer(
+            {capacity, rhi::BufferUsage::Storage, name, stride});
         if (!result)
         {
             Report(std::string{"Forward+ storage buffer alloc failed: "} + result.ErrorMessage());
@@ -839,9 +840,21 @@ private:
             std::max<std::size_t>(m_FrameTiles.Headers.size(), 1) * sizeof(forward_plus::TileHeader);
         const std::size_t indexBytes =
             std::max<std::size_t>(m_FrameTiles.Indices.size(), 1) * sizeof(std::uint32_t);
-        EnsureStorageBuffer(m_LightBuffer, lightBytes, "ForwardPlusLights");
-        EnsureStorageBuffer(m_TileHeaderBuffer, headerBytes, "ForwardPlusTileHeaders");
-        EnsureStorageBuffer(m_TileIndexBuffer, indexBytes, "ForwardPlusTileIndices");
+        EnsureStorageBuffer(
+            m_LightBuffer,
+            lightBytes,
+            static_cast<std::uint32_t>(sizeof(forward_plus::GpuPointLight)),
+            "ForwardPlusLights");
+        EnsureStorageBuffer(
+            m_TileHeaderBuffer,
+            headerBytes,
+            static_cast<std::uint32_t>(sizeof(forward_plus::TileHeader)),
+            "ForwardPlusTileHeaders");
+        EnsureStorageBuffer(
+            m_TileIndexBuffer,
+            indexBytes,
+            static_cast<std::uint32_t>(sizeof(std::uint32_t)),
+            "ForwardPlusTileIndices");
         if (!m_FramePointLightsGpu.empty() && m_LightBuffer != nullptr)
         {
             m_Uploader.Upload(commands, *m_LightBuffer,
@@ -871,8 +884,8 @@ private:
         }
         std::array<rhi::Buffer*, 3> buffers = {
             m_LightBuffer.get(), m_TileHeaderBuffer.get(), m_TileIndexBuffer.get()};
-        rhi::sdl::BindFragmentStorageBuffers(list, 0, buffers);
-        rhi::sdl::PushFragmentUniform(list, 1, &m_FrameForwardPlus, sizeof(m_FrameForwardPlus));
+        list.BindFragmentStorageBuffers(0, buffers);
+        list.PushFragmentUniform(1, &m_FrameForwardPlus, sizeof(m_FrameForwardPlus));
     }
 
     [[nodiscard]] int CountShadowedLights(const IWorld& world, const bool directionalCasts) const
@@ -1244,15 +1257,15 @@ private:
         sky.ZenithColor = m_FrameSkyZenith;
         sky.HorizonColor = m_FrameSkyHorizon;
         sky.GroundColor = m_FrameSkyGround;
-        rhi::sdl::PushFragmentUniform(list, 0, &sky, sizeof(sky));
-        SDL_DrawGPUPrimitives(rhi::sdl::NativeRenderPass(list), 3, 1, 0, 0);
+        list.PushFragmentUniform(0, &sky, sizeof(sky));
+        list.Draw(3);
         RecordDrawCall();
     }
 
     void BindMeshBuffers(rhi::CommandList& list)
     {
         list.BindVertexBuffer(*m_VertexBuffer);
-        rhi::sdl::BindIndexBuffer(list, *m_IndexBuffer);
+        list.BindIndexBuffer(*m_IndexBuffer);
     }
 
     [[nodiscard]] rhi::Texture* CascadeTextureOrWhite(const int index) const
@@ -1321,18 +1334,17 @@ private:
             rhi::Sampler* sampler = m_DefaultSampler.get();
             std::array<rhi::Texture*, 1> textures = {white};
             std::array<rhi::Sampler*, 1> samplers = {sampler};
-            rhi::sdl::BindFragmentSamplers(list, 0, textures, samplers);
+            list.BindFragmentSamplers(0, textures, samplers);
             const ShadowFragmentUniform fragment{};
-            rhi::sdl::PushFragmentUniform(list, 0, &fragment, sizeof(fragment));
+            list.PushFragmentUniform(0, &fragment, sizeof(fragment));
         }
         PushIdentityBones(list);
 
         const auto drawIndexed = [&](const std::uint32_t firstIndex, const std::uint32_t indexCount,
                                      const glm::mat4& model) {
             const ShadowVertexUniform vertex{lightSpace, model, glm::vec4{0.0F}};
-            rhi::sdl::PushVertexUniform(list, 0, &vertex, sizeof(vertex));
-            SDL_DrawGPUIndexedPrimitives(
-                rhi::sdl::NativeRenderPass(list), indexCount, 1, firstIndex, 0, 0);
+            list.PushVertexUniform(0, &vertex, sizeof(vertex));
+            list.DrawIndexed(indexCount, firstIndex);
             RecordDrawCall();
         };
 
@@ -1358,7 +1370,7 @@ private:
                 if (gltf != nullptr && gltf->IsValid())
                 {
                     list.BindVertexBuffer(*gltf->VertexBuffer);
-                    rhi::sdl::BindIndexBuffer(list, *gltf->IndexBuffer);
+                    list.BindIndexBuffer(*gltf->IndexBuffer);
                     const glm::mat4 model = ModelMatrix(transform);
                     for (const GltfPrimitiveRange& prim : gltf->Primitives)
                     {
@@ -1416,7 +1428,7 @@ private:
             CascadeTextureOrWhite(3)};
         std::array<rhi::Sampler*, 8> samplers = {
             sampler, sampler, sampler, sampler, shadow, shadow, shadow, shadow};
-        rhi::sdl::BindFragmentSamplers(list, 0, textures, samplers);
+        list.BindFragmentSamplers(0, textures, samplers);
     }
 
     [[nodiscard]] std::span<const glm::mat4> ResolveSkinJointMatrices(
@@ -1442,8 +1454,8 @@ private:
         {
             bone = glm::mat4{1.0F};
         }
-        rhi::sdl::PushVertexUniform(list, 1, &bones, sizeof(bones));
-        rhi::sdl::PushVertexUniform(list, 2, &bones, sizeof(bones));
+        list.PushVertexUniform(1, &bones, sizeof(bones));
+        list.PushVertexUniform(2, &bones, sizeof(bones));
     }
 
     void PushSkinBones(
@@ -1478,8 +1490,8 @@ private:
             }
             m_FrameBoneSnapshots[*entityId].assign(current.begin(), current.begin() + static_cast<std::ptrdiff_t>(count));
         }
-        rhi::sdl::PushVertexUniform(list, 1, &bones, sizeof(bones));
-        rhi::sdl::PushVertexUniform(list, 2, &prevBones, sizeof(prevBones));
+        list.PushVertexUniform(1, &bones, sizeof(bones));
+        list.PushVertexUniform(2, &prevBones, sizeof(prevBones));
     }
 
     void FlushBoneHistory()
@@ -1523,12 +1535,11 @@ private:
     {
         const VertexUniform vertex = MakeVertexUniform(model, prevModel, skinParams);
         const FragmentUniform lit = WithFrameDebug(fragment);
-        rhi::sdl::PushVertexUniform(list, 0, &vertex, sizeof(vertex));
+        list.PushVertexUniform(0, &vertex, sizeof(vertex));
         PushIdentityBones(list);
-        rhi::sdl::PushFragmentUniform(list, 0, &lit, sizeof(lit));
+        list.PushFragmentUniform(0, &lit, sizeof(lit));
         BindForwardPlusResources(list);
-        SDL_DrawGPUIndexedPrimitives(
-            rhi::sdl::NativeRenderPass(list), range.IndexCount, 1, range.FirstIndex, 0, 0);
+        list.DrawIndexed(range.IndexCount, range.FirstIndex);
         RecordDrawCall();
     }
 
@@ -1544,7 +1555,7 @@ private:
         const std::optional<Uuid>& entityId = std::nullopt)
     {
         const VertexUniform vertex = MakeVertexUniform(model, prevModel, skinParams);
-        rhi::sdl::PushVertexUniform(list, 0, &vertex, sizeof(vertex));
+        list.PushVertexUniform(0, &vertex, sizeof(vertex));
         if (skinParams.x > 0.5F && !skinBones.empty())
         {
             PushSkinBones(list, skinBones, entityId);
@@ -1554,10 +1565,9 @@ private:
             PushIdentityBones(list);
         }
         const FragmentUniform lit = WithFrameDebug(fragment);
-        rhi::sdl::PushFragmentUniform(list, 0, &lit, sizeof(lit));
+        list.PushFragmentUniform(0, &lit, sizeof(lit));
         BindForwardPlusResources(list);
-        SDL_DrawGPUIndexedPrimitives(
-            rhi::sdl::NativeRenderPass(list), indexCount, 1, firstIndex, 0, 0);
+        list.DrawIndexed(indexCount, firstIndex);
         RecordDrawCall();
     }
 
@@ -1622,7 +1632,7 @@ private:
 
         list.BindPipeline(*m_UnlitDepthPipeline);
         list.BindVertexBuffer(*gltf->VertexBuffer);
-        rhi::sdl::BindIndexBuffer(list, *gltf->IndexBuffer);
+        list.BindIndexBuffer(*gltf->IndexBuffer);
         for (const GltfPrimitiveRange& primitive : gltf->Primitives)
         {
             DrawMeshRaw(
@@ -1907,7 +1917,7 @@ private:
                         list.BindPipeline(*m_MeshPipeline);
                         BindDefaultLitFragmentSamplers(list);
                         list.BindVertexBuffer(*gltf->VertexBuffer);
-                        rhi::sdl::BindIndexBuffer(list, *gltf->IndexBuffer);
+                        list.BindIndexBuffer(*gltf->IndexBuffer);
                         const SkeletonComponent* skeleton = cmd.Entity != entt::null
                             ? world.Registry().try_get<SkeletonComponent>(cmd.Entity)
                             : nullptr;
@@ -2026,7 +2036,7 @@ private:
                     std::array<rhi::Sampler*, 8> samplers = {
                         baseSampler, normalSampler, mrSampler, emissiveSampler,
                         shadowSamplerBind, shadowSamplerBind, shadowSamplerBind, shadowSamplerBind};
-                    rhi::sdl::BindFragmentSamplers(list, 0, textures, samplers);
+                    list.BindFragmentSamplers(0, textures, samplers);
 
                     DrawMesh(
                         list,
@@ -2631,20 +2641,20 @@ private:
         const VertexUniform vertex = MakeVertexUniform(glm::mat4{1.0F}, glm::mat4{1.0F}, glm::vec4{0.0F});
         FragmentUniform fragment;
         fragment.BaseColor = glm::vec4{1.0F};
-        rhi::sdl::PushVertexUniform(list, 0, &vertex, sizeof(vertex));
+        list.PushVertexUniform(0, &vertex, sizeof(vertex));
         PushIdentityBones(list);
-        rhi::sdl::PushFragmentUniform(list, 0, &fragment, sizeof(fragment));
+        list.PushFragmentUniform(0, &fragment, sizeof(fragment));
         const std::size_t uploaded = std::min<std::size_t>(m_LineVertices.size(), LineBufferMaxVertices);
         const std::size_t normalCount = std::min(m_CollisionLineFirst, uploaded);
         if (normalCount > 0)
         {
             fragment.BaseColor.a = 0.28F;
-            rhi::sdl::PushFragmentUniform(list, 0, &fragment, sizeof(fragment));
+            list.PushFragmentUniform(0, &fragment, sizeof(fragment));
             list.BindPipeline(
                 ldrOverlay ? *m_CollisionLineLdrPipeline : *m_CollisionLinePipeline);
             list.Draw(static_cast<std::uint32_t>(normalCount), 0);
             fragment.BaseColor.a = 1.0F;
-            rhi::sdl::PushFragmentUniform(list, 0, &fragment, sizeof(fragment));
+            list.PushFragmentUniform(0, &fragment, sizeof(fragment));
             list.BindPipeline(ldrOverlay ? *m_LineLdrPipeline : *m_LinePipeline);
             list.Draw(static_cast<std::uint32_t>(normalCount), 0);
         }
@@ -2771,7 +2781,8 @@ private:
     {
         const std::vector<std::byte> source = render::ReadShaderSource("viewport.hlsl");
         const auto makeShader = [&](const char* entry, const char* target, const char* name, std::uint32_t samplers = 0, std::uint32_t uniformBuffers = 1, std::uint32_t storageBuffers = 0) {
-            const std::vector<std::byte> code = render::CompileShader(source, entry, target, "viewport.hlsl");
+            const std::vector<std::byte> code = render::CompileShader(
+                source, entry, m_Device.ShaderTarget(target[0] == 'p'), "viewport.hlsl");
             auto result = m_Device.CreateShader({entry, name, samplers, uniformBuffers, storageBuffers}, code);
             if (!result)
             {
@@ -2924,7 +2935,11 @@ private:
             const auto makeShadowShader =
                 [&](const char* entry, const char* target, const char* name, std::uint32_t samplers,
                     std::uint32_t uniformBuffers) {
-                    const std::vector<std::byte> code = render::CompileShader(shadowSource, entry, target, "shadow_depth.hlsl");
+                    const std::vector<std::byte> code = render::CompileShader(
+                        shadowSource,
+                        entry,
+                        m_Device.ShaderTarget(target[0] == 'p'),
+                        "shadow_depth.hlsl");
                     auto result = m_Device.CreateShader({entry, name, samplers, uniformBuffers}, code);
                     if (!result)
                     {
@@ -3180,45 +3195,45 @@ private:
     float m_LastGpuRenderMs{-1.0F};
 };
 
-class SdlViewportPicking final : public Picking
+class RhiViewportPicking final : public Picking
 {
 public:
-    explicit SdlViewportPicking(SdlViewportRenderer& renderer) : m_Renderer(renderer) {}
+    explicit RhiViewportPicking(RhiViewportRenderer& renderer) : m_Renderer(renderer) {}
     void Request(const PickRequest request) override { m_Renderer.RequestPick(request); }
     [[nodiscard]] std::optional<PickResult> Poll() override { return m_Renderer.PollPick(); }
 
 private:
-    SdlViewportRenderer& m_Renderer;
+    RhiViewportRenderer& m_Renderer;
 };
 
 std::unique_ptr<ViewportRenderer> CreateViewportRenderer(rhi::Device& device, IAssetDatabase& database)
 {
-    return std::make_unique<SdlViewportRenderer>(device, database);
+    return std::make_unique<RhiViewportRenderer>(device, database);
 }
 
 std::unique_ptr<Picking> CreateViewportPicking(ViewportRenderer& renderer)
 {
-    auto* sdlRenderer = dynamic_cast<SdlViewportRenderer*>(&renderer);
-    if (sdlRenderer == nullptr)
+    auto* rhiRenderer = dynamic_cast<RhiViewportRenderer*>(&renderer);
+    if (rhiRenderer == nullptr)
     {
         return nullptr;
     }
-    return std::make_unique<SdlViewportPicking>(*sdlRenderer);
+    return std::make_unique<RhiViewportPicking>(*rhiRenderer);
 }
 
 void SetViewportOrthographic(ViewportRenderer& renderer, const bool enabled) noexcept
 {
-    if (auto* sdlRenderer = dynamic_cast<SdlViewportRenderer*>(&renderer))
+    if (auto* rhiRenderer = dynamic_cast<RhiViewportRenderer*>(&renderer))
     {
-        sdlRenderer->SetOrthographic(enabled);
+        rhiRenderer->SetOrthographic(enabled);
     }
 }
 
 void SetViewportLog(ViewportRenderer& renderer, std::function<void(std::string)> log)
 {
-    if (auto* sdlRenderer = dynamic_cast<SdlViewportRenderer*>(&renderer))
+    if (auto* rhiRenderer = dynamic_cast<RhiViewportRenderer*>(&renderer))
     {
-        sdlRenderer->SetLog(std::move(log));
+        rhiRenderer->SetLog(std::move(log));
     }
 }
 }

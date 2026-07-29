@@ -35,7 +35,8 @@ std::unique_ptr<rhi::Shader> MakeShaderFromFile(
     std::uint32_t numUniformBuffers = 1)
 {
     const std::vector<std::byte> source = render::ReadShaderSource(file);
-    const std::vector<std::byte> code = render::CompileShader(source, entry, target, file);
+    const std::vector<std::byte> code =
+        render::CompileShader(source, entry, device.ShaderTarget(target[0] == 'p'), file);
     auto result = device.CreateShader({entry, entry, numSamplers, numUniformBuffers}, code);
     if (!result)
     {
@@ -58,7 +59,8 @@ std::unique_ptr<rhi::Shader> MakeShader(
     std::uint32_t numSamplers,
     std::uint32_t numUniformBuffers = 1)
 {
-    const std::vector<std::byte> code = render::CompileShader(source, entry, target, "postprocess.hlsl");
+    const std::vector<std::byte> code = render::CompileShader(
+        source, entry, device.ShaderTarget(target[0] == 'p'), "postprocess.hlsl");
     auto result = device.CreateShader({entry, entry, numSamplers, numUniformBuffers}, code);
     if (!result)
     {
@@ -418,16 +420,16 @@ void PostProcessor::BlitPass(
     {
         std::array<rhi::Texture*, 2> textures = {source0, source1};
         std::array<rhi::Sampler*, 2> samplers = {m_LinearSampler.get(), m_LinearSampler.get()};
-        rhi::sdl::BindFragmentSamplers(list, 0, textures, samplers);
+        list.BindFragmentSamplers(0, textures, samplers);
     }
     else
     {
         std::array<rhi::Texture*, 1> textures = {source0};
         std::array<rhi::Sampler*, 1> samplers = {m_LinearSampler.get()};
-        rhi::sdl::BindFragmentSamplers(list, 0, textures, samplers);
+        list.BindFragmentSamplers(0, textures, samplers);
     }
-    rhi::sdl::PushFragmentUniform(list, 0, uniforms, uniformSize);
-    SDL_DrawGPUPrimitives(rhi::sdl::NativeRenderPass(list), 3, 1, 0, 0);
+    list.PushFragmentUniform(0, uniforms, uniformSize);
+    list.Draw(3);
     list.EndRenderPass();
 }
 
@@ -449,9 +451,9 @@ void PostProcessor::BlitPass3(
     std::array<rhi::Texture*, 4> textures = {source0, source1, velocity, depthBinding};
     std::array<rhi::Sampler*, 4> samplers = {
         m_LinearSampler.get(), m_LinearSampler.get(), m_LinearSampler.get(), m_LinearSampler.get()};
-    rhi::sdl::BindFragmentSamplers(list, 0, textures, samplers);
-    rhi::sdl::PushFragmentUniform(list, 0, uniforms, uniformSize);
-    SDL_DrawGPUPrimitives(rhi::sdl::NativeRenderPass(list), 3, 1, 0, 0);
+    list.BindFragmentSamplers(0, textures, samplers);
+    list.PushFragmentUniform(0, uniforms, uniformSize);
+    list.Draw(3);
     list.EndRenderPass();
 }
 

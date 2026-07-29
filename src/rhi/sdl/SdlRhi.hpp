@@ -91,6 +91,7 @@ public:
     [[nodiscard]] bool Upload(CommandList& commands, Buffer& destination, std::span<const std::byte> data);
 
 private:
+    Device* m_RhiDevice{nullptr};
     SDL_GPUDevice* m_Device{nullptr};
     SDL_GPUTransferBuffer* m_Transfer{nullptr};
     std::size_t m_Capacity{0};

@@ -143,6 +143,11 @@ target_include_directories(fadix_imgui PUBLIC
     "${imgui_SOURCE_DIR}"
     "${imgui_SOURCE_DIR}/backends")
 target_link_libraries(fadix_imgui PUBLIC SDL3::SDL3-static)
+if(WIN32)
+    target_sources(fadix_imgui PRIVATE
+        "${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp")
+    target_link_libraries(fadix_imgui PUBLIC d3d11 dxgi)
+endif()
 
 if(WIN32)
     FetchContent_Declare(scintilla
@@ -423,7 +428,8 @@ if(FADIX_ENABLE_LUA)
     target_link_libraries(fadix_editor PRIVATE fadix_lua)
 endif()
 if(WIN32)
-    target_link_libraries(fadix_editor PRIVATE fadix_fxs_editor ole32 shell32 uuid)
+    target_link_libraries(fadix_editor PRIVATE
+        fadix_fxs_editor d3d11 dxgi ole32 shell32 uuid)
 endif()
 target_compile_definitions(fadix_editor PRIVATE
     FADIX_ASSET_ROOT="${CMAKE_SOURCE_DIR}/assets")
@@ -461,7 +467,7 @@ if(FADIX_ENABLE_LUA)
     target_link_libraries(fadix_player PRIVATE fadix_lua)
 endif()
 if(WIN32)
-    target_link_libraries(fadix_player PRIVATE ole32 shell32 uuid)
+    target_link_libraries(fadix_player PRIVATE d3d11 dxgi ole32 shell32 uuid)
 endif()
 target_compile_definitions(fadix_player PRIVATE
     FADIX_ASSET_ROOT="${CMAKE_SOURCE_DIR}/assets")
