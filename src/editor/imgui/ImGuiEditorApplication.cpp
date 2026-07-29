@@ -165,6 +165,16 @@ bool ImGuiEditorApplication::InitializeGameUi()
         return false;
     }
     auto* nativeDevice = static_cast<SDL_GPUDevice*>(GetNativeDeviceHandle(*m_Device));
+    constexpr SDL_GPUShaderFormat rmlShaderFormats =
+        SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXIL | SDL_GPU_SHADERFORMAT_MSL;
+    if ((SDL_GetGPUShaderFormats(nativeDevice) & rmlShaderFormats) == 0)
+    {
+        std::clog
+            << "[Fadix] Game UI overlay disabled: this GPU supports DXBC only; "
+               "RmlUi requires SPIR-V, DXIL or MSL.\n";
+        return true;
+    }
+
     auto system = std::make_unique<SystemInterface_SDL>();
     system->SetWindow(m_Window);
     auto render = std::make_unique<RenderInterface_SDL_GPU>(nativeDevice, m_Window);
