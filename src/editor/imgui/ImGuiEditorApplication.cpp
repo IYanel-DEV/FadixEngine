@@ -1636,8 +1636,11 @@ int ImGuiEditorApplication::Run()
     auto* nativeDevice = static_cast<SDL_GPUDevice*>(GetNativeDeviceHandle(*m_Device));
     if (!m_ImGui.Initialize(m_Window, nativeDevice))
     {
+        const std::string imguiError = SDL_GetError();
         Shutdown();
-        throw std::runtime_error("ImGuiLayer::Initialize failed");
+        throw std::runtime_error(
+            "ImGuiLayer::Initialize failed: " +
+            (imguiError.empty() ? std::string{"unknown SDL GPU error"} : imguiError));
     }
 
     m_AudioEngine = std::make_unique<AudioEngine>();

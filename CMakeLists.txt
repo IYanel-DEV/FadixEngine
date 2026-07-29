@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(FadixEngine VERSION 0.9.128 LANGUAGES C CXX)
+project(FadixEngine VERSION 0.9.129 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -117,6 +117,20 @@ FetchContent_GetProperties(imgui)
 if(NOT imgui_POPULATED)
     FetchContent_Populate(imgui)
 endif()
+
+# ImGui's bundled DXBC shadercross blobs fail pipeline creation on some legacy
+# D3D12 drivers. Let ImGuiLayer provide a runtime-D3DCompile pipeline only for
+# DXBC-only D3D12 devices; every other backend keeps the upstream pipeline.
+set(FADIX_IMGUI_SDLGPU_BACKEND "${CMAKE_CURRENT_BINARY_DIR}/generated/imgui_impl_sdlgpu3.cpp")
+file(READ "${imgui_SOURCE_DIR}/backends/imgui_impl_sdlgpu3.cpp" FADIX_IMGUI_SDLGPU_SOURCE)
+string(REPLACE
+    "    ImGui_ImplSDLGPU3_CreateGraphicsPipeline();"
+    "    if (strcmp(SDL_GetGPUDeviceDriver(v->Device), \"direct3d12\") != 0 || (SDL_GetGPUShaderFormats(v->Device) & SDL_GPU_SHADERFORMAT_DXIL) != 0)\n        ImGui_ImplSDLGPU3_CreateGraphicsPipeline();"
+    FADIX_IMGUI_SDLGPU_SOURCE
+    "${FADIX_IMGUI_SDLGPU_SOURCE}")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(WRITE "${FADIX_IMGUI_SDLGPU_BACKEND}" "${FADIX_IMGUI_SDLGPU_SOURCE}")
+
 add_library(fadix_imgui STATIC
     "${imgui_SOURCE_DIR}/imgui.cpp"
     "${imgui_SOURCE_DIR}/imgui_draw.cpp"
@@ -124,7 +138,7 @@ add_library(fadix_imgui STATIC
     "${imgui_SOURCE_DIR}/imgui_widgets.cpp"
     "${imgui_SOURCE_DIR}/imgui_demo.cpp"
     "${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp"
-    "${imgui_SOURCE_DIR}/backends/imgui_impl_sdlgpu3.cpp")
+    "${FADIX_IMGUI_SDLGPU_BACKEND}")
 target_include_directories(fadix_imgui PUBLIC
     "${imgui_SOURCE_DIR}"
     "${imgui_SOURCE_DIR}/backends")
