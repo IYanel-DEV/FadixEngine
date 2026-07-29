@@ -693,9 +693,11 @@ if(WIN32)
         src/engine/Uuid.cpp
         src/render/PostProcessing.cpp
         src/render/ShaderCompiler.cpp
+        src/rhi/d3d11/D3D11Rhi.cpp
         src/rhi/sdl/SdlRhi.cpp)
     target_include_directories(fadix_gpu_pipeline_smoke PRIVATE src)
-    target_link_libraries(fadix_gpu_pipeline_smoke PRIVATE SDL3::SDL3-static glm::glm tinygltf)
+    target_link_libraries(fadix_gpu_pipeline_smoke PRIVATE
+        SDL3::SDL3-static glm::glm tinygltf d3d11 dxgi)
     target_compile_definitions(fadix_gpu_pipeline_smoke PRIVATE
         FADIX_ASSET_ROOT="${CMAKE_SOURCE_DIR}/assets")
     if(MSVC)

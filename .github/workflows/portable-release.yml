@@ -35,6 +35,9 @@ jobs:
 
       # EmbeddedAssets.hpp is intentionally compiled serially. Building several
       # copies at once consumes enough RAM to make lower-end PCs unresponsive.
+      - name: Build GPU compatibility preflight
+        run: cmake --build .build/release-cmake --config Release --target fadix_gpu_pipeline_smoke --parallel 1
+
       - name: Build portable editor
         run: cmake --build .build/release-cmake --config Release --target fadix_editor --parallel 1
 
