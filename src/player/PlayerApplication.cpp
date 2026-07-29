@@ -308,27 +308,41 @@ int PlayerApplication::Run()
         audioPlayback->Start(*play.RuntimeWorld(), assets.get());
     }
 
-    auto system = std::make_unique<SystemInterface_SDL>();
-    system->SetWindow(window);
-    auto render = std::make_unique<RenderInterface_SDL_GPU>(nativeDevice, window);
-    auto file = std::make_unique<DiskFileInterface>();
-    Rml::SetFileInterface(file.get());
-    Rml::SetSystemInterface(system.get());
-    Rml::SetRenderInterface(render.get());
-    if (!Rml::Initialise())
-    {
-        throw std::runtime_error("RmlUi initialise failed");
-    }
-    static_cast<void>(Rml::LoadFontFace("C:/Windows/Fonts/arial.ttf"));
-    auto gameUi = std::make_unique<GameUIOverlay>();
     int pixelW = m_Options.Width;
     int pixelH = m_Options.Height;
     SDL_GetWindowSizeInPixels(window, &pixelW, &pixelH);
-    if (!gameUi->Initialize(pixelW, pixelH, SDL_GetWindowDisplayScale(window)))
+
+    std::unique_ptr<SystemInterface_SDL> system;
+    std::unique_ptr<RenderInterface_SDL_GPU> render;
+    std::unique_ptr<DiskFileInterface> file;
+    std::unique_ptr<GameUIOverlay> gameUi;
+    constexpr SDL_GPUShaderFormat rmlShaderFormats =
+        SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXIL | SDL_GPU_SHADERFORMAT_MSL;
+    if ((SDL_GetGPUShaderFormats(nativeDevice) & rmlShaderFormats) != 0)
     {
-        throw std::runtime_error("GameUIOverlay initialise failed");
+        system = std::make_unique<SystemInterface_SDL>();
+        system->SetWindow(window);
+        render = std::make_unique<RenderInterface_SDL_GPU>(nativeDevice, window);
+        file = std::make_unique<DiskFileInterface>();
+        Rml::SetFileInterface(file.get());
+        Rml::SetSystemInterface(system.get());
+        Rml::SetRenderInterface(render.get());
+        if (!Rml::Initialise())
+        {
+            throw std::runtime_error("RmlUi initialise failed");
+        }
+        static_cast<void>(Rml::LoadFontFace("C:/Windows/Fonts/arial.ttf"));
+        gameUi = std::make_unique<GameUIOverlay>();
+        if (!gameUi->Initialize(pixelW, pixelH, SDL_GetWindowDisplayScale(window)))
+        {
+            throw std::runtime_error("GameUIOverlay initialise failed");
+        }
+        gameUi->SetActive(true);
     }
-    gameUi->SetActive(true);
+    else
+    {
+        std::clog << "[FadixPlayer] Game UI overlay disabled: GPU supports DXBC only.\n";
+    }
 
     bool running = true;
     auto previous = std::chrono::steady_clock::now();
@@ -411,17 +425,20 @@ int PlayerApplication::Run()
         viewport->UpdateAnimations(*runtime, dt);
         viewport->DrawWorld(*runtime);
 
-        gameUi->Sync(
-            *runtime,
-            *assets,
-            pixelW,
-            pixelH,
-            SDL_GetWindowDisplayScale(window),
-            0.0F,
-            0.0F,
-            static_cast<float>(pixelW),
-            static_cast<float>(pixelH));
-        gameUi->Update();
+        if (gameUi)
+        {
+            gameUi->Sync(
+                *runtime,
+                *assets,
+                pixelW,
+                pixelH,
+                SDL_GetWindowDisplayScale(window),
+                0.0F,
+                0.0F,
+                static_cast<float>(pixelW),
+                static_cast<float>(pixelH));
+            gameUi->Update();
+        }
 
         // Fix blit source extents to the color target size.
         rhi::Texture* color = viewport->ColorTarget();
@@ -452,9 +469,12 @@ int PlayerApplication::Run()
                         blit.filter = SDL_GPU_FILTER_LINEAR;
                         SDL_BlitGPUTexture(commandBuffer, &blit);
                     }
-                    render->BeginFrame(commandBuffer, swapchain, sw, sh);
-                    gameUi->Render();
-                    render->EndFrame();
+                    if (render && gameUi)
+                    {
+                        render->BeginFrame(commandBuffer, swapchain, sw, sh);
+                        gameUi->Render();
+                        render->EndFrame();
+                    }
                     SDL_SubmitGPUCommandBuffer(commandBuffer);
                 }
                 else
@@ -483,9 +503,12 @@ int PlayerApplication::Run()
                     SDL_GPURenderPass* pass =
                         SDL_BeginGPURenderPass(commandBuffer, &clear, 1, nullptr);
                     SDL_EndGPURenderPass(pass);
-                    render->BeginFrame(commandBuffer, swapchain, sw, sh);
-                    gameUi->Render();
-                    render->EndFrame();
+                    if (render && gameUi)
+                    {
+                        render->BeginFrame(commandBuffer, swapchain, sw, sh);
+                        gameUi->Render();
+                        render->EndFrame();
+                    }
                     SDL_SubmitGPUCommandBuffer(commandBuffer);
                 }
                 else
@@ -501,11 +524,14 @@ int PlayerApplication::Run()
     {
         audioPlayback->Stop();
     }
-    gameUi->Shutdown();
-    gameUi.reset();
-    Rml::Shutdown();
-    render->Shutdown();
-    render.reset();
+    if (gameUi)
+    {
+        gameUi->Shutdown();
+        gameUi.reset();
+        Rml::Shutdown();
+        render->Shutdown();
+        render.reset();
+    }
     system.reset();
     file.reset();
     viewport.reset();
