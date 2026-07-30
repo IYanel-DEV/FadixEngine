@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "id": "d0000000-0000-4000-8000-000000000001",
   "name": "TinyGame",
-  "engineVersion": "0.9.129",
+  "engineVersion": "0.9.130",
   "template": "Empty3D",
   "defaultScene": "Scenes/Main.scene",
   "folders": {
