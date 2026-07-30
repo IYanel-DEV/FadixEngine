@@ -34,13 +34,13 @@ struct LauncherUpdate
 };
 
 constexpr std::array<LauncherUpdate, 2> News{{
-    {"CURRENT RELEASE", "Fadix 0.9.129 is here",
-        "Adds a Windows-compiled ImGui pipeline for legacy DXBC-only laptop GPUs."},
+    {"CURRENT RELEASE", "Fadix 0.9.130 is here",
+        "Adds automatic Direct3D 11 fallback for older Windows laptop GPUs."},
     {"EDITOR UPDATE", "Build worlds with less friction",
         "New collision tools, character physics, improved lighting and the advanced FXS Editor."},
 }};
 
-constexpr std::array<LauncherUpdate, 10> DevLog{{
+constexpr std::array<LauncherUpdate, 11> DevLog{{
     {"0.8.291", "First editor foundation",
         "Project creation, a basic scene viewport and the first entity workflow."},
     {"0.8.404", "Projects and scene saving",
@@ -59,8 +59,10 @@ constexpr std::array<LauncherUpdate, 10> DevLog{{
         "FBX, GLB and glTF importing, external file drops and multiple scene assets."},
     {"0.9.104", "World and editor polish",
         "Sun and moon cycle, persistent settings, hierarchy icons and improved gizmos."},
-    {"0.9.129  CURRENT", "Legacy ImGui compatibility",
+    {"0.9.129", "Legacy ImGui compatibility",
         "Bypasses converted ImGui shader blobs on older Intel and NVIDIA D3D12 drivers."},
+    {"0.9.130  CURRENT", "Direct3D 11 compatibility",
+        "Automatically falls back from unreliable D3D12 drivers and keeps the editor usable."},
 }};
 
 [[nodiscard]] std::vector<std::byte> MakeToneWave(
