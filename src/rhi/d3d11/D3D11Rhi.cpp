@@ -708,7 +708,7 @@ D3D11Device::D3D11Device(void* sdlWindow) : m_Impl(std::make_unique<Impl>())
     DXGI_SWAP_CHAIN_DESC1 swapDescription{};
     swapDescription.Width = static_cast<UINT>(std::max(width, 1));
     swapDescription.Height = static_cast<UINT>(std::max(height, 1));
-    swapDescription.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    swapDescription.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     swapDescription.SampleDesc.Count = 1;
     swapDescription.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     swapDescription.BufferCount = 2;
