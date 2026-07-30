@@ -72,14 +72,24 @@ std::vector<std::byte> CompileShader(
     {
         compatibleSource.assign(reinterpret_cast<const char*>(source.data()), source.size());
         std::size_t position = 0;
-        while ((position = compatibleSource.find(", space", position)) != std::string::npos)
+        while ((position = compatibleSource.find("register(", position)) != std::string::npos)
         {
             const std::size_t closing = compatibleSource.find(')', position);
             if (closing == std::string::npos)
             {
                 break;
             }
-            compatibleSource.erase(position, closing - position);
+            const std::size_t space = compatibleSource.find(", space", position);
+            if (space != std::string::npos && space < closing)
+            {
+                compatibleSource.erase(space, closing - space);
+            }
+            position = compatibleSource.find(')', position);
+            if (position == std::string::npos)
+            {
+                break;
+            }
+            ++position;
         }
         compileData = compatibleSource.data();
         compileSize = compatibleSource.size();
