@@ -1,5 +1,8 @@
 #ifdef _WIN32
 
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+
 #include "rhi/d3d11/D3D11Rhi.hpp"
 
 #include <SDL3/SDL.h>
