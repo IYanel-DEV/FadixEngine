@@ -21,6 +21,9 @@
 #include "engine/rhi/Shader.hpp"
 #include "engine/rhi/Texture.hpp"
 #include "engine/rhi/Types.hpp"
+#ifdef _WIN32
+#include "rhi/d3d11/D3D11Rhi.hpp"
+#endif
 
 #include <SDL3/SDL.h>
 
@@ -244,6 +247,13 @@ int main(const int argc, char** argv)
                     commands->End();
                     device->Submit(*commands);
                     device->WaitIdle();
+#ifdef _WIN32
+                    if (auto* d3d11 = rhi::d3d11::AsD3D11Device(*device); d3d11 != nullptr)
+                    {
+                        d3d11->PresentTexture(post.OutputTexture(), false);
+                        std::printf("D3D11 final output presented OK\n");
+                    }
+#endif
                     std::printf("tone-map/copy path recorded %d pass(es)\n", post.LastPassCount());
                     if (post.LastPassCount() <= 0)
                     {
