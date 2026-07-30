@@ -669,6 +669,26 @@ D3D11Device::D3D11Device(void* sdlWindow) : m_Impl(std::make_unique<Impl>())
     }
     if (FAILED(result))
     {
+        m_Impl->Device.Reset();
+        m_Impl->Context.Reset();
+        result = D3D11CreateDevice(
+            nullptr,
+            D3D_DRIVER_TYPE_WARP,
+            nullptr,
+            flags,
+            levels.data() + 1,
+            static_cast<UINT>(levels.size() - 1),
+            D3D11_SDK_VERSION,
+            &m_Impl->Device,
+            &selected,
+            &m_Impl->Context);
+        if (SUCCEEDED(result))
+        {
+            SDL_Log("[Fadix] Hardware D3D11 unavailable; using built-in WARP renderer");
+        }
+    }
+    if (FAILED(result))
+    {
         throw std::runtime_error(HrError("D3D11CreateDevice", result));
     }
 

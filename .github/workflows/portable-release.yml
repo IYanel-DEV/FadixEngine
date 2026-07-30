@@ -38,6 +38,13 @@ jobs:
       - name: Build GPU compatibility preflight
         run: cmake --build .build/release-cmake --config Release --target fadix_gpu_pipeline_smoke --parallel 1
 
+      - name: Run D3D11 GPU compatibility preflight
+        shell: pwsh
+        env:
+          FADIX_RENDERER: d3d11
+          SDL_AUDIODRIVER: dummy
+        run: ./bin/Release/fadix_gpu_pipeline_smoke.exe
+
       - name: Build portable editor
         run: cmake --build .build/release-cmake --config Release --target fadix_editor --parallel 1
 

@@ -52,11 +52,14 @@ int CheckViewportLitPipeline(fadix::rhi::Device& device)
     {
         const std::vector<std::byte> src = render::ReadShaderSource("viewport.hlsl");
         const std::vector<std::byte> vsCode =
-            render::CompileShader(src, "VertexMain", "vs_5_1", "viewport.hlsl");
+            render::CompileShader(
+                src, "VertexMain", device.ShaderTarget(false), "viewport.hlsl");
         const std::vector<std::byte> psCode =
-            render::CompileShader(src, "FragmentMain", "ps_5_1", "viewport.hlsl");
+            render::CompileShader(
+                src, "FragmentMain", device.ShaderTarget(true), "viewport.hlsl");
         auto vs = device.CreateShader({"VertexMain", "viewport_vertex", 0, 3}, vsCode);
-        auto ps = device.CreateShader({"FragmentMain", "viewport_fragment_lit", 8, 1}, psCode);
+        auto ps = device.CreateShader(
+            {"FragmentMain", "viewport_fragment_lit", 8, 2, 3}, psCode);
         if (!vs)
         {
             std::fprintf(stderr, "FAIL: viewport VS: %s\n", vs.ErrorMessage().c_str());
