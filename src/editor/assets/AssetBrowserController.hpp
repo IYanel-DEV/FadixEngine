@@ -84,6 +84,7 @@ public:
     void SetSearch(std::string search);
     [[nodiscard]] std::string_view Search() const noexcept;
     [[nodiscard]] Result<void> OpenFolder(const std::filesystem::path& folder);
+    [[nodiscard]] Result<void> NavigateHome();
     [[nodiscard]] Result<void> NavigateUp();
     [[nodiscard]] const std::filesystem::path& CurrentFolder() const noexcept;
     [[nodiscard]] std::string CurrentFolderDisplay() const;

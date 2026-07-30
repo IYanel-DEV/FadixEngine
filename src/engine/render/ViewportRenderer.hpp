@@ -152,5 +152,8 @@ public:
     }
 
     [[nodiscard]] virtual RenderDiagnostics Diagnostics() const { return {}; }
+
+    // Appended to preserve the slot order of existing renderer binaries.
+    virtual void SetGroundGridEnabled(bool /*enabled*/) noexcept {}
 };
 }

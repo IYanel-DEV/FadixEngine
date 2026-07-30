@@ -514,6 +514,15 @@ void ContentBrowserPanel::DrainPendingExternalImports(EditorUiState& ui)
 
 void ContentBrowserPanel::DrawToolbar(EditorUiState& ui)
 {
+    if (ImGui::Button(FADIX_ICON_FOLDER " Assets"))
+    {
+        if (const Result<void> opened = m_Browser->NavigateHome(); !opened)
+        {
+            Error(opened.ErrorMessage(), ui);
+        }
+        m_Selected.reset();
+    }
+    ImGui::SameLine();
     if (ImGui::Button(FADIX_ICON_FOLDER " Up"))
     {
         static_cast<void>(m_Browser->NavigateUp());
@@ -671,6 +680,12 @@ void ContentBrowserPanel::DrawContextMenu(
         {
             m_Callbacks.RevealPath(entry.Path);
         }
+    }
+    if (ImGui::MenuItem("Copy Path"))
+    {
+        const std::string path = entry.Path.string();
+        ImGui::SetClipboardText(path.c_str());
+        Status("Copied asset path", ui);
     }
     if (ImGui::MenuItem("Delete"))
     {

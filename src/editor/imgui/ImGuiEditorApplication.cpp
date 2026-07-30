@@ -1154,6 +1154,13 @@ void ImGuiEditorApplication::ProcessCommands()
         OpenScenePath(m_Ui.ScenePathBuf);
     }
 
+    if (m_Ui.RequestOpenScenePath)
+    {
+        m_PendingSceneAsset = std::move(*m_Ui.RequestOpenScenePath);
+        m_Ui.RequestOpenScenePath.reset();
+        RequestWithConfirm(PendingConfirmAction::OpenSceneAsset);
+    }
+
     if (m_Ui.SaveScenePathReady)
     {
         m_Ui.SaveScenePathReady = false;
