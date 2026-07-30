@@ -33,6 +33,7 @@ enum class ViewportDebugView : std::uint8_t
     CascadeColors,
     Ao,
     MotionVectors,
+    LightTiles, // Forward+ per-tile point-light count heatmap
 };
 
 class IAssetDatabase;
@@ -70,8 +71,10 @@ struct RenderDiagnostics
     int InternalHeight{0};
     int DrawCalls{0};
     int VisibleMeshes{0};
-    int ActivePointLights{0};
+    int ActivePointLights{0}; // point lights uploaded to the Forward+ buffer
     int ActiveSpotLights{0};
+    int TotalPointLights{0};  // point lights in the scene before any cap
+    int TotalSpotLights{0};   // spot lights in the scene before the 8-light cap
     int ShadowedLights{0};
     int ShadowPasses{0};
     int ActiveCascades{0};
@@ -149,5 +152,8 @@ public:
     }
 
     [[nodiscard]] virtual RenderDiagnostics Diagnostics() const { return {}; }
+
+    // Appended to preserve the slot order of existing renderer binaries.
+    virtual void SetGroundGridEnabled(bool /*enabled*/) noexcept {}
 };
 }

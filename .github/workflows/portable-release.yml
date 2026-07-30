@@ -1,0 +1,77 @@
+name: Portable Windows Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ dev ]
+    paths:
+      - .github/workflows/portable-release.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portable-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Configure portable Release
+        run: >
+          cmake -S . -B .build/release-cmake
+          -DFADIX_ENABLE_PHYSICS=ON
+          -DFADIX_PORTABLE_BUILD=ON
+          -DFADIX_STATIC_MSVC_RUNTIME=ON
+
+      # EmbeddedAssets.hpp is intentionally compiled serially. Building several
+      # copies at once consumes enough RAM to make lower-end PCs unresponsive.
+      - name: Build GPU compatibility preflight
+        run: cmake --build .build/release-cmake --config Release --target fadix_gpu_pipeline_smoke --parallel 1
+
+      - name: Run D3D11 GPU compatibility preflight
+        shell: pwsh
+        env:
+          FADIX_RENDERER: d3d11
+          SDL_AUDIODRIVER: dummy
+        run: ./bin/Release/fadix_gpu_pipeline_smoke.exe
+
+      - name: Build portable editor
+        run: cmake --build .build/release-cmake --config Release --target fadix_editor --parallel 1
+
+      - name: Build portable player
+        run: cmake --build .build/release-cmake --config Release --target fadix_player --parallel 1
+
+      - name: Verify embedded assets
+        shell: pwsh
+        run: |
+          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP 'fadix-portable-cache'
+          & ./bin/Release/fadix_portable_assets_smoke.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./bin/Release/fadix_portable_assets_smoke.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package executables
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+          Copy-Item bin/Release/fadix_editor.exe artifacts/FadixEngine-0.9.130-Windows-x64.exe
+          Copy-Item bin/Release/fadix_player.exe artifacts/FadixPlayer-0.9.130-Windows-x64.exe
+          Get-FileHash artifacts/*.exe -Algorithm SHA256 | Format-Table -AutoSize
+
+      - name: Upload portable executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: FadixEngine-0.9.130-Windows-x64
+          path: artifacts/*.exe
+          if-no-files-found: error
+          retention-days: 14

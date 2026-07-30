@@ -1,5 +1,7 @@
 #include "project/ProjectService.hpp"
 
+#include "assets/EmbeddedAssetProvider.hpp"
+
 #include "engine/Version.hpp"
 
 #include "project/ProjectJson.hpp"
@@ -396,13 +398,25 @@ std::filesystem::path ProjectService::DefaultProjectsDirectory()
 
 std::filesystem::path ProjectService::TemplateDirectory(const ProjectTemplate projectTemplate)
 {
-    const char* folder = projectTemplate == ProjectTemplate::Empty2D ? "empty_2d" : "empty_3d";
-    return std::filesystem::path{FADIX_ASSET_ROOT} / "templates" / folder;
+    const char* folder = "empty_3d";
+    switch (projectTemplate)
+    {
+    case ProjectTemplate::Empty2D: folder = "empty_2d"; break;
+    case ProjectTemplate::Empty3D: folder = "empty_3d"; break;
+    case ProjectTemplate::TinyGame: folder = "tiny_game"; break;
+    }
+    return RuntimeAssetRoot() / "templates" / folder;
 }
 
 std::string ProjectService::TemplateToString(const ProjectTemplate value)
 {
-    return value == ProjectTemplate::Empty2D ? "Empty2D" : "Empty3D";
+    switch (value)
+    {
+    case ProjectTemplate::Empty2D: return "Empty2D";
+    case ProjectTemplate::TinyGame: return "TinyGame";
+    case ProjectTemplate::Empty3D: return "Empty3D";
+    }
+    return "Empty3D";
 }
 
 std::optional<ProjectTemplate> ProjectService::TemplateFromString(const std::string_view text)
@@ -410,6 +424,10 @@ std::optional<ProjectTemplate> ProjectService::TemplateFromString(const std::str
     if (text == "Empty2D" || text == "empty_2d" || text == "2d")
     {
         return ProjectTemplate::Empty2D;
+    }
+    if (text == "TinyGame" || text == "tiny_game" || text == "tinygame")
+    {
+        return ProjectTemplate::TinyGame;
     }
     if (text == "Empty3D" || text == "empty_3d" || text == "3d")
     {
@@ -742,6 +760,11 @@ Result<ProjectMetadata> ProjectService::ReadProjectFile(const std::filesystem::p
     {
         return Result<ProjectMetadata>::Error("project.fadix is not valid JSON");
     }
+    if (auto versionError = project_json::CheckFormatVersion(
+            *json, "formatVersion", project_json::kProjectFormatVersion, "project.fadix"))
+    {
+        return Result<ProjectMetadata>::Error(std::move(*versionError));
+    }
 
     ProjectMetadata metadata;
     metadata.ProjectFile = std::filesystem::weakly_canonical(projectFile, error);
@@ -813,6 +836,7 @@ Result<ProjectMetadata> ProjectService::ReadProjectFile(const std::filesystem::p
 Result<void> ProjectService::WriteProjectFile(const ProjectMetadata& metadata) const
 {
     project_json::Value root = project_json::Value::MakeObject();
+    root["formatVersion"] = project_json::Value::MakeNumber(project_json::kProjectFormatVersion);
     root["id"] = project_json::Value::MakeString(metadata.Id.ToString());
     root["name"] = project_json::Value::MakeString(metadata.Name);
     root["engineVersion"] = project_json::Value::MakeString(std::string{EngineVersion});

@@ -24,6 +24,8 @@ public:
         std::function<void(const std::string&)> log = nullptr);
 
     [[nodiscard]] const GltfMeshAsset* Get(const AssetHandle& handle) const;
+    // Mutable access for in-editor clip authoring (FDX Animation adds/edits clips).
+    [[nodiscard]] GltfMeshAsset* GetMutable(const AssetHandle& handle);
     void SetAssetDatabase(class IAssetDatabase* database) noexcept { m_Database = database; }
     [[nodiscard]] std::optional<CollisionMeshView> CollisionMesh(
         const AssetHandle& handle) override;

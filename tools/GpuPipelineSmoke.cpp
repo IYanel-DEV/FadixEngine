@@ -21,6 +21,9 @@
 #include "engine/rhi/Shader.hpp"
 #include "engine/rhi/Texture.hpp"
 #include "engine/rhi/Types.hpp"
+#ifdef _WIN32
+#include "rhi/d3d11/D3D11Rhi.hpp"
+#endif
 
 #include <SDL3/SDL.h>
 
@@ -52,11 +55,14 @@ int CheckViewportLitPipeline(fadix::rhi::Device& device)
     {
         const std::vector<std::byte> src = render::ReadShaderSource("viewport.hlsl");
         const std::vector<std::byte> vsCode =
-            render::CompileShader(src, "VertexMain", "vs_5_1", "viewport.hlsl");
+            render::CompileShader(
+                src, "VertexMain", device.ShaderTarget(false), "viewport.hlsl");
         const std::vector<std::byte> psCode =
-            render::CompileShader(src, "FragmentMain", "ps_5_1", "viewport.hlsl");
+            render::CompileShader(
+                src, "FragmentMain", device.ShaderTarget(true), "viewport.hlsl");
         auto vs = device.CreateShader({"VertexMain", "viewport_vertex", 0, 3}, vsCode);
-        auto ps = device.CreateShader({"FragmentMain", "viewport_fragment_lit", 8, 1}, psCode);
+        auto ps = device.CreateShader(
+            {"FragmentMain", "viewport_fragment_lit", 8, 2, 3}, psCode);
         if (!vs)
         {
             std::fprintf(stderr, "FAIL: viewport VS: %s\n", vs.ErrorMessage().c_str());
@@ -241,6 +247,13 @@ int main(const int argc, char** argv)
                     commands->End();
                     device->Submit(*commands);
                     device->WaitIdle();
+#ifdef _WIN32
+                    if (auto* d3d11 = rhi::d3d11::AsD3D11Device(*device); d3d11 != nullptr)
+                    {
+                        d3d11->PresentTexture(post.OutputTexture(), false);
+                        std::printf("D3D11 final output presented OK\n");
+                    }
+#endif
                     std::printf("tone-map/copy path recorded %d pass(es)\n", post.LastPassCount());
                     if (post.LastPassCount() <= 0)
                     {

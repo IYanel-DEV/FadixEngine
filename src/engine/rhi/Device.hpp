@@ -52,5 +52,10 @@ public:
     {
         return true;
     }
+
+    [[nodiscard]] virtual const char* ShaderTarget(bool fragment) const noexcept
+    {
+        return fragment ? "ps_5_1" : "vs_5_1";
+    }
 };
 }

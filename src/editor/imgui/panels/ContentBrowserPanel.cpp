@@ -6,6 +6,8 @@
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
 
+#include <glm/vec3.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -60,6 +62,14 @@ namespace
     if (entry.AssetType == "Audio")
     {
         return FADIX_ICON_FILE;
+    }
+    if (entry.AssetType == "Animation")
+    {
+        return FADIX_ICON_FILM;
+    }
+    if (entry.AssetType == "AnimatorController")
+    {
+        return FADIX_ICON_SITEMAP;
     }
     return FADIX_ICON_FILE;
 }
@@ -373,6 +383,13 @@ void ContentBrowserPanel::ApplySceneDrop(const AssetDragPayload& payload, SceneE
     {
         static_cast<void>(scene->AssignScript(payload.Handle));
     }
+    else if (payload.AssetType == "Prefab")
+    {
+        if (const auto id = scene->InstantiatePrefab(payload.SourcePath, glm::vec3{0.0F}))
+        {
+            scene->SetSelection(id, true);
+        }
+    }
 }
 
 void ContentBrowserPanel::ImportPath(const std::filesystem::path& path, EditorUiState& ui)
@@ -497,6 +514,15 @@ void ContentBrowserPanel::DrainPendingExternalImports(EditorUiState& ui)
 
 void ContentBrowserPanel::DrawToolbar(EditorUiState& ui)
 {
+    if (ImGui::Button(FADIX_ICON_FOLDER " Assets"))
+    {
+        if (const Result<void> opened = m_Browser->NavigateHome(); !opened)
+        {
+            Error(opened.ErrorMessage(), ui);
+        }
+        m_Selected.reset();
+    }
+    ImGui::SameLine();
     if (ImGui::Button(FADIX_ICON_FOLDER " Up"))
     {
         static_cast<void>(m_Browser->NavigateUp());
@@ -654,6 +680,12 @@ void ContentBrowserPanel::DrawContextMenu(
         {
             m_Callbacks.RevealPath(entry.Path);
         }
+    }
+    if (ImGui::MenuItem("Copy Path"))
+    {
+        const std::string path = entry.Path.string();
+        ImGui::SetClipboardText(path.c_str());
+        Status("Copied asset path", ui);
     }
     if (ImGui::MenuItem("Delete"))
     {

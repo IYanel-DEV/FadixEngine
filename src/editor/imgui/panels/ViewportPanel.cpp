@@ -7,6 +7,7 @@
 #include "engine/scene/IWorld.hpp"
 #include "render/ViewportRendererFactory.hpp"
 #include "rhi/sdl/SdlRhi.hpp"
+#include "runtime/AnimationRuntime.hpp"
 #include "runtime/Components.hpp"
 
 #include <SDL3/SDL.h>
@@ -18,12 +19,13 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <vector>
 
 namespace fadix::editor
 {
 namespace
 {
-constexpr std::array<const char*, 10> kDebugViewLabels{
+constexpr std::array<const char*, 11> kDebugViewLabels{
     "None",
     "Base Color",
     "Normals",
@@ -33,7 +35,8 @@ constexpr std::array<const char*, 10> kDebugViewLabels{
     "Depth",
     "Cascade Colors (Experimental)",
     "AO (Experimental)",
-    "Motion Vectors (Experimental)"};
+    "Motion Vectors (Experimental)",
+    "Light Tiles (Forward+)"};
 }
 namespace
 {
@@ -43,7 +46,7 @@ namespace
     {
         return {};
     }
-    auto* native = static_cast<SDL_GPUTexture*>(GetNativeTextureHandle(*color));
+    void* native = GetNativeTextureHandle(*color);
     return ImTextureRef{static_cast<ImTextureID>(reinterpret_cast<intptr_t>(native))};
 }
 
@@ -118,6 +121,20 @@ struct RayPlaneHit
     default: return GizmoMode::Select;
     }
 }
+
+template <typename Component>
+void SyncPreviewComponent(const entt::registry& source, const entt::entity sourceEntity,
+    entt::registry& preview, const entt::entity previewEntity)
+{
+    if (const Component* value = source.try_get<Component>(sourceEntity))
+    {
+        preview.emplace_or_replace<Component>(previewEntity, *value);
+    }
+    else
+    {
+        preview.remove<Component>(previewEntity);
+    }
+}
 }
 
 void ViewportPanel::Initialize(rhi::Device& device, IAssetDatabase& assets)
@@ -125,6 +142,7 @@ void ViewportPanel::Initialize(rhi::Device& device, IAssetDatabase& assets)
     Shutdown();
     m_Scene.Renderer = CreateViewportRenderer(device, assets);
     m_Game.Renderer = CreateViewportRenderer(device, assets);
+    m_Animation.Renderer = CreateViewportRenderer(device, assets);
     if (m_Scene.Renderer)
     {
         m_Scene.Picking = CreateViewportPicking(*m_Scene.Renderer);
@@ -133,8 +151,10 @@ void ViewportPanel::Initialize(rhi::Device& device, IAssetDatabase& assets)
     // A persisted graphics.json may override these afterwards.
     m_Scene.Preset = RenderQualityPreset::Low;
     m_Game.Preset = RenderQualityPreset::High;
+    m_Animation.Preset = RenderQualityPreset::Low;
     ApplyQuality(m_Scene);
     ApplyQuality(m_Game);
+    ApplyQuality(m_Animation);
 }
 
 void ViewportPanel::ApplyQuality(View& view)
@@ -161,6 +181,10 @@ void ViewportPanel::SetGraphicsPreferences(const GraphicsPreferences& prefs)
     {
         m_Game.Renderer->SetAntiAliasOverride(prefs.AaOverride);
     }
+    if (m_Animation.Renderer)
+    {
+        m_Animation.Renderer->SetAntiAliasOverride(prefs.AaOverride);
+    }
 }
 
 void ViewportPanel::SetSceneQuality(const RenderQualityPreset preset)
@@ -185,6 +209,17 @@ void ViewportPanel::ResetTemporalHistory() noexcept
     {
         m_Game.Renderer->ResetTemporalHistory();
     }
+    if (m_Animation.Renderer)
+    {
+        m_Animation.Renderer->ResetTemporalHistory();
+    }
+}
+
+void ViewportPanel::ResetSceneCamera(CameraModule& camera) noexcept
+{
+    camera.Camera() = WorkbenchCamera{};
+    camera.Input().Reset();
+    ResetTemporalHistory();
 }
 
 std::optional<RenderDiagnostics> ViewportPanel::FocusedViewportDiagnostics() const noexcept
@@ -213,6 +248,10 @@ void ViewportPanel::Shutdown() noexcept
 {
     m_Scene = {};
     m_Game = {};
+    m_Animation = {};
+    m_AnimationWorld.reset();
+    m_AnimationSourceWorld = nullptr;
+    m_AnimationTarget.reset();
     m_GizmoDragging = false;
     m_GizmoHover.reset();
     m_GizmoStartTransform.reset();
@@ -229,6 +268,10 @@ void ViewportPanel::SetGltfMeshCache(GltfMeshCache* cache)
     {
         m_Game.Renderer->SetGltfMeshCache(cache);
     }
+    if (m_Animation.Renderer)
+    {
+        m_Animation.Renderer->SetGltfMeshCache(cache);
+    }
 }
 
 void ViewportPanel::SetAssetDatabase(IAssetDatabase& assets)
@@ -240,6 +283,10 @@ void ViewportPanel::SetAssetDatabase(IAssetDatabase& assets)
     if (m_Game.Renderer)
     {
         m_Game.Renderer->SetAssetDatabase(assets);
+    }
+    if (m_Animation.Renderer)
+    {
+        m_Animation.Renderer->SetAssetDatabase(assets);
     }
 }
 
@@ -262,10 +309,19 @@ void ViewportPanel::RenderTargets(
     const bool playing,
     const float deltaSeconds)
 {
+    // Runtime animation advances once before Scene and Game render the shared world.
+    // Stopped authoring objects stay untouched; FDX preview uses its private world below.
+    if (ViewportRenderer* animRenderer =
+            m_Scene.Renderer ? m_Scene.Renderer.get() : m_Game.Renderer.get())
+    {
+        animRenderer->UpdateAnimations(world, deltaSeconds);
+    }
+
     if (m_Scene.Visible && m_Scene.Renderer && m_Scene.PixelW > 0 && m_Scene.PixelH > 0)
     {
         EnsureSize(m_Scene);
         m_Scene.Renderer->SetEditorVisualsEnabled(!playing);
+        m_Scene.Renderer->SetGroundGridEnabled(!playing && m_ShowGroundGrid);
         m_Scene.Renderer->SetCollisionVisualizationEnabled(!playing && m_ShowCollisionShapes);
         m_Scene.Renderer->SetViewportDebugView(m_DebugView);
         m_Scene.Renderer->SetSimDelta(deltaSeconds);
@@ -289,6 +345,168 @@ void ViewportPanel::RenderTargets(
         m_Game.Renderer->SetSelection(std::nullopt);
         m_Game.Renderer->SetCamera(camera.GameCamera()->View, camera.GameCamera()->Projection);
         m_Game.Renderer->DrawWorld(world);
+    }
+
+    if (m_Animation.Visible && m_Animation.Renderer && m_Animation.PixelW > 0 &&
+        m_Animation.PixelH > 0 && m_AnimationTarget && m_AnimationWorld)
+    {
+        EnsureSize(m_Animation);
+        m_Animation.Renderer->UpdateAnimations(*m_AnimationWorld, 0.0F);
+        m_Animation.Renderer->SetEditorVisualsEnabled(false);
+        m_Animation.Renderer->SetCollisionVisualizationEnabled(false);
+        m_Animation.Renderer->SetViewportDebugView(ViewportDebugView::None);
+        m_Animation.Renderer->SetSimDelta(0.0F);
+        m_Animation.Renderer->SetGizmo({});
+        m_Animation.Renderer->SetMeshPreview(std::nullopt);
+        m_Animation.Renderer->SetSelection(m_AnimationTarget);
+
+        const float cosPitch = std::cos(m_AnimationPitch);
+        const glm::vec3 direction{
+            cosPitch * std::sin(m_AnimationYaw),
+            std::sin(m_AnimationPitch),
+            cosPitch * std::cos(m_AnimationYaw)};
+        const glm::vec3 eye = m_AnimationCenter + direction * m_AnimationDistance;
+        const float aspect = m_Animation.LogicalW / std::max(m_Animation.LogicalH, 1.0F);
+        const glm::mat4 view = glm::lookAtRH(eye, m_AnimationCenter, glm::vec3{0.0F, 1.0F, 0.0F});
+        const glm::mat4 projection =
+            glm::perspectiveRH_ZO(glm::radians(45.0F), aspect, 0.05F, 2000.0F);
+        m_Animation.Renderer->SetCamera(view, projection);
+        m_Animation.Renderer->DrawWorld(*m_AnimationWorld);
+    }
+}
+
+void ViewportPanel::DrawAnimationPreview(
+    IWorld& world, const std::optional<Uuid> target, const float height,
+    const float skeletalTime, const float transformTime)
+{
+    m_Animation.Visible = target.has_value() && m_Animation.Renderer != nullptr;
+    if (target != m_AnimationTarget || m_AnimationSourceWorld != &world)
+    {
+        m_AnimationSourceWorld = &world;
+        m_AnimationTarget = target;
+        m_AnimationWorld.reset();
+        m_AnimationYaw = 0.65F;
+        m_AnimationPitch = 0.25F;
+        m_AnimationDistance = 6.0F;
+        m_AnimationCenter = {0.0F, 0.0F, 0.0F};
+
+        if (target && world.Find(*target))
+        {
+            m_AnimationWorld = world.Clone();
+            entt::registry& preview = m_AnimationWorld->Registry();
+            std::vector<entt::entity> remove;
+            for (const auto [entity, uuid] : preview.view<const UuidComponent>().each())
+            {
+                if (uuid.Id != *target)
+                {
+                    remove.push_back(entity);
+                }
+            }
+            for (const entt::entity entity : remove)
+            {
+                preview.destroy(entity);
+            }
+
+            const entt::entity environmentEntity = m_AnimationWorld->Create();
+            EnvironmentComponent environment;
+            environment.Primary = true;
+            environment.Priority = 1000;
+            environment.SkyZenithColor = {0.16F, 0.48F, 0.88F};
+            environment.SkyHorizonColor = {0.72F, 0.86F, 1.0F};
+            environment.GroundColor = {0.30F, 0.34F, 0.26F};
+            environment.AmbientColor = {0.78F, 0.82F, 0.88F};
+            environment.AmbientIntensity = 1.25F;
+            environment.Exposure = 1.15F;
+            environment.FogEnabled = false;
+            preview.emplace<EnvironmentComponent>(environmentEntity, environment);
+
+            const entt::entity sunEntity = m_AnimationWorld->Create();
+            const glm::quat sunRotation =
+                glm::quat{glm::radians(glm::vec3{-55.0F, -35.0F, 0.0F})};
+            preview.emplace<TransformComponent>(sunEntity,
+                TransformComponent{{4.0F, 8.0F, 4.0F}, sunRotation});
+            DirectionalLightComponent sun = MakeSunLight();
+            sun.Intensity = 4.5F;
+            preview.emplace<DirectionalLightComponent>(sunEntity, sun);
+        }
+    }
+
+    if (target && m_AnimationWorld)
+    {
+        const std::optional<entt::entity> sourceEntity = world.Find(*target);
+        const std::optional<entt::entity> previewEntity = m_AnimationWorld->Find(*target);
+        if (sourceEntity && previewEntity)
+        {
+            const entt::registry& source = world.Registry();
+            entt::registry& preview = m_AnimationWorld->Registry();
+            SyncPreviewComponent<TransformComponent>(source, *sourceEntity, preview, *previewEntity);
+            SyncPreviewComponent<MeshComponent>(source, *sourceEntity, preview, *previewEntity);
+            SyncPreviewComponent<SkeletonComponent>(source, *sourceEntity, preview, *previewEntity);
+            SyncPreviewComponent<AnimatorComponent>(source, *sourceEntity, preview, *previewEntity);
+            SyncPreviewComponent<TransformAnimatorComponent>(
+                source, *sourceEntity, preview, *previewEntity);
+            preview.remove<RelationshipComponent>(*previewEntity);
+            preview.remove<EnvironmentComponent>(*previewEntity);
+            preview.remove<DirectionalLightComponent>(*previewEntity);
+            preview.remove<PointLightComponent>(*previewEntity);
+            preview.remove<SpotLightComponent>(*previewEntity);
+            preview.emplace_or_replace<VisibilityComponent>(*previewEntity, VisibilityComponent{});
+
+            if (auto* animator = preview.try_get<AnimatorComponent>(*previewEntity))
+            {
+                animator->CurrentTime = skeletalTime;
+                animator->Playing = true;
+            }
+            if (auto* transform = preview.try_get<TransformComponent>(*previewEntity))
+            {
+                const glm::vec3 sourcePosition = transform->Position;
+                if (auto* animator = preview.try_get<TransformAnimatorComponent>(*previewEntity))
+                {
+                    animator->CurrentTime = transformTime;
+                    animator->Playing = false;
+                    if (const AnimationClipAsset* clip = FindTransformClip(*animator))
+                    {
+                        ApplyTransformClip(*clip, transformTime, *transform);
+                    }
+                }
+                transform->Position -= sourcePosition;
+            }
+        }
+    }
+
+    if (ImGui::SmallButton("Frame Selected##AnimationPreview"))
+    {
+        m_AnimationCenter = {0.0F, 0.0F, 0.0F};
+        m_AnimationDistance = 6.0F;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("RMB orbit  |  wheel zoom");
+
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float dpi = std::max(ImGui::GetIO().DisplayFramebufferScale.x, 0.01F);
+    m_Animation.LogicalW = std::max(avail.x, 1.0F);
+    m_Animation.LogicalH = std::max(height, 1.0F);
+    const float render = dpi * std::clamp(m_Animation.Quality.ResolutionScale, 0.1F, 1.0F);
+    m_Animation.PixelW = static_cast<std::uint32_t>(
+        std::max<long>(std::lround(m_Animation.LogicalW * render), 1));
+    m_Animation.PixelH = static_cast<std::uint32_t>(
+        std::max<long>(std::lround(m_Animation.LogicalH * render), 1));
+    DrawViewImage(m_Animation, target ? "Preparing animation preview..." : "Select an entity", true);
+
+    if (m_Animation.Hovered)
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        if (ImGui::IsMouseDragging(ImGuiMouseButton_Right))
+        {
+            m_AnimationYaw -= io.MouseDelta.x * 0.01F;
+            m_AnimationPitch =
+                std::clamp(m_AnimationPitch - io.MouseDelta.y * 0.01F, -1.45F, 1.45F);
+        }
+        if (io.MouseWheel != 0.0F)
+        {
+            m_AnimationDistance = std::clamp(
+                m_AnimationDistance * std::pow(0.85F, io.MouseWheel), 0.25F, 500.0F);
+        }
     }
 }
 
@@ -351,7 +569,10 @@ glm::vec2 ViewportPanel::MouseInViewPixels(const View& view) const
 }
 
 void ViewportPanel::DrawSceneToolbar(
-    EditorUiState& ui, GizmoSystem& gizmo, const EditorPlayMode playMode)
+    EditorUiState& ui,
+    CameraModule& camera,
+    GizmoSystem& gizmo,
+    const EditorPlayMode playMode)
 {
     static_cast<void>(gizmo);
     auto tool = [&](const char* label, const char* tip, const int id) {
@@ -381,6 +602,27 @@ void ViewportPanel::DrawSceneToolbar(
     if (ImGui::SmallButton(m_GizmoLocalSpace ? FADIX_ICON_CUBE " Local" : FADIX_ICON_GLOBE " World"))
     {
         m_GizmoLocalSpace = !m_GizmoLocalSpace;
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton(m_AlwaysSnap ? "Snap On" : "Snap"))
+    {
+        ImGui::OpenPopup("##GizmoSnap");
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Configure transform snapping");
+    }
+    if (ImGui::BeginPopup("##GizmoSnap"))
+    {
+        ImGui::Checkbox("Always snap", &m_AlwaysSnap);
+        ImGui::TextDisabled("Ctrl also snaps while dragging");
+        ImGui::DragFloat("Move", &m_GizmoSnap.Translation, 0.05F, 0.01F, 1000.0F, "%.2f",
+            ImGuiSliderFlags_AlwaysClamp);
+        ImGui::DragFloat("Rotate", &m_GizmoSnap.RotationDegrees, 1.0F, 1.0F, 180.0F, "%.0f deg",
+            ImGuiSliderFlags_AlwaysClamp);
+        ImGui::DragFloat("Scale", &m_GizmoSnap.Scale, 0.01F, 0.01F, 10.0F, "%.2f",
+            ImGuiSliderFlags_AlwaysClamp);
+        ImGui::EndPopup();
     }
     ImGui::SameLine();
     ImGui::TextUnformatted("|");
@@ -438,6 +680,23 @@ void ViewportPanel::DrawSceneToolbar(
     ImGui::SameLine();
     DrawQualityCombo(m_Scene, "##SceneQuality");
     ImGui::SameLine();
+    if (m_ShowGroundGrid)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+    }
+    if (ImGui::SmallButton(FADIX_ICON_GRID " Grid"))
+    {
+        m_ShowGroundGrid = !m_ShowGroundGrid;
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Show ground grid in Scene View");
+    }
+    if (m_ShowGroundGrid)
+    {
+        ImGui::PopStyleColor();
+    }
+    ImGui::SameLine();
     const bool collisionActive = ui.ShowCollisionShapes;
     if (collisionActive)
     {
@@ -466,6 +725,29 @@ void ViewportPanel::DrawSceneToolbar(
     if (ImGui::IsItemHovered())
     {
         ImGui::SetTooltip("Scene View debug visualization");
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("Speed");
+    ImGui::SameLine();
+    float flySpeed = camera.Camera().FlySpeed();
+    ImGui::SetNextItemWidth(72.0F);
+    if (ImGui::DragFloat("##CameraSpeed", &flySpeed, 0.1F, 0.01F, 10000.0F, "%.1f u/s"))
+    {
+        camera.Camera().SetFlySpeed(flySpeed);
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Scene camera fly speed\nRight-drag + mouse wheel also changes it");
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton(FADIX_ICON_CAMERA " Reset"))
+    {
+        ResetSceneCamera(camera);
+        ui.StatusText = "Reset scene camera";
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Reset the Scene View camera");
     }
 }
 
@@ -687,6 +969,7 @@ void ViewportPanel::Draw(
 
     m_Scene.Visible = false;
     m_Game.Visible = false;
+    m_Animation.Visible = false;
     m_Scene.Focused = false;
     m_Game.Focused = false;
 
@@ -696,7 +979,7 @@ void ViewportPanel::Draw(
         {
             m_Scene.Visible = true;
             m_Scene.Focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-            DrawSceneToolbar(ui, gizmo, playMode);
+            DrawSceneToolbar(ui, camera, gizmo, playMode);
             MeasureView(m_Scene, dpi);
             DrawViewImage(m_Scene, "Resize Scene View", true);
             // Per-cascade depth preview (debug only, Scene View only). Each active
@@ -842,10 +1125,19 @@ void ViewportPanel::HandleEvent(
 {
     const bool edit = playMode == EditorPlayMode::Edit;
     const bool sceneHovered = m_Scene.Visible && m_Scene.Hovered;
+    const bool sceneFocused = m_Scene.Visible && m_Scene.Focused;
     // Always forward events so KEY_UP / BUTTON_UP clear sticky WASD / look capture.
     // Hover=false when WantTextInput; EditorCameraInput still accepts releases / active nav.
     static_cast<void>(camera.Input().HandleEvent(
         event, sceneHovered && edit && !ImGui::GetIO().WantTextInput));
+
+    if (edit && sceneFocused && !ImGui::GetIO().WantTextInput &&
+        event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
+        event.key.scancode == SDL_SCANCODE_HOME)
+    {
+        ResetSceneCamera(camera);
+        return;
+    }
 
     // Keep gizmo drag alive when the cursor leaves the image mid-drag.
     if (!edit || !m_Scene.Visible || !m_Scene.Renderer || (!sceneHovered && !m_GizmoDragging))
@@ -867,8 +1159,8 @@ void ViewportPanel::HandleEvent(
     {
         if (m_GizmoDragging)
         {
-            GizmoSnap snap;
-            snap.Enabled = (SDL_GetModState() & SDL_KMOD_CTRL) != 0;
+            GizmoSnap snap = m_GizmoSnap;
+            snap.Enabled = m_AlwaysSnap || (SDL_GetModState() & SDL_KMOD_CTRL) != 0;
             gizmo.SetSnap(snap);
             static_cast<void>(gizmo.Update(editWorld, mouseRay()));
             document.Dirty = true;

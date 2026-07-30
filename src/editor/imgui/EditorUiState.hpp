@@ -3,6 +3,7 @@
 #include "engine/project/ProjectMetadata.hpp"
 #include "engine/render/ViewportRenderer.hpp"
 
+#include <filesystem>
 #include <optional>
 #include <string>
 
@@ -42,6 +43,8 @@ struct EditorUiState
     bool ShowOutput{false};
     bool ShowScriptEditor{true};
     bool ShowMaterialEditor{false};
+    bool ShowFdxAnimation{false};
+    bool FocusFdxAnimation{false}; // Inspector "Open FDX Animation" pops the tab to front
     bool ShowExport{false};
     bool ShowGraphicsWindow{false};
     ViewportDebugView SceneDebugView{ViewportDebugView::None};
@@ -64,6 +67,7 @@ struct EditorUiState
     bool RequestSaveScene{false};
     bool RequestSaveSceneAs{false};
     bool RequestSaveAll{false};
+    std::optional<std::filesystem::path> RequestOpenScenePath;
     bool RequestExitToProjectManager{false};
     bool RequestUndo{false};
     bool RequestRedo{false};

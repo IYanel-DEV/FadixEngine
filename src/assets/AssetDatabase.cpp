@@ -64,6 +64,14 @@ std::string AssetTypeFor(const std::filesystem::path& path)
     {
         return "Prefab";
     }
+    if (extension == ".fdxanim")
+    {
+        return "Animation";
+    }
+    if (extension == ".fdxcontroller")
+    {
+        return "AnimatorController";
+    }
     if (extension == ".lua" || extension == ".cpp" || extension == ".hpp")
     {
         return "Script";

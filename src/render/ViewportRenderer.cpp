@@ -6,6 +6,11 @@
 #include "engine/render/ViewportRenderer.hpp"
 #include "render/AssetResourceCache.hpp"
 #include "render/ParticleRenderer.hpp"
+#include "render/ForwardPlusLights.hpp"
+#include "render/ViewportGeometry.hpp"
+#include "render/ViewportGizmo.hpp"
+#include "render/ViewportMath.hpp"
+#include "render/ViewportUniforms.hpp"
 #include "render/ParticleSystem.hpp"
 #include "render/PostProcessing.h"
 #include "render/ShadowCascades.hpp"
@@ -26,6 +31,7 @@
 #include "engine/rhi/Texture.hpp"
 #include "engine/scene/IWorld.hpp"
 #include "rhi/sdl/SdlRhi.hpp"
+#include "runtime/AnimationRuntime.hpp"
 #include "runtime/Components.hpp"
 
 #include <glm/ext/matrix_clip_space.hpp>
@@ -62,152 +68,59 @@
 #include <utility>
 #include <vector>
 
-#ifndef FADIX_ASSET_ROOT
-#define FADIX_ASSET_ROOT "assets"
-#endif
-
 namespace fadix
 {
 namespace
 {
-struct Vertex
-{
-    glm::vec3 Position;
-    glm::vec3 Normal;
-    glm::vec4 Tangent;
-    glm::vec2 UV;
-    glm::vec4 Color;
-    glm::vec4 JointIndices{0.0F};
-    glm::vec4 JointWeights{0.0F};
-};
-static_assert(sizeof(Vertex) == 96);
+// Primitive mesh generation + the shared Vertex layout live in
+// ViewportGeometry.{hpp,cpp}. Bridge the names back into this anonymous
+// namespace so every existing call site (Vertex{...}, AppendCube(...), ...)
+// resolves unchanged.
+using viewport_geometry::Vertex;
+using viewport_geometry::AppendCapsule;
+using viewport_geometry::AppendCone;
+using viewport_geometry::AppendCube;
+using viewport_geometry::AppendCylinder;
+using viewport_geometry::AppendPlanePrimitive;
+using viewport_geometry::AppendQuad;
+using viewport_geometry::AppendSphere;
+using viewport_geometry::AppendTorus;
+using viewport_geometry::MeshRange;
 
+// Transform-gizmo part assembly now lives in ViewportGizmo.{hpp,cpp}.
+using viewport_gizmo::GizmoPart;
 
-struct VertexUniform
-{
-    glm::mat4 ViewProjection{1.0F};
-    glm::mat4 PrevViewProjection{1.0F};
-    glm::mat4 Model{1.0F};
-    glm::mat4 PrevModel{1.0F};
-    glm::vec4 SkinParams{0.0F};
-    glm::mat4 NormalMatrix{1.0F};
-};
+// Pure viewport math helpers now live in ViewportMath.{hpp,cpp}; bridge them
+// back so existing unqualified call sites resolve unchanged.
+using viewport_math::ComposeMatrix;
+using viewport_math::Halton23;
+using viewport_math::HaltonDigit;
+using viewport_math::IntersectAabb;
+using viewport_math::ModelMatrix;
+using viewport_math::RotationBetween;
+using viewport_math::SmoothStep;
+using viewport_math::ViewForwardWorld;
 
-struct BoneUniform
-{
-    glm::mat4 Bones[kMaxSkinJoints]{};
-};
-
-[[nodiscard]] inline glm::mat4 NormalMatrixFor(const glm::mat4& model)
-{
-    return glm::mat4{glm::inverseTranspose(glm::mat3{model})};
-}
-
-struct ShadowVertexUniform
-{
-    glm::mat4 LightSpaceMatrix{1.0F};
-    glm::mat4 Model{1.0F};
-    glm::vec4 SkinParams{0.0F}; // x = skinning enabled (matches shadow_depth.hlsl)
-};
-
-struct ShadowFragmentUniform
-{
-    glm::vec4 UvParams{1.0F, 1.0F, 0.0F, 0.0F};
-    glm::vec4 AlphaParams{0.0F, 0.5F, 0.0F, 0.0F}; // x = mask enabled
-};
-
-constexpr int MaxPointLights = 8;
-constexpr int MaxSpotLights = 8;
+// GPU cbuffer layouts now live in ViewportUniforms.hpp; bridge them (and the
+// two light-count constants they share with the lighting loop) back here.
+using viewport_uniforms::ApplyLdrTarget;
+using viewport_uniforms::ApplySceneMrt;
+using viewport_uniforms::BoneUniform;
+using viewport_uniforms::FragmentUniform;
+using viewport_uniforms::LightSet;
+using viewport_uniforms::MaxPointLights;
+using viewport_uniforms::MaxSpotLights;
+using viewport_uniforms::NormalMatrixFor;
+using viewport_uniforms::ShadowFragmentUniform;
+using viewport_uniforms::ShadowVertexUniform;
+using viewport_uniforms::SkyUniform;
+using viewport_uniforms::VertexUniform;
 
 // Device-safe upper bound on a single directional shadow-map dimension.
 constexpr int kMaxShadowResolution = 4096;
 // World-space pull-back added behind each cascade slice so tall casters standing
 // above the slice still render into that cascade's depth map.
 constexpr float kShadowCasterMargin = 50.0F;
-
-// Per-frame punctual light data shared by every lit draw. Must match the
-// LightSet layout inside FragmentUniforms in viewport.hlsl exactly.
-struct LightSet
-{
-    // x = point light count, y = spot light count.
-    glm::vec4 Counts{0.0F};
-    glm::vec4 PointPositionRange[MaxPointLights]{};   // xyz position, w range
-    glm::vec4 PointColorIntensity[MaxPointLights]{};  // rgb color, a intensity
-    glm::vec4 PointParams[MaxPointLights]{};          // x falloff exponent
-    glm::vec4 SpotPositionRange[MaxSpotLights]{};     // xyz position, w range
-    glm::vec4 SpotDirectionFalloff[MaxSpotLights]{};  // xyz direction, w falloff
-    glm::vec4 SpotColorIntensity[MaxSpotLights]{};    // rgb color, a intensity
-    glm::vec4 SpotCone[MaxSpotLights]{};              // x cos(inner), y cos(outer)
-};
-
-static_assert(sizeof(LightSet) ==
-    sizeof(glm::vec4) * (1 + 3 * MaxPointLights + 4 * MaxSpotLights));
-
-struct FragmentUniform
-{
-    glm::vec4 BaseColor{1.0F};
-    glm::vec4 Material{0.0F, 0.65F, 0.0F, 0.0F};
-    glm::vec4 EmissiveColorIntensity{0.0F, 0.0F, 0.0F, 0.0F};
-    glm::vec4 UvParams{1.0f, 1.0f, 0.0f, 0.0f};
-    glm::vec4 AlphaParams{0.0f, 0.5f, 0.0f, 0.0f};
-    glm::vec4 LightDirection{-0.4F, -1.0F, -0.25F, 0.0F};
-    glm::vec4 LightColor{1.0F, 0.96F, 0.88F, 3.0F};
-    glm::vec4 CameraPosition{0.0F};
-    glm::vec4 AmbientSky{0.45F, 0.55F, 0.70F, 0.55F};
-    glm::vec4 AmbientGround{0.28F, 0.25F, 0.22F, 0.0F};
-    glm::vec4 EnvParams{1.0F, 0.0F, 0.0F, 0.0F};
-    glm::vec4 FogColorDensity{0.60F, 0.66F, 0.75F, 0.0F};
-    glm::vec4 FogRange{10.0F, 250.0F, 0.0F, 0.0F};
-    LightSet Lights;
-    glm::vec4 ShadowParams{0.0F};   // x filter radius (texels), y bias, z strength, w enabled
-    glm::vec4 CascadeSplits{0.0F};  // view-space far distance of cascade 0..3
-    glm::vec4 CascadeTexel{0.0F};   // UV texel size (1/resolution) of cascade 0..3
-    glm::vec4 CascadeCount{0.0F};   // x active cascade count
-    glm::vec4 CameraForward{0.0F};  // xyz unit camera view direction
-    std::array<glm::mat4, shadow::kMaxCascades> CascadeLightSpace{
-        {glm::mat4{1.0F}, glm::mat4{1.0F}, glm::mat4{1.0F}, glm::mat4{1.0F}}};
-    glm::vec4 DebugParams{0.0F};  // x mode, y cascade count (diagnostic)
-    glm::vec4 DebugSplits{0.0F};  // x split2, y split3, z shadow distance, w unused
-};
-
-static_assert(sizeof(FragmentUniform) ==
-    sizeof(glm::vec4) * 13 + sizeof(LightSet) + sizeof(glm::vec4) * 5 +
-        sizeof(glm::mat4) * shadow::kMaxCascades + sizeof(glm::vec4) * 2,
-    "FragmentUniform must stay tightly packed to match viewport.hlsl");
-
-struct SkyUniform
-{
-    glm::mat4 InverseViewProjection{1.0F};
-    glm::mat4 PrevInverseViewProjection{1.0F};
-    glm::mat4 ViewProjection{1.0F};
-    glm::mat4 PrevViewProjection{1.0F};
-    glm::vec4 SunDirection{-0.4F, -1.0F, -0.25F, 1.0F};
-    glm::vec4 SunColor{1.0F, 0.92F, 0.78F, 1.0F};
-    glm::vec4 MoonDirection{0.4F, 1.0F, 0.25F, 1.0F};
-    glm::vec4 MoonColor{0.62F, 0.72F, 1.0F, 0.35F};
-    glm::vec4 Params{0.0F}; // x ortho flag, y exposure
-    glm::vec4 ZenithColor{0.13F, 0.27F, 0.52F, 0.0F};
-    glm::vec4 HorizonColor{0.63F, 0.71F, 0.82F, 0.0F};
-    glm::vec4 GroundColor{0.20F, 0.19F, 0.18F, 0.0F};
-};
-
-void ApplySceneMrt(rhi::PipelineDesc& description)
-{
-    description.ColorFormat = rhi::Format::R16G16B16A16Float;
-    description.ColorFormat1 = rhi::Format::R16G16Float;
-}
-
-void ApplyLdrTarget(rhi::PipelineDesc& description)
-{
-    description.ColorFormat = rhi::Format::R8G8B8A8Unorm;
-    description.ColorFormat1 = rhi::Format::Unknown;
-}
-
-struct MeshRange
-{
-    std::uint32_t FirstIndex{0};
-    std::uint32_t IndexCount{0};
-};
 
 struct Pickable
 {
@@ -216,313 +129,15 @@ struct Pickable
     glm::vec3 Maximum;
 };
 
-void AppendFace(
-    std::vector<Vertex>& vertices,
-    std::vector<std::uint32_t>& indices,
-    const glm::vec3 normal,
-    const glm::vec4 tangent,
-    const std::array<glm::vec3, 4>& corners,
-    const glm::vec4 color)
-{
-    const auto start = static_cast<std::uint32_t>(vertices.size());
-    vertices.push_back({corners[0], normal, tangent, {0, 0}, color});
-    vertices.push_back({corners[1], normal, tangent, {1, 0}, color});
-    vertices.push_back({corners[2], normal, tangent, {1, 1}, color});
-    vertices.push_back({corners[3], normal, tangent, {0, 1}, color});
-    indices.insert(indices.end(), {start, start + 1, start + 2, start, start + 2, start + 3});
-}
-
-void AppendCube(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices)
-{
-    constexpr float h = 0.5F;
-    AppendFace(vertices, indices, {0, 0, 1}, {1, 0, 0, 1}, {{{-h, -h, h}, {h, -h, h}, {h, h, h}, {-h, h, h}}}, {1, 1, 1, 1});
-    AppendFace(vertices, indices, {0, 0, -1}, {-1, 0, 0, 1}, {{{h, -h, -h}, {-h, -h, -h}, {-h, h, -h}, {h, h, -h}}}, {1, 1, 1, 1});
-    AppendFace(vertices, indices, {1, 0, 0}, {0, 0, -1, 1}, {{{h, -h, h}, {h, -h, -h}, {h, h, -h}, {h, h, h}}}, {1, 1, 1, 1});
-    AppendFace(vertices, indices, {-1, 0, 0}, {0, 0, 1, 1}, {{{-h, -h, -h}, {-h, -h, h}, {-h, h, h}, {-h, h, -h}}}, {1, 1, 1, 1});
-    AppendFace(vertices, indices, {0, 1, 0}, {1, 0, 0, 1}, {{{-h, h, h}, {h, h, h}, {h, h, -h}, {-h, h, -h}}}, {1, 1, 1, 1});
-    AppendFace(vertices, indices, {0, -1, 0}, {1, 0, 0, 1}, {{{-h, -h, -h}, {h, -h, -h}, {h, -h, h}, {-h, -h, h}}}, {1, 1, 1, 1});
-}
-
-void AppendCylinder(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices, const int segments)
-{
-    const auto ring = [&](const float y, const float v) {
-        const auto start = static_cast<std::uint32_t>(vertices.size());
-        for (int i = 0; i < segments; ++i)
-        {
-            const float angle = glm::two_pi<float>() * static_cast<float>(i) / static_cast<float>(segments);
-            const glm::vec3 normal{std::cos(angle), 0.0F, std::sin(angle)};
-            const glm::vec4 tangent{-std::sin(angle), 0.0F, std::cos(angle), 1.0F};
-            const float u = static_cast<float>(i) / static_cast<float>(segments);
-            vertices.push_back({{normal.x * 0.5F, y, normal.z * 0.5F}, normal, tangent, {u, v}, {1, 1, 1, 1}});
-        }
-        return start;
-    };
-    const std::uint32_t bottom = ring(0.0F, 0.0F);
-    const std::uint32_t top = ring(1.0F, 1.0F);
-    for (int i = 0; i < segments; ++i)
-    {
-        const std::uint32_t next = static_cast<std::uint32_t>((i + 1) % segments);
-        const auto b0 = bottom + static_cast<std::uint32_t>(i);
-        const auto b1 = bottom + next;
-        const auto t0 = top + static_cast<std::uint32_t>(i);
-        const auto t1 = top + next;
-        indices.insert(indices.end(), {b0, t0, t1, b0, t1, b1});
-    }
-    const auto capCenterBottom = static_cast<std::uint32_t>(vertices.size());
-    vertices.push_back({{0, 0, 0}, {0, -1, 0}, {1, 0, 0, 1}, {0.5F, 0.5F}, {1, 1, 1, 1}});
-    const auto capCenterTop = static_cast<std::uint32_t>(vertices.size());
-    vertices.push_back({{0, 1, 0}, {0, 1, 0}, {1, 0, 0, 1}, {0.5F, 0.5F}, {1, 1, 1, 1}});
-    for (int i = 0; i < segments; ++i)
-    {
-        const std::uint32_t next = static_cast<std::uint32_t>((i + 1) % segments);
-        indices.insert(indices.end(), {capCenterBottom, bottom + static_cast<std::uint32_t>(i), bottom + next});
-        indices.insert(indices.end(), {capCenterTop, top + next, top + static_cast<std::uint32_t>(i)});
-    }
-}
-
-void AppendCone(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices, const int segments)
-{
-    const auto baseStart = static_cast<std::uint32_t>(vertices.size());
-    for (int i = 0; i < segments; ++i)
-    {
-        const float angle = glm::two_pi<float>() * static_cast<float>(i) / static_cast<float>(segments);
-        const glm::vec3 radial{std::cos(angle), 0.0F, std::sin(angle)};
-        const glm::vec3 normal = glm::normalize(glm::vec3{radial.x, 0.5F, radial.z});
-        const glm::vec4 tangent{-std::sin(angle), 0.0F, std::cos(angle), 1.0F};
-        const float u = static_cast<float>(i) / static_cast<float>(segments);
-        vertices.push_back({{radial.x * 0.5F, 0.0F, radial.z * 0.5F}, normal, tangent, {u, 0.0F}, {1, 1, 1, 1}});
-    }
-    const auto apex = static_cast<std::uint32_t>(vertices.size());
-    vertices.push_back({{0, 1, 0}, {0, 1, 0}, {1, 0, 0, 1}, {0.5F, 1.0F}, {1, 1, 1, 1}});
-    const auto baseCenter = static_cast<std::uint32_t>(vertices.size());
-    vertices.push_back({{0, 0, 0}, {0, -1, 0}, {1, 0, 0, 1}, {0.5F, 0.5F}, {1, 1, 1, 1}});
-    for (int i = 0; i < segments; ++i)
-    {
-        const std::uint32_t next = static_cast<std::uint32_t>((i + 1) % segments);
-        indices.insert(indices.end(), {baseStart + static_cast<std::uint32_t>(i), apex, baseStart + next});
-        indices.insert(indices.end(), {baseCenter, baseStart + static_cast<std::uint32_t>(i), baseStart + next});
-    }
-}
-
-void AppendSphere(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices, const int slices, const int stacks)
-{
-    const auto start = static_cast<std::uint32_t>(vertices.size());
-    for (int stack = 0; stack <= stacks; ++stack)
-    {
-        const float phi = glm::pi<float>() * static_cast<float>(stack) / static_cast<float>(stacks);
-        const float v = 1.0F - static_cast<float>(stack) / static_cast<float>(stacks);
-        for (int slice = 0; slice <= slices; ++slice)
-        {
-            const float theta = glm::two_pi<float>() * static_cast<float>(slice) / static_cast<float>(slices);
-            const float u = static_cast<float>(slice) / static_cast<float>(slices);
-            const glm::vec3 normal{std::sin(phi) * std::cos(theta), std::cos(phi), std::sin(phi) * std::sin(theta)};
-            const glm::vec4 tangent{-std::sin(theta), 0.0F, std::cos(theta), 1.0F};
-            vertices.push_back({normal * 0.5F, normal, tangent, {u, v}, {1, 1, 1, 1}});
-        }
-    }
-    const auto stride = static_cast<std::uint32_t>(slices + 1);
-    for (int stack = 0; stack < stacks; ++stack)
-    {
-        for (int slice = 0; slice < slices; ++slice)
-        {
-            const std::uint32_t a = start + static_cast<std::uint32_t>(stack) * stride + static_cast<std::uint32_t>(slice);
-            const std::uint32_t b = a + stride;
-            indices.insert(indices.end(), {a, a + 1, b + 1, a, b + 1, b});
-        }
-    }
-}
-
-void AppendTorus(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices, const float tubeRadius, const int majorSegments, const int minorSegments)
-{
-    const auto start = static_cast<std::uint32_t>(vertices.size());
-    for (int major = 0; major <= majorSegments; ++major)
-    {
-        const float u_val = static_cast<float>(major) / static_cast<float>(majorSegments);
-        const float u = glm::two_pi<float>() * u_val;
-        const glm::vec3 center{std::cos(u), std::sin(u), 0.0F};
-        for (int minor = 0; minor <= minorSegments; ++minor)
-        {
-            const float v_val = static_cast<float>(minor) / static_cast<float>(minorSegments);
-            const float v = glm::two_pi<float>() * v_val;
-            const glm::vec3 normal = glm::normalize(center * std::cos(v) + glm::vec3{0.0F, 0.0F, std::sin(v)});
-            const glm::vec4 tangent{-std::sin(u), std::cos(u), 0.0F, 1.0F};
-            vertices.push_back({center + normal * tubeRadius, normal, tangent, {u_val, v_val}, {1, 1, 1, 1}});
-        }
-    }
-    const auto stride = static_cast<std::uint32_t>(minorSegments + 1);
-    for (int major = 0; major < majorSegments; ++major)
-    {
-        for (int minor = 0; minor < minorSegments; ++minor)
-        {
-            const std::uint32_t a = start + static_cast<std::uint32_t>(major) * stride + static_cast<std::uint32_t>(minor);
-            const std::uint32_t b = a + stride;
-            indices.insert(indices.end(), {a, b, a + 1, a + 1, b, b + 1});
-        }
-    }
-}
-
-void AppendQuad(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices)
-{
-    AppendFace(vertices, indices, {0, 0, 1}, {1, 0, 0, 1}, {{{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}}}, {1, 1, 1, 1});
-    AppendFace(vertices, indices, {0, 0, -1}, {-1, 0, 0, 1}, {{{0, 0, 0}, {0, 1, 0}, {1, 1, 0}, {1, 0, 0}}}, {1, 1, 1, 1});
-}
-
-void AppendPlanePrimitive(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices)
-{
-    constexpr float h = 0.5F;
-    AppendFace(vertices, indices, {0, 1, 0}, {1, 0, 0, 1}, {{{-h, 0, h}, {h, 0, h}, {h, 0, -h}, {-h, 0, -h}}}, {1, 1, 1, 1});
-    AppendFace(vertices, indices, {0, -1, 0}, {1, 0, 0, 1}, {{{-h, 0, -h}, {h, 0, -h}, {h, 0, h}, {-h, 0, h}}}, {1, 1, 1, 1});
-}
-
-void AppendCapsule(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices, const int slices, const int stacks)
-{
-    const auto start = static_cast<std::uint32_t>(vertices.size());
-    const auto pushRing = [&](const float phi, const float offset, const float v) {
-        for (int slice = 0; slice <= slices; ++slice)
-        {
-            const float theta = glm::two_pi<float>() * static_cast<float>(slice) / static_cast<float>(slices);
-            const float u = static_cast<float>(slice) / static_cast<float>(slices);
-            const glm::vec3 normal{std::sin(phi) * std::cos(theta), std::cos(phi), std::sin(phi) * std::sin(theta)};
-            const glm::vec4 tangent{-std::sin(theta), 0.0F, std::cos(theta), 1.0F};
-            vertices.push_back({normal * 0.5F + glm::vec3{0.0F, offset, 0.0F}, normal, tangent, {u, v}, {1, 1, 1, 1}});
-        }
-    };
-    for (int stack = 0; stack <= stacks; ++stack)
-    {
-        const float v = static_cast<float>(stack) / static_cast<float>(stacks * 2);
-        pushRing(glm::half_pi<float>() * static_cast<float>(stack) / static_cast<float>(stacks), 0.5F, v);
-    }
-    for (int stack = 0; stack <= stacks; ++stack)
-    {
-        const float v = 0.5F + static_cast<float>(stack) / static_cast<float>(stacks * 2);
-        pushRing(glm::half_pi<float>() + glm::half_pi<float>() * static_cast<float>(stack) / static_cast<float>(stacks), -0.5F, v);
-    }
-    const auto stride = static_cast<std::uint32_t>(slices + 1);
-    const int ringCount = 2 * (stacks + 1);
-    for (int ring = 0; ring < ringCount - 1; ++ring)
-    {
-        for (int slice = 0; slice < slices; ++slice)
-        {
-            const std::uint32_t a = start + static_cast<std::uint32_t>(ring) * stride + static_cast<std::uint32_t>(slice);
-            const std::uint32_t b = a + stride;
-            indices.insert(indices.end(), {a, a + 1, b + 1, a, b + 1, b});
-        }
-    }
-}
-
-[[nodiscard]] glm::mat4 ModelMatrix(const TransformComponent& transform)
-{
-    return glm::translate(glm::mat4{1.0F}, transform.Position) *
-           glm::mat4_cast(transform.Rotation) *
-           glm::scale(glm::mat4{1.0F}, transform.Scale);
-}
-
-[[nodiscard]] glm::mat4 ComposeMatrix(
-    const glm::vec3 position, const glm::quat rotation, const glm::vec3 scale)
-{
-    return glm::translate(glm::mat4{1.0F}, position) * glm::mat4_cast(rotation) *
-        glm::scale(glm::mat4{1.0F}, scale);
-}
-
-[[nodiscard]] glm::quat RotationBetween(const glm::vec3 from, const glm::vec3 to)
-{
-    const glm::vec3 f = glm::normalize(from);
-    const glm::vec3 t = glm::normalize(to);
-    const float cosine = glm::dot(f, t);
-    if (cosine > 0.9999F)
-    {
-        return glm::quat{1.0F, 0.0F, 0.0F, 0.0F};
-    }
-    if (cosine < -0.9999F)
-    {
-        const glm::vec3 orthogonal = std::abs(f.x) < 0.9F
-            ? glm::normalize(glm::cross(f, glm::vec3{1, 0, 0}))
-            : glm::normalize(glm::cross(f, glm::vec3{0, 1, 0}));
-        return glm::angleAxis(glm::pi<float>(), orthogonal);
-    }
-    const glm::vec3 axis = glm::normalize(glm::cross(f, t));
-    return glm::angleAxis(std::acos(std::clamp(cosine, -1.0F, 1.0F)), axis);
-}
-
-[[nodiscard]] bool IntersectAabb(
-    const glm::vec3 origin,
-    const glm::vec3 direction,
-    const glm::vec3 minimum,
-    const glm::vec3 maximum,
-    float& distance)
-{
-    float nearest = 0.0F;
-    float farthest = std::numeric_limits<float>::max();
-    for (int axis = 0; axis < 3; ++axis)
-    {
-        if (std::abs(direction[axis]) < 1.0e-6F)
-        {
-            if (origin[axis] < minimum[axis] || origin[axis] > maximum[axis])
-            {
-                return false;
-            }
-            continue;
-        }
-        const float inverse = 1.0F / direction[axis];
-        float first = (minimum[axis] - origin[axis]) * inverse;
-        float second = (maximum[axis] - origin[axis]) * inverse;
-        if (first > second)
-        {
-            std::swap(first, second);
-        }
-        nearest = std::max(nearest, first);
-        farthest = std::min(farthest, second);
-        if (nearest > farthest)
-        {
-            return false;
-        }
-    }
-    distance = nearest;
-    return true;
-}
-
-constexpr glm::vec3 AxisColorX{0.90F, 0.24F, 0.24F};
-constexpr glm::vec3 AxisColorY{0.32F, 0.80F, 0.32F};
-constexpr glm::vec3 AxisColorZ{0.26F, 0.50F, 0.95F};
+// AxisColorX/Y/Z moved with BuildGizmoParts into ViewportGizmo.cpp.
 constexpr glm::vec3 HighlightColor{1.0F, 0.86F, 0.30F};
 constexpr glm::vec3 SunWarmColor{1.0F, 0.72F, 0.25F};
 constexpr glm::vec3 MoonCoolColor{0.55F, 0.70F, 1.0F};
 
-[[nodiscard]] float SmoothStep(const float edge0, const float edge1, const float value) noexcept
-{
-    const float t = std::clamp((value - edge0) / (edge1 - edge0), 0.0F, 1.0F);
-    return t * t * (3.0F - 2.0F * t);
-}
 constexpr int LineBufferMaxVertices = 16384;
 constexpr float kCameraCutEyeThreshold = 0.75F;
 constexpr float kCameraCutViewAngleDegrees = 20.0F;
 constexpr std::uint32_t kHaltonCycle = 16;
-
-[[nodiscard]] glm::vec3 ViewForwardWorld(const glm::mat4& view) noexcept
-{
-    // GLM lookAtRH stores -forward in column 2 of the view matrix.
-    return glm::normalize(-glm::vec3{view[0][2], view[1][2], view[2][2]});
-}
-
-[[nodiscard]] float HaltonDigit(const std::uint32_t index, const std::uint32_t base) noexcept
-{
-    float f = 1.0F;
-    float r = 0.0F;
-    std::uint32_t i = index;
-    while (i > 0)
-    {
-        f /= static_cast<float>(base);
-        r += f * static_cast<float>(i % base);
-        i /= base;
-    }
-    return r;
-}
-
-// Halton (2,3) in [0,1)^2 for projection jitter.
-[[nodiscard]] glm::vec2 Halton23(const std::uint32_t index) noexcept
-{
-    return {HaltonDigit(index, 2), HaltonDigit(index, 3)};
-}
 
 [[nodiscard]] bool ProbeGpuTimestampSupport(const rhi::Device& device) noexcept
 {
@@ -532,17 +147,13 @@ constexpr std::uint32_t kHaltonCycle = 16;
 }
 }
 
-class SdlViewportRenderer final : public ViewportRenderer
+class RhiViewportRenderer final : public ViewportRenderer
 {
 public:
-    explicit SdlViewportRenderer(rhi::Device& device, IAssetDatabase& database)
+    explicit RhiViewportRenderer(rhi::Device& device, IAssetDatabase& database)
         : m_Device(device), m_Cache(std::make_unique<AssetResourceCache>(device, database)),
           m_Database(&database), m_Uploader(device)
     {
-        if (rhi::sdl::AsSdlDevice(device) == nullptr)
-        {
-            throw std::invalid_argument("Viewport renderer requires the SDL GPU RHI backend");
-        }
         CreateGeometry();
         CreatePipelines();
         m_PostProcessor = std::make_unique<PostProcessor>();
@@ -722,6 +333,11 @@ public:
         m_EditorVisuals = enabled;
     }
 
+    void SetGroundGridEnabled(const bool enabled) noexcept override
+    {
+        m_GroundGrid = enabled;
+    }
+
     void SetCollisionVisualizationEnabled(const bool enabled) noexcept override
     {
         m_CollisionVisualization = enabled;
@@ -764,6 +380,18 @@ public:
     void SetSimDelta(const float dt) noexcept override
     {
         m_SimDelta = dt;
+    }
+
+    void UpdateAnimations(IWorld& world, const float dt) override
+    {
+        // Entity-transform clips first so a combined entity is posed before its skin.
+        UpdateTransformAnimations(world.Registry(), dt);
+        UpdateWorldAnimations(
+            world.Registry(),
+            [this](const AssetHandle& handle) -> const GltfMeshAsset* {
+                return m_GltfMeshCache != nullptr ? m_GltfMeshCache->Get(handle) : nullptr;
+            },
+            dt);
     }
 
     void SetAssetDatabase(IAssetDatabase& database) override
@@ -1077,6 +705,25 @@ private:
             m_FrameLights.PointParams[index] = glm::vec4{light.FalloffExponent, 0.0F, 0.0F, 0.0F};
         }
 
+        // Forward+: upload every enabled point light (closest first, soft-capped)
+        // to the storage buffer, not just the eight in the uniform fallback.
+        m_FrameTotalPointLights = static_cast<int>(points.size());
+        const std::size_t gpuCount =
+            std::min<std::size_t>(points.size(), forward_plus::kMaxPointLights);
+        m_FramePointLightsGpu.clear();
+        m_FramePointLightsGpu.reserve(gpuCount);
+        for (std::size_t index = 0; index < gpuCount; ++index)
+        {
+            PointLightComponent light =
+                *static_cast<const PointLightComponent*>(points[index].Component);
+            Sanitize(light);
+            forward_plus::GpuPointLight gpu;
+            gpu.PositionRange = glm::vec4{points[index].Position, light.Range};
+            gpu.ColorIntensity = glm::vec4{light.Color, light.Intensity};
+            gpu.Params = glm::vec4{light.FalloffExponent, 0.0F, 0.0F, 0.0F};
+            m_FramePointLightsGpu.push_back(gpu);
+        }
+
         std::vector<Candidate> spots;
         for (const auto [entity, transform, light, uuid] :
              registry.view<const TransformComponent, const SpotLightComponent,
@@ -1110,8 +757,140 @@ private:
         }
         m_FrameLights.Counts =
             glm::vec4{static_cast<float>(pointCount), static_cast<float>(spotCount), 0.0F, 0.0F};
-        m_FrameActivePointLights = static_cast<int>(pointCount);
+        m_FrameTotalSpotLights = static_cast<int>(spots.size());
+        // "Active" now means uploaded to the Forward+ buffer (points) / uniform
+        // set (spots), not the old hard 8-light cap.
+        m_FrameActivePointLights = static_cast<int>(m_FramePointLightsGpu.size());
         m_FrameActiveSpotLights = static_cast<int>(spotCount);
+
+        // Assign uploaded point lights to screen tiles on the CPU.
+        // ponytail: single-threaded scatter, no depth-range slices; move to a
+        // compute pass or clustered slices if the CPU cull dominates the frame.
+        forward_plus::CullView cull;
+        cull.View = m_View;
+        cull.Proj00 = m_BaseProjection[0][0];
+        cull.Proj11 = m_BaseProjection[1][1];
+        cull.ScreenWidth = static_cast<int>(m_Extent.Width);
+        cull.ScreenHeight = static_cast<int>(m_Extent.Height);
+        m_FrameTiles = forward_plus::AssignLightsToTiles(m_FramePointLightsGpu, cull);
+        const bool fpReady = m_FrameTiles.TilesX > 0 && m_FrameTiles.TilesY > 0;
+        m_FrameForwardPlus = glm::vec4{
+            static_cast<float>(forward_plus::kTileSize),
+            static_cast<float>(m_FrameTiles.TilesX),
+            static_cast<float>(m_FramePointLightsGpu.size()),
+            fpReady ? 1.0F : 0.0F};
+
+        // Once-per-second diagnostics when a cap actually clips the scene: the
+        // point soft cap or the 8-light spot uniform cap.
+        const bool pointsClipped = m_FrameTotalPointLights > static_cast<int>(gpuCount);
+        const bool spotsClipped = m_FrameTotalSpotLights > static_cast<int>(spotCount);
+        if (pointsClipped || spotsClipped || m_FrameTiles.OverflowCount > 0)
+        {
+            const auto now = std::chrono::steady_clock::now();
+            if (now - m_LastLightCapLog >= std::chrono::seconds(1))
+            {
+                m_LastLightCapLog = now;
+                if (pointsClipped)
+                {
+                    Report("[Lighting] using " + std::to_string(gpuCount) + "/" +
+                        std::to_string(m_FrameTotalPointLights) + " point lights (soft cap)");
+                }
+                if (spotsClipped)
+                {
+                    Report("[Lighting] using " + std::to_string(spotCount) + "/" +
+                        std::to_string(m_FrameTotalSpotLights) + " spot lights (uniform cap)");
+                }
+                if (m_FrameTiles.OverflowCount > 0)
+                {
+                    Report("[Lighting] " + std::to_string(m_FrameTiles.OverflowCount) +
+                        " tile light slots dropped (per-tile cap " +
+                        std::to_string(forward_plus::kMaxLightsPerTile) + ")");
+                }
+            }
+        }
+    }
+
+    // Grows `buffer` to hold at least `bytes` (with headroom) as a GPU storage
+    // buffer. Never shrinks, so per-frame churn settles after the scene's peak.
+    void EnsureStorageBuffer(
+        std::unique_ptr<rhi::Buffer>& buffer,
+        std::size_t bytes,
+        std::uint32_t stride,
+        const char* name)
+    {
+        bytes = std::max<std::size_t>(bytes, 256);
+        if (buffer != nullptr && buffer->Size() >= bytes)
+        {
+            return;
+        }
+        const std::size_t capacity = ((bytes + bytes / 2 + stride - 1) / stride) * stride;
+        auto result = m_Device.CreateBuffer(
+            {capacity, rhi::BufferUsage::Storage, name, stride});
+        if (!result)
+        {
+            Report(std::string{"Forward+ storage buffer alloc failed: "} + result.ErrorMessage());
+            return;
+        }
+        buffer = std::move(result).Value();
+    }
+
+    // Records copy passes (before any render pass) that push this frame's light,
+    // tile-header and tile-index data into the storage buffers the lit shader
+    // reads. Buffers are always non-empty so they stay bindable with zero lights.
+    void UploadForwardPlusLights(rhi::CommandList& commands)
+    {
+        const std::size_t lightBytes =
+            std::max<std::size_t>(m_FramePointLightsGpu.size(), 1) * sizeof(forward_plus::GpuPointLight);
+        const std::size_t headerBytes =
+            std::max<std::size_t>(m_FrameTiles.Headers.size(), 1) * sizeof(forward_plus::TileHeader);
+        const std::size_t indexBytes =
+            std::max<std::size_t>(m_FrameTiles.Indices.size(), 1) * sizeof(std::uint32_t);
+        EnsureStorageBuffer(
+            m_LightBuffer,
+            lightBytes,
+            static_cast<std::uint32_t>(sizeof(forward_plus::GpuPointLight)),
+            "ForwardPlusLights");
+        EnsureStorageBuffer(
+            m_TileHeaderBuffer,
+            headerBytes,
+            static_cast<std::uint32_t>(sizeof(forward_plus::TileHeader)),
+            "ForwardPlusTileHeaders");
+        EnsureStorageBuffer(
+            m_TileIndexBuffer,
+            indexBytes,
+            static_cast<std::uint32_t>(sizeof(std::uint32_t)),
+            "ForwardPlusTileIndices");
+        if (!m_FramePointLightsGpu.empty() && m_LightBuffer != nullptr)
+        {
+            m_Uploader.Upload(commands, *m_LightBuffer,
+                std::as_bytes(std::span{m_FramePointLightsGpu}));
+        }
+        if (!m_FrameTiles.Headers.empty() && m_TileHeaderBuffer != nullptr)
+        {
+            m_Uploader.Upload(commands, *m_TileHeaderBuffer,
+                std::as_bytes(std::span{m_FrameTiles.Headers}));
+        }
+        if (!m_FrameTiles.Indices.empty() && m_TileIndexBuffer != nullptr)
+        {
+            m_Uploader.Upload(commands, *m_TileIndexBuffer,
+                std::as_bytes(std::span{m_FrameTiles.Indices}));
+        }
+    }
+
+    // Binds the Forward+ storage buffers (t8-t10) and the tile-param uniform (b1)
+    // for the lit shader. Every lit draw routes through DrawMesh/DrawMeshRaw, so
+    // calling this there guarantees the resources the shader declares are bound.
+    void BindForwardPlusResources(rhi::CommandList& list)
+    {
+        if (m_LightBuffer == nullptr || m_TileHeaderBuffer == nullptr ||
+            m_TileIndexBuffer == nullptr)
+        {
+            return;
+        }
+        std::array<rhi::Buffer*, 3> buffers = {
+            m_LightBuffer.get(), m_TileHeaderBuffer.get(), m_TileIndexBuffer.get()};
+        list.BindFragmentStorageBuffers(0, buffers);
+        list.PushFragmentUniform(1, &m_FrameForwardPlus, sizeof(m_FrameForwardPlus));
     }
 
     [[nodiscard]] int CountShadowedLights(const IWorld& world, const bool directionalCasts) const
@@ -1314,6 +1093,9 @@ private:
             }
         }
 
+        // Push this frame's Forward+ light/tile data before any render pass opens.
+        UploadForwardPlusLights(*commands);
+
         if (m_FrameShadowParams.w > 0.5F)
         {
             DrawShadowPass(*commands, world);
@@ -1383,6 +1165,8 @@ private:
         m_Diagnostics.VisibleMeshes = m_FrameVisibleMeshes;
         m_Diagnostics.ActivePointLights = m_FrameActivePointLights;
         m_Diagnostics.ActiveSpotLights = m_FrameActiveSpotLights;
+        m_Diagnostics.TotalPointLights = m_FrameTotalPointLights;
+        m_Diagnostics.TotalSpotLights = m_FrameTotalSpotLights;
         m_Diagnostics.ShadowedLights = m_FrameShadowedLights;
         m_Diagnostics.ShadowPasses = m_FrameShadowPasses;
         m_Diagnostics.ActiveCascades = m_FrameActiveCascades;
@@ -1478,15 +1262,15 @@ private:
         sky.ZenithColor = m_FrameSkyZenith;
         sky.HorizonColor = m_FrameSkyHorizon;
         sky.GroundColor = m_FrameSkyGround;
-        rhi::sdl::PushFragmentUniform(list, 0, &sky, sizeof(sky));
-        SDL_DrawGPUPrimitives(rhi::sdl::NativeRenderPass(list), 3, 1, 0, 0);
+        list.PushFragmentUniform(0, &sky, sizeof(sky));
+        list.Draw(3);
         RecordDrawCall();
     }
 
     void BindMeshBuffers(rhi::CommandList& list)
     {
         list.BindVertexBuffer(*m_VertexBuffer);
-        rhi::sdl::BindIndexBuffer(list, *m_IndexBuffer);
+        list.BindIndexBuffer(*m_IndexBuffer);
     }
 
     [[nodiscard]] rhi::Texture* CascadeTextureOrWhite(const int index) const
@@ -1555,18 +1339,17 @@ private:
             rhi::Sampler* sampler = m_DefaultSampler.get();
             std::array<rhi::Texture*, 1> textures = {white};
             std::array<rhi::Sampler*, 1> samplers = {sampler};
-            rhi::sdl::BindFragmentSamplers(list, 0, textures, samplers);
+            list.BindFragmentSamplers(0, textures, samplers);
             const ShadowFragmentUniform fragment{};
-            rhi::sdl::PushFragmentUniform(list, 0, &fragment, sizeof(fragment));
+            list.PushFragmentUniform(0, &fragment, sizeof(fragment));
         }
         PushIdentityBones(list);
 
         const auto drawIndexed = [&](const std::uint32_t firstIndex, const std::uint32_t indexCount,
                                      const glm::mat4& model) {
             const ShadowVertexUniform vertex{lightSpace, model, glm::vec4{0.0F}};
-            rhi::sdl::PushVertexUniform(list, 0, &vertex, sizeof(vertex));
-            SDL_DrawGPUIndexedPrimitives(
-                rhi::sdl::NativeRenderPass(list), indexCount, 1, firstIndex, 0, 0);
+            list.PushVertexUniform(0, &vertex, sizeof(vertex));
+            list.DrawIndexed(indexCount, firstIndex);
             RecordDrawCall();
         };
 
@@ -1592,7 +1375,7 @@ private:
                 if (gltf != nullptr && gltf->IsValid())
                 {
                     list.BindVertexBuffer(*gltf->VertexBuffer);
-                    rhi::sdl::BindIndexBuffer(list, *gltf->IndexBuffer);
+                    list.BindIndexBuffer(*gltf->IndexBuffer);
                     const glm::mat4 model = ModelMatrix(transform);
                     for (const GltfPrimitiveRange& prim : gltf->Primitives)
                     {
@@ -1650,7 +1433,7 @@ private:
             CascadeTextureOrWhite(3)};
         std::array<rhi::Sampler*, 8> samplers = {
             sampler, sampler, sampler, sampler, shadow, shadow, shadow, shadow};
-        rhi::sdl::BindFragmentSamplers(list, 0, textures, samplers);
+        list.BindFragmentSamplers(0, textures, samplers);
     }
 
     [[nodiscard]] std::span<const glm::mat4> ResolveSkinJointMatrices(
@@ -1676,8 +1459,8 @@ private:
         {
             bone = glm::mat4{1.0F};
         }
-        rhi::sdl::PushVertexUniform(list, 1, &bones, sizeof(bones));
-        rhi::sdl::PushVertexUniform(list, 2, &bones, sizeof(bones));
+        list.PushVertexUniform(1, &bones, sizeof(bones));
+        list.PushVertexUniform(2, &bones, sizeof(bones));
     }
 
     void PushSkinBones(
@@ -1712,8 +1495,8 @@ private:
             }
             m_FrameBoneSnapshots[*entityId].assign(current.begin(), current.begin() + static_cast<std::ptrdiff_t>(count));
         }
-        rhi::sdl::PushVertexUniform(list, 1, &bones, sizeof(bones));
-        rhi::sdl::PushVertexUniform(list, 2, &prevBones, sizeof(prevBones));
+        list.PushVertexUniform(1, &bones, sizeof(bones));
+        list.PushVertexUniform(2, &prevBones, sizeof(prevBones));
     }
 
     void FlushBoneHistory()
@@ -1757,11 +1540,11 @@ private:
     {
         const VertexUniform vertex = MakeVertexUniform(model, prevModel, skinParams);
         const FragmentUniform lit = WithFrameDebug(fragment);
-        rhi::sdl::PushVertexUniform(list, 0, &vertex, sizeof(vertex));
+        list.PushVertexUniform(0, &vertex, sizeof(vertex));
         PushIdentityBones(list);
-        rhi::sdl::PushFragmentUniform(list, 0, &lit, sizeof(lit));
-        SDL_DrawGPUIndexedPrimitives(
-            rhi::sdl::NativeRenderPass(list), range.IndexCount, 1, range.FirstIndex, 0, 0);
+        list.PushFragmentUniform(0, &lit, sizeof(lit));
+        BindForwardPlusResources(list);
+        list.DrawIndexed(range.IndexCount, range.FirstIndex);
         RecordDrawCall();
     }
 
@@ -1777,7 +1560,7 @@ private:
         const std::optional<Uuid>& entityId = std::nullopt)
     {
         const VertexUniform vertex = MakeVertexUniform(model, prevModel, skinParams);
-        rhi::sdl::PushVertexUniform(list, 0, &vertex, sizeof(vertex));
+        list.PushVertexUniform(0, &vertex, sizeof(vertex));
         if (skinParams.x > 0.5F && !skinBones.empty())
         {
             PushSkinBones(list, skinBones, entityId);
@@ -1787,9 +1570,9 @@ private:
             PushIdentityBones(list);
         }
         const FragmentUniform lit = WithFrameDebug(fragment);
-        rhi::sdl::PushFragmentUniform(list, 0, &lit, sizeof(lit));
-        SDL_DrawGPUIndexedPrimitives(
-            rhi::sdl::NativeRenderPass(list), indexCount, 1, firstIndex, 0, 0);
+        list.PushFragmentUniform(0, &lit, sizeof(lit));
+        BindForwardPlusResources(list);
+        list.DrawIndexed(indexCount, firstIndex);
         RecordDrawCall();
     }
 
@@ -1854,7 +1637,7 @@ private:
 
         list.BindPipeline(*m_UnlitDepthPipeline);
         list.BindVertexBuffer(*gltf->VertexBuffer);
-        rhi::sdl::BindIndexBuffer(list, *gltf->IndexBuffer);
+        list.BindIndexBuffer(*gltf->IndexBuffer);
         for (const GltfPrimitiveRange& primitive : gltf->Primitives)
         {
             DrawMeshRaw(
@@ -1906,6 +1689,9 @@ private:
             m_FrameDebugSplits.z = m_FrameShadowDistance;
             break;
         }
+        case ViewportDebugView::LightTiles:
+            m_FrameDebugParams.x = 8.0F;
+            break;
         default:
             break;
         }
@@ -1964,7 +1750,7 @@ private:
     {
         // The reference grid is editor tooling, not scene content; hide it in
         // play mode and game-camera preview like the other editor visuals.
-        if (!m_EditorVisuals)
+        if (!m_EditorVisuals || !m_GroundGrid)
         {
             return;
         }
@@ -1985,7 +1771,7 @@ private:
 
     void DrawGroundGridOverlay(rhi::CommandList& list)
     {
-        if (!m_EditorVisuals)
+        if (!m_EditorVisuals || !m_GroundGrid)
         {
             return;
         }
@@ -2136,7 +1922,7 @@ private:
                         list.BindPipeline(*m_MeshPipeline);
                         BindDefaultLitFragmentSamplers(list);
                         list.BindVertexBuffer(*gltf->VertexBuffer);
-                        rhi::sdl::BindIndexBuffer(list, *gltf->IndexBuffer);
+                        list.BindIndexBuffer(*gltf->IndexBuffer);
                         const SkeletonComponent* skeleton = cmd.Entity != entt::null
                             ? world.Registry().try_get<SkeletonComponent>(cmd.Entity)
                             : nullptr;
@@ -2255,7 +2041,7 @@ private:
                     std::array<rhi::Sampler*, 8> samplers = {
                         baseSampler, normalSampler, mrSampler, emissiveSampler,
                         shadowSamplerBind, shadowSamplerBind, shadowSamplerBind, shadowSamplerBind};
-                    rhi::sdl::BindFragmentSamplers(list, 0, textures, samplers);
+                    list.BindFragmentSamplers(0, textures, samplers);
 
                     DrawMesh(
                         list,
@@ -2860,20 +2646,20 @@ private:
         const VertexUniform vertex = MakeVertexUniform(glm::mat4{1.0F}, glm::mat4{1.0F}, glm::vec4{0.0F});
         FragmentUniform fragment;
         fragment.BaseColor = glm::vec4{1.0F};
-        rhi::sdl::PushVertexUniform(list, 0, &vertex, sizeof(vertex));
+        list.PushVertexUniform(0, &vertex, sizeof(vertex));
         PushIdentityBones(list);
-        rhi::sdl::PushFragmentUniform(list, 0, &fragment, sizeof(fragment));
+        list.PushFragmentUniform(0, &fragment, sizeof(fragment));
         const std::size_t uploaded = std::min<std::size_t>(m_LineVertices.size(), LineBufferMaxVertices);
         const std::size_t normalCount = std::min(m_CollisionLineFirst, uploaded);
         if (normalCount > 0)
         {
             fragment.BaseColor.a = 0.28F;
-            rhi::sdl::PushFragmentUniform(list, 0, &fragment, sizeof(fragment));
+            list.PushFragmentUniform(0, &fragment, sizeof(fragment));
             list.BindPipeline(
                 ldrOverlay ? *m_CollisionLineLdrPipeline : *m_CollisionLinePipeline);
             list.Draw(static_cast<std::uint32_t>(normalCount), 0);
             fragment.BaseColor.a = 1.0F;
-            rhi::sdl::PushFragmentUniform(list, 0, &fragment, sizeof(fragment));
+            list.PushFragmentUniform(0, &fragment, sizeof(fragment));
             list.BindPipeline(ldrOverlay ? *m_LineLdrPipeline : *m_LinePipeline);
             list.Draw(static_cast<std::uint32_t>(normalCount), 0);
         }
@@ -2889,152 +2675,18 @@ private:
         }
     }
 
-    struct GizmoPart
-    {
-        GizmoHandle Handle;
-        const MeshRange* Mesh;
-        glm::mat4 Model;
-        glm::vec3 Color;
-        float Alpha;
-    };
-
     // Fills m_GizmoParts (reused across frames to avoid per-frame allocation).
     void BuildGizmoParts()
     {
-        namespace layout = gizmo_layout;
-        std::vector<GizmoPart>& parts = m_GizmoParts;
-        parts.clear();
-        const float size = GizmoWorldSize(
-            m_View, m_Projection, m_Gizmo.Position, static_cast<float>(m_Extent.Height));
-        if (size <= 0.0F)
-        {
-            return; // Anchor behind the camera.
-        }
-        const glm::quat orientation = m_Gizmo.Orientation;
-        const glm::vec3 position = m_Gizmo.Position;
-
-        constexpr std::array handles{GizmoHandle::AxisX, GizmoHandle::AxisY, GizmoHandle::AxisZ};
-        constexpr std::array colors{AxisColorX, AxisColorY, AxisColorZ};
-        const auto isHot = [this](const GizmoHandle handle) {
-            return (m_Gizmo.Active && *m_Gizmo.Active == handle) ||
-                (!m_Gizmo.Active && m_Gizmo.Hover && *m_Gizmo.Hover == handle);
-        };
-        const auto axisRotation = [&](const int index) {
-            // Rotate the +Y-aligned primitives onto the requested axis.
-            if (index == 0)
-            {
-                return orientation * glm::angleAxis(-glm::half_pi<float>(), glm::vec3{0, 0, 1});
-            }
-            if (index == 2)
-            {
-                return orientation * glm::angleAxis(glm::half_pi<float>(), glm::vec3{1, 0, 0});
-            }
-            return orientation;
-        };
-
-        if (m_Gizmo.Mode == GizmoMode::Rotate)
-        {
-            for (int index = 0; index < 3; ++index)
-            {
-                const GizmoHandle handle = handles[static_cast<std::size_t>(index)];
-                // Torus circle lies in XY (around Z); rotate Z onto the axis.
-                glm::quat ringRotation = orientation;
-                if (index == 0)
-                {
-                    ringRotation = orientation * glm::angleAxis(glm::half_pi<float>(), glm::vec3{0, 1, 0});
-                }
-                else if (index == 1)
-                {
-                    ringRotation = orientation * glm::angleAxis(-glm::half_pi<float>(), glm::vec3{1, 0, 0});
-                }
-                parts.push_back({handle,
-                    &m_Torus,
-                    ComposeMatrix(position, ringRotation, glm::vec3{size * layout::RingRadius}),
-                    isHot(handle) ? HighlightColor : colors[static_cast<std::size_t>(index)],
-                    1.0F});
-            }
-            return;
-        }
-
-        for (int index = 0; index < 3; ++index)
-        {
-            const GizmoHandle handle = handles[static_cast<std::size_t>(index)];
-            const glm::vec3 color =
-                isHot(handle) ? HighlightColor : colors[static_cast<std::size_t>(index)];
-            const glm::vec3 direction = orientation * GizmoAxisVector(static_cast<GizmoAxis>(index));
-            const glm::quat rotation = axisRotation(index);
-            const float shaftLength = (layout::ShaftEnd - layout::ShaftStart) * size;
-            parts.push_back({handle,
-                &m_Cylinder,
-                ComposeMatrix(position + direction * layout::ShaftStart * size,
-                    rotation,
-                    glm::vec3{layout::ShaftRadius * 2.0F * size,
-                        shaftLength,
-                        layout::ShaftRadius * 2.0F * size}),
-                color,
-                1.0F});
-            if (m_Gizmo.Mode == GizmoMode::Translate)
-            {
-                parts.push_back({handle,
-                    &m_Cone,
-                    ComposeMatrix(position + direction * layout::ShaftEnd * size,
-                        rotation,
-                        glm::vec3{layout::ArrowRadius * 2.0F * size,
-                            layout::ArrowLength * size,
-                            layout::ArrowRadius * 2.0F * size}),
-                    color,
-                    1.0F});
-            }
-            else
-            {
-                parts.push_back({handle,
-                    &m_Cube,
-                    ComposeMatrix(position + direction * layout::ShaftEnd * size,
-                        orientation,
-                        glm::vec3{layout::ScaleCubeHalf * 2.0F * size}),
-                    color,
-                    1.0F});
-            }
-        }
-
-        if (m_Gizmo.Mode == GizmoMode::Translate)
-        {
-            constexpr std::array planeHandles{
-                GizmoHandle::PlaneXY, GizmoHandle::PlaneXZ, GizmoHandle::PlaneYZ};
-            constexpr std::array planeColors{AxisColorZ, AxisColorY, AxisColorX};
-            for (std::size_t index = 0; index < planeHandles.size(); ++index)
-            {
-                const GizmoHandle handle = planeHandles[index];
-                // Quad lives in XY; rotate onto the target plane.
-                glm::quat planeRotation = orientation;
-                if (handle == GizmoHandle::PlaneXZ)
-                {
-                    planeRotation =
-                        orientation * glm::angleAxis(glm::half_pi<float>(), glm::vec3{1, 0, 0});
-                }
-                else if (handle == GizmoHandle::PlaneYZ)
-                {
-                    planeRotation =
-                        orientation * glm::angleAxis(-glm::half_pi<float>(), glm::vec3{0, 1, 0});
-                }
-                const glm::vec3 planeOrigin = position +
-                    planeRotation *
-                        glm::vec3{layout::PlaneOffset * size, layout::PlaneOffset * size, 0.0F};
-                parts.push_back({handle,
-                    &m_Quad,
-                    ComposeMatrix(planeOrigin, planeRotation, glm::vec3{layout::PlaneSize * size}),
-                    isHot(handle) ? HighlightColor : planeColors[index],
-                    0.55F});
-            }
-        }
-        else if (m_Gizmo.Mode == GizmoMode::Scale)
-        {
-            parts.push_back({GizmoHandle::Uniform,
-                &m_Cube,
-                ComposeMatrix(position, orientation, glm::vec3{layout::UniformCubeHalf * 2.0F * size}),
-                isHot(GizmoHandle::Uniform) ? HighlightColor : glm::vec3{0.85F, 0.85F, 0.88F},
-                1.0F});
-        }
+        const viewport_gizmo::GizmoMeshes meshes{
+            &m_Torus, &m_Cylinder, &m_Cone, &m_Cube, &m_Quad};
+        viewport_gizmo::BuildGizmoParts(
+            m_Gizmo,
+            m_View,
+            m_Projection,
+            static_cast<float>(m_Extent.Height),
+            meshes,
+            m_GizmoParts);
     }
 
     void DrawGizmo(rhi::CommandList& list, const bool ldrOverlay = false)
@@ -3133,9 +2785,10 @@ private:
     void CreatePipelines()
     {
         const std::vector<std::byte> source = render::ReadShaderSource("viewport.hlsl");
-        const auto makeShader = [&](const char* entry, const char* target, const char* name, std::uint32_t samplers = 0, std::uint32_t uniformBuffers = 1) {
-            const std::vector<std::byte> code = render::CompileShader(source, entry, target, "viewport.hlsl");
-            auto result = m_Device.CreateShader({entry, name, samplers, uniformBuffers}, code);
+        const auto makeShader = [&](const char* entry, const char* target, const char* name, std::uint32_t samplers = 0, std::uint32_t uniformBuffers = 1, std::uint32_t storageBuffers = 0) {
+            const std::vector<std::byte> code = render::CompileShader(
+                source, entry, m_Device.ShaderTarget(target[0] == 'p'), "viewport.hlsl");
+            auto result = m_Device.CreateShader({entry, name, samplers, uniformBuffers, storageBuffers}, code);
             if (!result)
             {
                 throw std::runtime_error(
@@ -3145,8 +2798,10 @@ private:
             return std::move(result).Value();
         };
         m_MeshVertexShader = makeShader("VertexMain", "vs_5_1", "viewport_vertex", 0, 3);
-        // Lit PS samples t0-t3 material maps + t4-t7 the four directional cascades.
-        m_LitFragmentShader = makeShader("FragmentMain", "ps_5_1", "viewport_fragment_lit", 8);
+        // Lit PS samples t0-t3 material maps + t4-t7 the four directional
+        // cascades, plus 3 Forward+ storage buffers (t8-t10) and a second
+        // uniform buffer (b1) for the tile params.
+        m_LitFragmentShader = makeShader("FragmentMain", "ps_5_1", "viewport_fragment_lit", 8, 2, 3);
         m_UnlitFragmentShader = makeShader("UnlitFragmentMain", "ps_5_1", "viewport_fragment_unlit");
         m_UnlitLdrFragmentShader =
             makeShader("UnlitLdrFragmentMain", "ps_5_1", "viewport_fragment_unlit_ldr");
@@ -3285,7 +2940,11 @@ private:
             const auto makeShadowShader =
                 [&](const char* entry, const char* target, const char* name, std::uint32_t samplers,
                     std::uint32_t uniformBuffers) {
-                    const std::vector<std::byte> code = render::CompileShader(shadowSource, entry, target, "shadow_depth.hlsl");
+                    const std::vector<std::byte> code = render::CompileShader(
+                        shadowSource,
+                        entry,
+                        m_Device.ShaderTarget(target[0] == 'p'),
+                        "shadow_depth.hlsl");
                     auto result = m_Device.CreateShader({entry, name, samplers, uniformBuffers}, code);
                     if (!result)
                     {
@@ -3452,6 +3111,10 @@ private:
     std::unique_ptr<rhi::Buffer> m_VertexBuffer;
     std::unique_ptr<rhi::Buffer> m_IndexBuffer;
     std::unique_ptr<rhi::Buffer> m_LineBuffer;
+    // Forward+ per-frame GPU light data (grows on demand, never shrinks).
+    std::unique_ptr<rhi::Buffer> m_LightBuffer;
+    std::unique_ptr<rhi::Buffer> m_TileHeaderBuffer;
+    std::unique_ptr<rhi::Buffer> m_TileIndexBuffer;
     std::unique_ptr<rhi::Shader> m_MeshVertexShader;
     std::unique_ptr<rhi::Shader> m_LitFragmentShader;
     std::unique_ptr<rhi::Shader> m_UnlitFragmentShader;
@@ -3497,6 +3160,14 @@ private:
     MeshRange m_PlanePrimitive;
     MeshRange m_Capsule;
     LightSet m_FrameLights;
+    // Forward+ frame state: uploaded point lights + the CPU tile assignment and
+    // the fp_params uniform (tile size, tiles across, count, enabled).
+    std::vector<forward_plus::GpuPointLight> m_FramePointLightsGpu;
+    forward_plus::TileAssignment m_FrameTiles;
+    glm::vec4 m_FrameForwardPlus{0.0F};
+    int m_FrameTotalPointLights{0};
+    int m_FrameTotalSpotLights{0};
+    std::chrono::steady_clock::time_point m_LastLightCapLog{};
     glm::vec4 m_FrameAmbientSky{0.45F, 0.55F, 0.70F, 0.55F};
     glm::vec4 m_FrameAmbientGround{0.28F, 0.25F, 0.22F, 0.0F};
     glm::vec4 m_FrameEnvParams{1.0F, 0.0F, 0.0F, 0.0F};
@@ -3510,6 +3181,7 @@ private:
     glm::vec4 m_FrameSkyGround{0.20F, 0.19F, 0.18F, 0.0F};
     bool m_Orthographic{false};
     bool m_EditorVisuals{false};
+    bool m_GroundGrid{true};
     bool m_CollisionVisualization{false};
     ViewportDebugView m_ViewportDebugView{ViewportDebugView::None};
     PostDebugView m_PostDebugView{PostDebugView::None};
@@ -3529,45 +3201,45 @@ private:
     float m_LastGpuRenderMs{-1.0F};
 };
 
-class SdlViewportPicking final : public Picking
+class RhiViewportPicking final : public Picking
 {
 public:
-    explicit SdlViewportPicking(SdlViewportRenderer& renderer) : m_Renderer(renderer) {}
+    explicit RhiViewportPicking(RhiViewportRenderer& renderer) : m_Renderer(renderer) {}
     void Request(const PickRequest request) override { m_Renderer.RequestPick(request); }
     [[nodiscard]] std::optional<PickResult> Poll() override { return m_Renderer.PollPick(); }
 
 private:
-    SdlViewportRenderer& m_Renderer;
+    RhiViewportRenderer& m_Renderer;
 };
 
 std::unique_ptr<ViewportRenderer> CreateViewportRenderer(rhi::Device& device, IAssetDatabase& database)
 {
-    return std::make_unique<SdlViewportRenderer>(device, database);
+    return std::make_unique<RhiViewportRenderer>(device, database);
 }
 
 std::unique_ptr<Picking> CreateViewportPicking(ViewportRenderer& renderer)
 {
-    auto* sdlRenderer = dynamic_cast<SdlViewportRenderer*>(&renderer);
-    if (sdlRenderer == nullptr)
+    auto* rhiRenderer = dynamic_cast<RhiViewportRenderer*>(&renderer);
+    if (rhiRenderer == nullptr)
     {
         return nullptr;
     }
-    return std::make_unique<SdlViewportPicking>(*sdlRenderer);
+    return std::make_unique<RhiViewportPicking>(*rhiRenderer);
 }
 
 void SetViewportOrthographic(ViewportRenderer& renderer, const bool enabled) noexcept
 {
-    if (auto* sdlRenderer = dynamic_cast<SdlViewportRenderer*>(&renderer))
+    if (auto* rhiRenderer = dynamic_cast<RhiViewportRenderer*>(&renderer))
     {
-        sdlRenderer->SetOrthographic(enabled);
+        rhiRenderer->SetOrthographic(enabled);
     }
 }
 
 void SetViewportLog(ViewportRenderer& renderer, std::function<void(std::string)> log)
 {
-    if (auto* sdlRenderer = dynamic_cast<SdlViewportRenderer*>(&renderer))
+    if (auto* rhiRenderer = dynamic_cast<RhiViewportRenderer*>(&renderer))
     {
-        sdlRenderer->SetLog(std::move(log));
+        rhiRenderer->SetLog(std::move(log));
     }
 }
 }

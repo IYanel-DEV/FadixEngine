@@ -20,8 +20,10 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <span>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -424,17 +426,63 @@ void LoadSkeleton(const tinygltf::Model& model, GltfMeshAsset& asset)
     asset.HasSkeleton = true;
 }
 
+// Give the clip a name that is unique within the model so it can be selected by
+// name in the UI and stored in AnimatorComponent.ClipName without collisions.
+[[nodiscard]] std::string UniqueClipName(
+    const GltfMeshAsset& asset, const std::string& desired, const std::size_t ordinal)
+{
+    std::string base = desired.empty() ? ("Clip" + std::to_string(ordinal)) : desired;
+    const auto taken = [&asset](const std::string& candidate) {
+        for (const AnimationClipAsset& existing : asset.Animations)
+        {
+            if (existing.Name == candidate)
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+    if (!taken(base))
+    {
+        return base;
+    }
+    for (int suffix = 2;; ++suffix)
+    {
+        std::string candidate = base + " (" + std::to_string(suffix) + ")";
+        if (!taken(candidate))
+        {
+            return candidate;
+        }
+    }
+}
+
 void LoadAnimations(
     const tinygltf::Model& model,
     const std::unordered_map<int, int>& nodeToJoint,
-    GltfMeshAsset& asset)
+    GltfMeshAsset& asset,
+    const std::function<void(const std::string&)>& log)
 {
+    // Secondary map: joint *name* -> joint index. Full-body glTF packs often drive
+    // channels off an armature/extra root node that is not listed in the first skin's
+    // joints array; matching by name still lands them on the right joint.
+    std::unordered_map<std::string, int> nameToJoint;
+    for (std::size_t i = 0; i < asset.Skeleton.Joints.size(); ++i)
+    {
+        const std::string& name = asset.Skeleton.Joints[i].Name;
+        if (!name.empty())
+        {
+            nameToJoint.emplace(name, static_cast<int>(i));
+        }
+    }
+
+    const std::size_t sourceCount = model.animations.size();
+    std::size_t dropped = 0;
+    std::size_t ordinal = 0;
     for (const tinygltf::Animation& animation : model.animations)
     {
+        const std::size_t index = ordinal++;
         AnimationClipAsset clip;
-        clip.Name = animation.name.empty()
-            ? ("Clip" + std::to_string(asset.Animations.size()))
-            : animation.name;
+        clip.Name = UniqueClipName(asset, animation.name, index);
 
         for (const tinygltf::AnimationChannel& channel : animation.channels)
         {
@@ -443,14 +491,29 @@ void LoadAnimations(
             {
                 continue;
             }
-            const auto jointIt = nodeToJoint.find(channel.target_node);
-            if (jointIt == nodeToJoint.end())
+            int jointIndex = -1;
+            if (const auto jointIt = nodeToJoint.find(channel.target_node);
+                jointIt != nodeToJoint.end())
+            {
+                jointIndex = jointIt->second;
+            }
+            else if (channel.target_node >= 0 &&
+                channel.target_node < static_cast<int>(model.nodes.size()))
+            {
+                const auto nameIt =
+                    nameToJoint.find(model.nodes[static_cast<std::size_t>(channel.target_node)].name);
+                if (nameIt != nameToJoint.end())
+                {
+                    jointIndex = nameIt->second;
+                }
+            }
+            if (jointIndex < 0)
             {
                 continue;
             }
 
             AnimationChannel out;
-            out.JointIndex = jointIt->second;
+            out.JointIndex = jointIndex;
             if (channel.target_path == "translation")
             {
                 out.Target = AnimationChannel::Property::Translation;
@@ -470,6 +533,9 @@ void LoadAnimations(
 
             const tinygltf::AnimationSampler& sampler =
                 animation.samplers[static_cast<std::size_t>(channel.sampler)];
+            out.InterpolationMode = sampler.interpolation == "STEP"
+                ? AnimationChannel::Interpolation::Step
+                : AnimationChannel::Interpolation::Linear;
             const AccessorView times = ViewAccessor(model, sampler.input);
             const AccessorView values = ViewAccessor(model, sampler.output);
             if (times.Data == nullptr || values.Data == nullptr || times.Count == 0)
@@ -503,6 +569,22 @@ void LoadAnimations(
         {
             asset.Animations.push_back(std::move(clip));
         }
+        else
+        {
+            ++dropped;
+            if (log)
+            {
+                log("[FDX Animation] dropped clip '" + clip.Name +
+                    "' (0 joint channels; likely morph-target or unmapped nodes)");
+            }
+        }
+    }
+    if (log)
+    {
+        log("[FDX Animation] '" + asset.DebugName + "': glTF has " +
+            std::to_string(sourceCount) + " animations; imported " +
+            std::to_string(asset.Animations.size()) + " clips (dropped " +
+            std::to_string(dropped) + " with 0 joint channels).");
     }
 }
 }
@@ -510,6 +592,12 @@ void LoadAnimations(
 GltfMeshCache::GltfMeshCache(rhi::Device& device) : m_Device(device) {}
 
 const GltfMeshAsset* GltfMeshCache::Get(const AssetHandle& handle) const
+{
+    const auto it = m_Meshes.find(handle);
+    return it != m_Meshes.end() ? it->second.get() : nullptr;
+}
+
+GltfMeshAsset* GltfMeshCache::GetMutable(const AssetHandle& handle)
 {
     const auto it = m_Meshes.find(handle);
     return it != m_Meshes.end() ? it->second.get() : nullptr;
@@ -659,7 +747,7 @@ const GltfMeshAsset* GltfMeshCache::Load(const AssetHandle& handle,
         {
             nodeToJoint[skin.joints[static_cast<std::size_t>(i)]] = i;
         }
-        LoadAnimations(model, nodeToJoint, *asset);
+        LoadAnimations(model, nodeToJoint, *asset, report);
     }
 
     auto vertexResult = m_Device.CreateBuffer(

@@ -64,6 +64,41 @@ int main()
         std::cerr << "[smoke] project file does not contain current engine version\n";
         return 13;
     }
+    if (projectJson.find("\"formatVersion\"") == std::string::npos)
+    {
+        std::cerr << "[smoke] project file missing formatVersion\n";
+        return 14;
+    }
+
+    // Format-version gate: newer or missing version must fail loudly; current loads.
+    const auto projectFilePath = created.Value().ProjectFile;
+    const auto rewrite = [&](const std::string& contents) {
+        std::ofstream out(projectFilePath, std::ios::binary | std::ios::trunc);
+        out << contents;
+    };
+    std::string newer = projectJson;
+    if (const auto pos = newer.find("\"formatVersion\": 1"); pos != std::string::npos)
+    {
+        newer.replace(pos, std::string("\"formatVersion\": 1").size(), "\"formatVersion\": 999");
+    }
+    rewrite(newer);
+    if (service->Open(projectFilePath))
+    {
+        std::cerr << "[smoke] Open accepted a newer formatVersion\n";
+        return 15;
+    }
+    rewrite("{ \"name\": \"NoVersion\", \"defaultScene\": \"Scenes/Main.scene\", \"folders\": {} }");
+    if (service->Open(projectFilePath))
+    {
+        std::cerr << "[smoke] Open accepted a missing formatVersion\n";
+        return 16;
+    }
+    rewrite(projectJson);
+    if (!service->Open(projectFilePath))
+    {
+        std::cerr << "[smoke] Open rejected the current formatVersion\n";
+        return 17;
+    }
 
     auto created2d = service->Create("SmokeEmpty2D", root, fadix::ProjectTemplate::Empty2D);
     if (!created2d)

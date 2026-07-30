@@ -119,6 +119,11 @@ std::vector<FxsApiEntry> BuildCatalog()
         "function OnDestroy(entity)", {{"entity", "Entity"}}, "nil",
         "Called when the entity is destroyed.",
         "function OnDestroy(entity)\n    \nend"));
+    out.push_back(Make(names::kOnAnimationEvent, "", FxsCompletionKind::Snippet,
+        "function OnAnimationEvent(entity, name, payload)",
+        {{"entity", "Entity"}, {"name", "string"}, {"payload", "string"}}, "nil",
+        "Called when a playing animation crosses an authored event marker.",
+        "function OnAnimationEvent(entity, name, payload)\n    \nend"));
 
     // Entity usertype (LuaVM new_usertype).
     out.push_back(Make(names::kEntityId, names::kEntityType, FxsCompletionKind::Property,
@@ -158,6 +163,55 @@ std::vector<FxsApiEntry> BuildCatalog()
     out.push_back(Make(names::kEntityIsCharacterGrounded, names::kEntityType,
         FxsCompletionKind::Function, "entity:isCharacterGrounded()", {}, "boolean",
         "True while the Character Controller is standing on walkable ground."));
+    out.push_back(Make(names::kEntityPlayAnimation, names::kEntityType,
+        FxsCompletionKind::Function, "entity:playAnimation(name)", {{"name", "string|nil"}},
+        "boolean", "Start a named skeletal or entity-transform clip from time zero."));
+    out.push_back(Make(names::kEntityCrossFadeAnimation, names::kEntityType,
+        FxsCompletionKind::Function, "entity:crossFadeAnimation(name, duration)",
+        {{"name", "string"}, {"duration", "number|nil"}}, "boolean",
+        "Blend from the active clip into a named clip; duration defaults to 0.25 seconds."));
+    out.push_back(Make(names::kEntityPauseAnimation, names::kEntityType,
+        FxsCompletionKind::Function, "entity:pauseAnimation()", {}, "boolean",
+        "Pause the active animation without losing its current time."));
+    out.push_back(Make(names::kEntityResumeAnimation, names::kEntityType,
+        FxsCompletionKind::Function, "entity:resumeAnimation()", {}, "boolean",
+        "Resume an animation previously paused on this entity."));
+    out.push_back(Make(names::kEntityStopAnimation, names::kEntityType,
+        FxsCompletionKind::Function, "entity:stopAnimation()", {}, "nil",
+        "Stop animation playback and reset its time to zero."));
+    out.push_back(Make(names::kEntityIsAnimationPlaying, names::kEntityType,
+        FxsCompletionKind::Function, "entity:isAnimationPlaying()", {}, "boolean",
+        "True while this entity has an animation playing."));
+    out.push_back(Make(names::kEntitySeekAnimation, names::kEntityType,
+        FxsCompletionKind::Function, "entity:seekAnimation(seconds)", {{"seconds", "number"}},
+        "boolean", "Set animation playback time in seconds."));
+    out.push_back(Make(names::kEntitySetAnimationSpeed, names::kEntityType,
+        FxsCompletionKind::Function, "entity:setAnimationSpeed(speed)", {{"speed", "number"}},
+        "boolean", "Set playback speed for this entity's animation controllers."));
+    out.push_back(Make(names::kEntityGetCurrentAnimation, names::kEntityType,
+        FxsCompletionKind::Function, "entity:getCurrentAnimation()", {}, "string",
+        "Return the selected animation clip name, or an empty string."));
+    out.push_back(Make(names::kEntityGetAnimationTime, names::kEntityType,
+        FxsCompletionKind::Function, "entity:getAnimationTime()", {}, "number",
+        "Return the current animation time in seconds."));
+    out.push_back(Make(names::kEntityStartAnimator, names::kEntityType,
+        FxsCompletionKind::Function, "entity:startAnimator()", {}, "boolean",
+        "Start the Animator Controller at its entry state."));
+    out.push_back(Make(names::kEntitySetAnimatorBool, names::kEntityType,
+        FxsCompletionKind::Function, "entity:setAnimatorBool(name, value)",
+        {{"name", "string"}, {"value", "boolean"}}, "boolean",
+        "Set a Bool parameter on the Animator Controller."));
+    out.push_back(Make(names::kEntitySetAnimatorFloat, names::kEntityType,
+        FxsCompletionKind::Function, "entity:setAnimatorFloat(name, value)",
+        {{"name", "string"}, {"value", "number"}}, "boolean",
+        "Set a Float parameter on the Animator Controller."));
+    out.push_back(Make(names::kEntitySetAnimatorInt, names::kEntityType,
+        FxsCompletionKind::Function, "entity:setAnimatorInt(name, value)",
+        {{"name", "string"}, {"value", "integer"}}, "boolean",
+        "Set an Int parameter on the Animator Controller."));
+    out.push_back(Make(names::kEntityTriggerAnimator, names::kEntityType,
+        FxsCompletionKind::Function, "entity:triggerAnimator(name)", {{"name", "string"}},
+        "boolean", "Set a Trigger parameter until its transition is taken."));
 
     out.push_back(Make(names::kPrint, "", FxsCompletionKind::Function,
         "print(...)", {{"...", "any"}}, "nil",
@@ -190,6 +244,28 @@ std::vector<FxsApiEntry> BuildCatalog()
     out.push_back(Make(names::kAudioSetMusicVolume, names::kAudio, FxsCompletionKind::Function,
         "audio.setMusicVolume(volume)", {{"volume", "number"}}, "nil",
         "Set music bus volume."));
+
+    // Gameplay world API (LuaVM::BindGameTables).
+    out.push_back(Make(names::kWorld, "", FxsCompletionKind::Module,
+        "World", {}, "table", "Runtime world queries."));
+    out.push_back(Make(names::kWorldFind, names::kWorld, FxsCompletionKind::Function,
+        "World.find(name)", {{"name", "string"}}, "Entity|nil",
+        "First entity whose NameComponent equals name, or nil."));
+
+    out.push_back(Make(names::kPrefab, "", FxsCompletionKind::Module,
+        "Prefab", {}, "table", "Prefab instantiation."));
+    out.push_back(Make(names::kPrefabSpawn, names::kPrefab, FxsCompletionKind::Function,
+        "Prefab.spawn(path, x, y, z)",
+        {{"path", "string"}, {"x", "number"}, {"y", "number"}, {"z", "number"}}, "Entity|nil",
+        "Instantiate a .prefab at the position; returns the root entity or nil."));
+
+    out.push_back(Make(names::kScene, "", FxsCompletionKind::Module,
+        "Scene", {}, "table", "Scene / level control."));
+    out.push_back(Make(names::kSceneLoad, names::kScene, FxsCompletionKind::Function,
+        "Scene.load(pathOrName)", {{"pathOrName", "string"}}, "nil",
+        "Load a scene at end of tick. Accepts a project-relative path "
+        "(\"Scenes/Level2.scene\") or a scene display name (\"Lobby Scene\"); "
+        "display-name match is case-insensitive and must be unique."));
 
     // Libraries actually opened by LuaVM::open_libraries (table names only).
     out.push_back(Make("math", "", FxsCompletionKind::Module, "math", {}, "table",
@@ -377,6 +453,7 @@ std::vector<std::string> FxsApiCatalog::RequiredPublicApiKeys()
         std::string("/") + names::kOnStart,
         std::string("/") + names::kOnUpdate,
         std::string("/") + names::kOnDestroy,
+        std::string("/") + names::kOnAnimationEvent,
         std::string(names::kEntityType) + "/" + names::kEntityId,
         std::string(names::kEntityType) + "/" + names::kEntityGetName,
         std::string(names::kEntityType) + "/" + names::kEntityGetPosition,
@@ -387,6 +464,21 @@ std::vector<std::string> FxsApiCatalog::RequiredPublicApiKeys()
         std::string(names::kEntityType) + "/" + names::kEntitySetScale,
         std::string(names::kEntityType) + "/" + names::kEntityDestroy,
         std::string(names::kEntityType) + "/" + names::kEntityGetTarget,
+        std::string(names::kEntityType) + "/" + names::kEntityPlayAnimation,
+        std::string(names::kEntityType) + "/" + names::kEntityCrossFadeAnimation,
+        std::string(names::kEntityType) + "/" + names::kEntityPauseAnimation,
+        std::string(names::kEntityType) + "/" + names::kEntityResumeAnimation,
+        std::string(names::kEntityType) + "/" + names::kEntityStopAnimation,
+        std::string(names::kEntityType) + "/" + names::kEntityIsAnimationPlaying,
+        std::string(names::kEntityType) + "/" + names::kEntitySeekAnimation,
+        std::string(names::kEntityType) + "/" + names::kEntitySetAnimationSpeed,
+        std::string(names::kEntityType) + "/" + names::kEntityGetCurrentAnimation,
+        std::string(names::kEntityType) + "/" + names::kEntityGetAnimationTime,
+        std::string(names::kEntityType) + "/" + names::kEntityStartAnimator,
+        std::string(names::kEntityType) + "/" + names::kEntitySetAnimatorBool,
+        std::string(names::kEntityType) + "/" + names::kEntitySetAnimatorFloat,
+        std::string(names::kEntityType) + "/" + names::kEntitySetAnimatorInt,
+        std::string(names::kEntityType) + "/" + names::kEntityTriggerAnimator,
         std::string("/") + names::kPrint,
         std::string(names::kInput) + "/" + names::kInputIsDown,
         std::string(names::kAudio) + "/" + names::kAudioLoad,
@@ -395,6 +487,9 @@ std::vector<std::string> FxsApiCatalog::RequiredPublicApiKeys()
         std::string(names::kAudio) + "/" + names::kAudioSetMasterVolume,
         std::string(names::kAudio) + "/" + names::kAudioSetSoundVolume,
         std::string(names::kAudio) + "/" + names::kAudioSetMusicVolume,
+        std::string(names::kWorld) + "/" + names::kWorldFind,
+        std::string(names::kPrefab) + "/" + names::kPrefabSpawn,
+        std::string(names::kScene) + "/" + names::kSceneLoad,
         "/math",
         "/string",
         "/table",

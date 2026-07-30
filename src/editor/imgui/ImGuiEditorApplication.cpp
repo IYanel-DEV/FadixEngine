@@ -1,6 +1,7 @@
 #include "editor/imgui/ImGuiEditorApplication.hpp"
 
 #include "assets/AssetDatabase.hpp"
+#include "assets/EmbeddedAssetProvider.hpp"
 #include "assets/GltfMeshCache.hpp"
 #include "editor/camera/CameraSelection.hpp"
 #include "editor/play/PlaySession.hpp"
@@ -148,9 +149,7 @@ private:
 }
 
 ImGuiEditorApplication::ImGuiEditorApplication()
-#ifdef FADIX_ASSET_ROOT
-    : m_AssetRoot(FADIX_ASSET_ROOT)
-#endif
+    : m_AssetRoot(RuntimeAssetRoot())
 {
 }
 
@@ -166,6 +165,21 @@ bool ImGuiEditorApplication::InitializeGameUi()
         return false;
     }
     auto* nativeDevice = static_cast<SDL_GPUDevice*>(GetNativeDeviceHandle(*m_Device));
+    if (nativeDevice == nullptr)
+    {
+        std::clog << "[Fadix] Game UI overlay disabled on Direct3D 11 compatibility renderer.\n";
+        return true;
+    }
+    constexpr SDL_GPUShaderFormat rmlShaderFormats =
+        SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXIL | SDL_GPU_SHADERFORMAT_MSL;
+    if ((SDL_GetGPUShaderFormats(nativeDevice) & rmlShaderFormats) == 0)
+    {
+        std::clog
+            << "[Fadix] Game UI overlay disabled: this GPU supports DXBC only; "
+               "RmlUi requires SPIR-V, DXIL or MSL.\n";
+        return true;
+    }
+
     auto system = std::make_unique<SystemInterface_SDL>();
     system->SetWindow(m_Window);
     auto render = std::make_unique<RenderInterface_SDL_GPU>(nativeDevice, m_Window);
@@ -514,6 +528,14 @@ void ImGuiEditorApplication::WireAssetBrowser()
     {
         m_Session.Play().BindAudio(m_AudioEngine.get());
     }
+    // Gameplay world API: Prefab.spawn / Scene.load need a physics factory and a
+    // project-relative path resolver. Both read live state so they follow the
+    // active project and collision meshes.
+    m_Session.Play().SetGameServices(
+        [this]() { return sceneplay::CreatePhysicsWorldAdapter(m_GltfMeshes.get()); },
+        [this](const std::string& relative) {
+            return m_Session.ActiveProject().RootPath / relative;
+        });
 
     if (m_Device)
     {
@@ -891,9 +913,11 @@ void ImGuiEditorApplication::DrawGraphicsWindow()
             diag->VisibleMeshes,
             diag->PostPasses);
         ImGui::Text(
-            "Lights P/S %d/%d  Shadow lights %d  Shadow passes %d",
+            "Lights P %d/%d  S %d/%d  Shadow lights %d  Shadow passes %d",
             diag->ActivePointLights,
+            diag->TotalPointLights,
             diag->ActiveSpotLights,
+            diag->TotalSpotLights,
             diag->ShadowedLights,
             diag->ShadowPasses);
         ImGui::Text(
@@ -1128,6 +1152,13 @@ void ImGuiEditorApplication::ProcessCommands()
     {
         m_Ui.OpenScenePathReady = false;
         OpenScenePath(m_Ui.ScenePathBuf);
+    }
+
+    if (m_Ui.RequestOpenScenePath)
+    {
+        m_PendingSceneAsset = std::move(*m_Ui.RequestOpenScenePath);
+        m_Ui.RequestOpenScenePath.reset();
+        RequestWithConfirm(PendingConfirmAction::OpenSceneAsset);
     }
 
     if (m_Ui.SaveScenePathReady)
@@ -1607,15 +1638,21 @@ int ImGuiEditorApplication::Run()
     m_Device = CreateDeviceFromWindow(m_Window);
     if (!m_Device)
     {
+        const std::string gpuError = SDL_GetError();
         Shutdown();
-        throw std::runtime_error("CreateDeviceFromWindow failed");
+        throw std::runtime_error(
+            "CreateDeviceFromWindow failed: " +
+            (gpuError.empty() ? std::string{"unknown SDL GPU error"} : gpuError));
     }
 
     auto* nativeDevice = static_cast<SDL_GPUDevice*>(GetNativeDeviceHandle(*m_Device));
-    if (!m_ImGui.Initialize(m_Window, nativeDevice))
+    if (!m_ImGui.Initialize(m_Window, *m_Device))
     {
+        const std::string imguiError = SDL_GetError();
         Shutdown();
-        throw std::runtime_error("ImGuiLayer::Initialize failed");
+        throw std::runtime_error(
+            "ImGuiLayer::Initialize failed: " +
+            (imguiError.empty() ? std::string{"unknown SDL GPU error"} : imguiError));
     }
 
     m_AudioEngine = std::make_unique<AudioEngine>();
@@ -1637,7 +1674,10 @@ int ImGuiEditorApplication::Run()
 
     m_Theme.Apply();
     static_cast<void>(m_Theme.LoadFonts(m_AssetRoot));
-    static_cast<void>(m_Theme.LoadLogo(nativeDevice, m_AssetRoot));
+    if (nativeDevice != nullptr)
+    {
+        static_cast<void>(m_Theme.LoadLogo(nativeDevice, m_AssetRoot));
+    }
     ImGui::GetIO().ConfigDpiScaleFonts = true;
     m_AppliedDpiScale = 1.0F;
     OnDisplayScaleChanged();

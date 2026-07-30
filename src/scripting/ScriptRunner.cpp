@@ -31,9 +31,20 @@ void ScriptRunner::BindAudio(AudioEngine* engine)
     m_Vm.BindAudio(engine);
 }
 
+void ScriptRunner::SetGameCallbacks(
+    std::function<std::optional<entt::entity>(const std::string&, float, float, float)> spawnPrefab,
+    std::function<void(const std::string&)> loadScene)
+{
+    m_WorldApi.SpawnPrefab = std::move(spawnPrefab);
+    m_WorldApi.LoadScene = std::move(loadScene);
+}
+
 void ScriptRunner::Start(entt::registry& registry, const SourceResolver& resolver)
 {
     m_Vm.Reset();
+    m_Vm.SetWorldApi(&m_WorldApi); // Reset rebuilt the Lua state; rebind the globals.
+    m_WorldApi.Registry = &registry;
+    m_WorldApi.PendingDestroy = &m_PendingDestroy;
     m_Instances.clear();
     m_NativeInstances.clear();
     m_PendingDestroy.clear();
@@ -45,58 +56,120 @@ void ScriptRunner::Start(entt::registry& registry, const SourceResolver& resolve
 
     for (const entt::entity entity : registry.view<ScriptComponent>())
     {
-        const ScriptComponent& component = registry.get<ScriptComponent>(entity);
-        if (!component.Enabled)
+        StartEntity(registry, entity, resolver);
+    }
+    ApplyPendingDestroy(registry);
+}
+
+void ScriptRunner::DispatchAnimationEvents(entt::registry& registry)
+{
+    const auto dispatch = [&](const entt::entity entity, const auto& callback) {
+        if (const auto* animator = registry.try_get<AnimatorComponent>(entity))
+        {
+            for (const AnimationEvent& event : animator->PendingEvents)
+            {
+                callback(event);
+            }
+        }
+        if (const auto* animator = registry.try_get<TransformAnimatorComponent>(entity))
+        {
+            for (const AnimationEvent& event : animator->PendingEvents)
+            {
+                callback(event);
+            }
+        }
+    };
+    for (const Instance& instance : m_Instances)
+    {
+        if (!registry.valid(instance.Entity))
         {
             continue;
         }
-        for (const std::string& name : component.ScriptNames)
-        {
-            const std::optional<ResolvedScript> resolved = resolver(name);
-            if (!resolved)
-            {
-                continue;
-            }
-            if (resolved->Language == ScriptLanguage::Cpp)
-            {
-                if (m_NativeLoader == nullptr)
-                {
-                    continue; // native path disabled
-                }
-                NativeScriptLoader::Loaded loaded =
-                    m_NativeLoader->CompileAndLoad(resolved->SourcePath);
-                if (loaded.Instance == nullptr)
-                {
-                    continue; // loader already logged the reason
-                }
-                ScriptEntity handle{ScriptEntityHandle{&registry, entity, &m_PendingDestroy}};
-                loaded.Instance->OnStart(handle);
-                m_NativeInstances.push_back(NativeInstance{entity, loaded});
-                continue;
-            }
-            if (!m_Vm.Compile(name, resolved->Source))
-            {
-                if (m_Logger)
-                {
-                    m_Logger("Script '" + name + "': " + m_Vm.LastError(), "error");
-                }
-                continue;
-            }
-            const int instance = m_Vm.Instantiate(name);
-            if (instance < 0)
-            {
-                if (m_Logger)
-                {
-                    m_Logger("Script '" + name + "': " + m_Vm.LastError(), "error");
-                }
-                continue;
-            }
-            const ScriptEntityHandle handle{&registry, entity, &m_PendingDestroy};
-            m_Vm.CallStart(instance, handle);
-            m_Instances.push_back(Instance{entity, instance});
-        }
+        const ScriptEntityHandle handle{&registry, instance.Entity, &m_PendingDestroy};
+        dispatch(instance.Entity, [&](const AnimationEvent& event) {
+            m_Vm.CallAnimationEvent(instance.Id, handle, event.Name, event.Payload);
+        });
     }
-    ApplyPendingDestroy(registry);
+    for (const NativeInstance& instance : m_NativeInstances)
+    {
+        if (!registry.valid(instance.Entity) || instance.Loaded.Instance == nullptr)
+        {
+            continue;
+        }
+        ScriptEntity handle{ScriptEntityHandle{&registry, instance.Entity, &m_PendingDestroy}};
+        dispatch(instance.Entity, [&](const AnimationEvent& event) {
+            instance.Loaded.Instance->OnAnimationEvent(handle, event.Name, event.Payload);
+        });
+    }
+    for (auto&& [entity, animator] : registry.view<AnimatorComponent>().each())
+    {
+        animator.PendingEvents.clear();
+    }
+    for (auto&& [entity, animator] : registry.view<TransformAnimatorComponent>().each())
+    {
+        animator.PendingEvents.clear();
+    }
+}
+
+void ScriptRunner::StartEntity(
+    entt::registry& registry, const entt::entity entity, const SourceResolver& resolver)
+{
+    if (!resolver || !registry.valid(entity))
+    {
+        return;
+    }
+    const ScriptComponent* component = registry.try_get<ScriptComponent>(entity);
+    if (component == nullptr || !component->Enabled)
+    {
+        return;
+    }
+    m_WorldApi.Registry = &registry;
+    m_WorldApi.PendingDestroy = &m_PendingDestroy;
+    for (const std::string& name : component->ScriptNames)
+    {
+        const std::optional<ResolvedScript> resolved = resolver(name);
+        if (!resolved)
+        {
+            continue;
+        }
+        if (resolved->Language == ScriptLanguage::Cpp)
+        {
+            if (m_NativeLoader == nullptr)
+            {
+                continue; // native path disabled
+            }
+            NativeScriptLoader::Loaded loaded =
+                m_NativeLoader->CompileAndLoad(resolved->SourcePath);
+            if (loaded.Instance == nullptr)
+            {
+                continue; // loader already logged the reason
+            }
+            ScriptEntity handle{ScriptEntityHandle{&registry, entity, &m_PendingDestroy}};
+            loaded.Instance->OnStart(handle);
+            m_NativeInstances.push_back(NativeInstance{entity, loaded});
+            continue;
+        }
+        if (!m_Vm.Compile(name, resolved->Source))
+        {
+            if (m_Logger)
+            {
+                m_Logger("Script '" + name + "': " + m_Vm.LastError(), "error");
+            }
+            continue;
+        }
+        const int instance = m_Vm.Instantiate(name);
+        if (instance < 0)
+        {
+            if (m_Logger)
+            {
+                m_Logger("Script '" + name + "': " + m_Vm.LastError(), "error");
+            }
+            continue;
+        }
+        const ScriptEntityHandle handle{&registry, entity, &m_PendingDestroy};
+        m_Vm.CallStart(instance, handle);
+        m_Instances.push_back(Instance{entity, instance});
+    }
 }
 
 void ScriptRunner::Update(entt::registry& registry, const float deltaTime)
@@ -105,8 +178,16 @@ void ScriptRunner::Update(entt::registry& registry, const float deltaTime)
     {
         return;
     }
-    for (const Instance& instance : m_Instances)
+    m_WorldApi.Registry = &registry;
+    m_WorldApi.PendingDestroy = &m_PendingDestroy;
+    DispatchAnimationEvents(registry);
+    // Index over a snapshot count with copies: an OnUpdate may Prefab.spawn, which
+    // StartEntity's push_back can reallocate m_Instances. New instances already
+    // got OnStart and are picked up next frame; skip them this frame.
+    const std::size_t liveCount = m_Instances.size();
+    for (std::size_t i = 0; i < liveCount; ++i)
     {
+        const Instance instance = m_Instances[i];
         if (!registry.valid(instance.Entity))
         {
             continue;
@@ -114,8 +195,10 @@ void ScriptRunner::Update(entt::registry& registry, const float deltaTime)
         const ScriptEntityHandle handle{&registry, instance.Entity, &m_PendingDestroy};
         m_Vm.CallUpdate(instance.Id, handle, deltaTime);
     }
-    for (const NativeInstance& instance : m_NativeInstances)
+    const std::size_t liveNative = m_NativeInstances.size();
+    for (std::size_t i = 0; i < liveNative; ++i)
     {
+        const NativeInstance instance = m_NativeInstances[i];
         if (!registry.valid(instance.Entity) || instance.Loaded.Instance == nullptr)
         {
             continue;

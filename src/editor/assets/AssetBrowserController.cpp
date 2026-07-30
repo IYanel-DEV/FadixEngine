@@ -224,6 +224,11 @@ Result<void> AssetBrowserController::NavigateUp()
     return OpenFolder(m_CurrentFolder.parent_path());
 }
 
+Result<void> AssetBrowserController::NavigateHome()
+{
+    return OpenFolder(m_AssetsRoot);
+}
+
 const std::filesystem::path& AssetBrowserController::CurrentFolder() const noexcept
 {
     return m_CurrentFolder;
