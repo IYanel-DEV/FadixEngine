@@ -62,7 +62,8 @@ int main()
         "FDX animation is indexed as an animation asset");
     Check(HasEntry(browser, "Hero.fdxcontroller", "AnimatorController"),
         "FDX controller is indexed as an Animator Controller asset");
-    Check(browser.OpenFolder(root / "Assets").IsOk(), "Assets root reopens");
+    Check(browser.NavigateHome().IsOk() && browser.CurrentFolder() == root / "Assets",
+        "Content Browser home returns to Assets root");
 
     Check(browser.OpenFolder(root / "Scenes").IsOk(), "Project Scenes opens in Content Browser");
     Check(HasEntry(browser, "Main.scene", "Scene"), "Scene file is indexed as a scene asset");

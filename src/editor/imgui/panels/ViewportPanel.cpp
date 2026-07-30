@@ -215,6 +215,13 @@ void ViewportPanel::ResetTemporalHistory() noexcept
     }
 }
 
+void ViewportPanel::ResetSceneCamera(CameraModule& camera) noexcept
+{
+    camera.Camera() = WorkbenchCamera{};
+    camera.Input().Reset();
+    ResetTemporalHistory();
+}
+
 std::optional<RenderDiagnostics> ViewportPanel::FocusedViewportDiagnostics() const noexcept
 {
     const View* view = nullptr;
@@ -314,6 +321,7 @@ void ViewportPanel::RenderTargets(
     {
         EnsureSize(m_Scene);
         m_Scene.Renderer->SetEditorVisualsEnabled(!playing);
+        m_Scene.Renderer->SetGroundGridEnabled(!playing && m_ShowGroundGrid);
         m_Scene.Renderer->SetCollisionVisualizationEnabled(!playing && m_ShowCollisionShapes);
         m_Scene.Renderer->SetViewportDebugView(m_DebugView);
         m_Scene.Renderer->SetSimDelta(deltaSeconds);
@@ -561,7 +569,10 @@ glm::vec2 ViewportPanel::MouseInViewPixels(const View& view) const
 }
 
 void ViewportPanel::DrawSceneToolbar(
-    EditorUiState& ui, GizmoSystem& gizmo, const EditorPlayMode playMode)
+    EditorUiState& ui,
+    CameraModule& camera,
+    GizmoSystem& gizmo,
+    const EditorPlayMode playMode)
 {
     static_cast<void>(gizmo);
     auto tool = [&](const char* label, const char* tip, const int id) {
@@ -591,6 +602,27 @@ void ViewportPanel::DrawSceneToolbar(
     if (ImGui::SmallButton(m_GizmoLocalSpace ? FADIX_ICON_CUBE " Local" : FADIX_ICON_GLOBE " World"))
     {
         m_GizmoLocalSpace = !m_GizmoLocalSpace;
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton(m_AlwaysSnap ? "Snap On" : "Snap"))
+    {
+        ImGui::OpenPopup("##GizmoSnap");
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Configure transform snapping");
+    }
+    if (ImGui::BeginPopup("##GizmoSnap"))
+    {
+        ImGui::Checkbox("Always snap", &m_AlwaysSnap);
+        ImGui::TextDisabled("Ctrl also snaps while dragging");
+        ImGui::DragFloat("Move", &m_GizmoSnap.Translation, 0.05F, 0.01F, 1000.0F, "%.2f",
+            ImGuiSliderFlags_AlwaysClamp);
+        ImGui::DragFloat("Rotate", &m_GizmoSnap.RotationDegrees, 1.0F, 1.0F, 180.0F, "%.0f deg",
+            ImGuiSliderFlags_AlwaysClamp);
+        ImGui::DragFloat("Scale", &m_GizmoSnap.Scale, 0.01F, 0.01F, 10.0F, "%.2f",
+            ImGuiSliderFlags_AlwaysClamp);
+        ImGui::EndPopup();
     }
     ImGui::SameLine();
     ImGui::TextUnformatted("|");
@@ -648,6 +680,23 @@ void ViewportPanel::DrawSceneToolbar(
     ImGui::SameLine();
     DrawQualityCombo(m_Scene, "##SceneQuality");
     ImGui::SameLine();
+    if (m_ShowGroundGrid)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+    }
+    if (ImGui::SmallButton(FADIX_ICON_GRID " Grid"))
+    {
+        m_ShowGroundGrid = !m_ShowGroundGrid;
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Show ground grid in Scene View");
+    }
+    if (m_ShowGroundGrid)
+    {
+        ImGui::PopStyleColor();
+    }
+    ImGui::SameLine();
     const bool collisionActive = ui.ShowCollisionShapes;
     if (collisionActive)
     {
@@ -676,6 +725,29 @@ void ViewportPanel::DrawSceneToolbar(
     if (ImGui::IsItemHovered())
     {
         ImGui::SetTooltip("Scene View debug visualization");
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("Speed");
+    ImGui::SameLine();
+    float flySpeed = camera.Camera().FlySpeed();
+    ImGui::SetNextItemWidth(72.0F);
+    if (ImGui::DragFloat("##CameraSpeed", &flySpeed, 0.1F, 0.01F, 10000.0F, "%.1f u/s"))
+    {
+        camera.Camera().SetFlySpeed(flySpeed);
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Scene camera fly speed\nRight-drag + mouse wheel also changes it");
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton(FADIX_ICON_CAMERA " Reset"))
+    {
+        ResetSceneCamera(camera);
+        ui.StatusText = "Reset scene camera";
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Reset the Scene View camera");
     }
 }
 
@@ -907,7 +979,7 @@ void ViewportPanel::Draw(
         {
             m_Scene.Visible = true;
             m_Scene.Focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-            DrawSceneToolbar(ui, gizmo, playMode);
+            DrawSceneToolbar(ui, camera, gizmo, playMode);
             MeasureView(m_Scene, dpi);
             DrawViewImage(m_Scene, "Resize Scene View", true);
             // Per-cascade depth preview (debug only, Scene View only). Each active
@@ -1053,10 +1125,19 @@ void ViewportPanel::HandleEvent(
 {
     const bool edit = playMode == EditorPlayMode::Edit;
     const bool sceneHovered = m_Scene.Visible && m_Scene.Hovered;
+    const bool sceneFocused = m_Scene.Visible && m_Scene.Focused;
     // Always forward events so KEY_UP / BUTTON_UP clear sticky WASD / look capture.
     // Hover=false when WantTextInput; EditorCameraInput still accepts releases / active nav.
     static_cast<void>(camera.Input().HandleEvent(
         event, sceneHovered && edit && !ImGui::GetIO().WantTextInput));
+
+    if (edit && sceneFocused && !ImGui::GetIO().WantTextInput &&
+        event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
+        event.key.scancode == SDL_SCANCODE_HOME)
+    {
+        ResetSceneCamera(camera);
+        return;
+    }
 
     // Keep gizmo drag alive when the cursor leaves the image mid-drag.
     if (!edit || !m_Scene.Visible || !m_Scene.Renderer || (!sceneHovered && !m_GizmoDragging))
@@ -1078,8 +1159,8 @@ void ViewportPanel::HandleEvent(
     {
         if (m_GizmoDragging)
         {
-            GizmoSnap snap;
-            snap.Enabled = (SDL_GetModState() & SDL_KMOD_CTRL) != 0;
+            GizmoSnap snap = m_GizmoSnap;
+            snap.Enabled = m_AlwaysSnap || (SDL_GetModState() & SDL_KMOD_CTRL) != 0;
             gizmo.SetSnap(snap);
             static_cast<void>(gizmo.Update(editWorld, mouseRay()));
             document.Dirty = true;

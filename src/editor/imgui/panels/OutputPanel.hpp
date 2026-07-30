@@ -3,6 +3,8 @@
 #include "editor/EditorLog.hpp"
 #include "editor/imgui/EditorUiState.hpp"
 
+#include <imgui.h>
+
 #include <functional>
 #include <string>
 
@@ -19,6 +21,7 @@ public:
 private:
     EditorLog* m_Log{nullptr};
     std::function<void(const OutputEntry&)> m_OpenDiagnostic;
+    ImGuiTextFilter m_TextFilter;
     bool m_ShowInfo{true};
     bool m_ShowWarn{true};
     bool m_ShowError{true};

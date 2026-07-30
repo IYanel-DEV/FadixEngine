@@ -406,6 +406,27 @@ bool SceneEditor::RenameSelection(std::string name)
     return true;
 }
 
+bool SceneEditor::ToggleEditorVisibility(const Uuid id)
+{
+    const auto entity = m_World.Find(id);
+    auto before = EntitySnapshot::Capture(m_World, id);
+    if (!entity || !before)
+    {
+        return false;
+    }
+
+    entt::registry& registry = m_World.Registry();
+    VisibilityComponent& visibility = registry.get_or_emplace<VisibilityComponent>(*entity);
+    visibility.VisibleInEditor = !visibility.VisibleInEditor;
+    if (auto after = EntitySnapshot::Capture(m_World, id))
+    {
+        m_History.Push(std::make_unique<SnapshotEntityCommand>(
+            m_World, std::move(*before), std::move(*after), "Toggle Entity Visibility"));
+    }
+    MarkChanged();
+    return true;
+}
+
 bool SceneEditor::Reparent(const Uuid entity, const Uuid newParent)
 {
     if (!entity.IsValid() || !newParent.IsValid() || entity == newParent)

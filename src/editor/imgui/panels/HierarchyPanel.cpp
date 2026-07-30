@@ -400,6 +400,28 @@ void HierarchyPanel::DrawContextMenu(SceneEditor& scene, const Uuid& id, EditorU
             }
         }
     }
+    if (ImGui::MenuItem("Copy UUID"))
+    {
+        const std::string uuid = id.ToString();
+        ImGui::SetClipboardText(uuid.c_str());
+        ui.StatusText = "Copied entity UUID";
+    }
+    std::optional<Uuid> parent;
+    if (const auto entity = scene.World().Find(id))
+    {
+        if (const auto* relationship =
+                scene.World().Registry().try_get<RelationshipComponent>(*entity);
+            relationship != nullptr && relationship->Parent.IsValid() &&
+            scene.World().Find(relationship->Parent))
+        {
+            parent = relationship->Parent;
+        }
+    }
+    if (ImGui::MenuItem("Select Parent", nullptr, false, parent.has_value()))
+    {
+        SelectOnly(scene, *parent, true);
+        ui.StatusText = "Selected parent entity";
+    }
     if (ImGui::MenuItem("Duplicate"))
     {
         if (!IsMultiSelected(id))
@@ -516,6 +538,35 @@ void HierarchyPanel::DrawTree(SceneEditor& scene, EditorUiState& ui)
         label += ComponentBadges(scene, node.Id);
 
         const bool selected = IsMultiSelected(node.Id);
+        bool visibleInEditor = true;
+        if (const auto entity = scene.World().Find(node.Id))
+        {
+            if (const auto* visibility =
+                    scene.World().Registry().try_get<VisibilityComponent>(*entity))
+            {
+                visibleInEditor = visibility->VisibleInEditor;
+            }
+        }
+        if (!visibleInEditor)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        }
+        if (ImGui::SmallButton(FADIX_ICON_EYE "##visibility"))
+        {
+            if (scene.ToggleEditorVisibility(node.Id))
+            {
+                ui.StatusText = visibleInEditor ? "Hidden in editor" : "Shown in editor";
+            }
+        }
+        if (!visibleInEditor)
+        {
+            ImGui::PopStyleColor();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip(visibleInEditor ? "Hide in Scene View" : "Show in Scene View");
+        }
+        ImGui::SameLine(0.0F, 4.0F);
         if (m_RenameTarget && *m_RenameTarget == node.Id)
         {
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + static_cast<float>(indentLevels) * 16.0F);

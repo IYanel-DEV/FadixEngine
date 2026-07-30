@@ -3,6 +3,7 @@
 #include "engine/project/ProjectMetadata.hpp"
 #include "engine/render/ViewportRenderer.hpp"
 
+#include <filesystem>
 #include <optional>
 #include <string>
 
@@ -66,6 +67,7 @@ struct EditorUiState
     bool RequestSaveScene{false};
     bool RequestSaveSceneAs{false};
     bool RequestSaveAll{false};
+    std::optional<std::filesystem::path> RequestOpenScenePath;
     bool RequestExitToProjectManager{false};
     bool RequestUndo{false};
     bool RequestRedo{false};

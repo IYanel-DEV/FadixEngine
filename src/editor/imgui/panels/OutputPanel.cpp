@@ -33,6 +33,24 @@ void OutputPanel::Draw(EditorUiState& ui)
         m_Log->Clear();
     }
     ImGui::SameLine();
+    if (ImGui::Button("Copy Visible"))
+    {
+        std::string text;
+        for (const OutputEntry& entry : m_Log->Entries())
+        {
+            const bool visible = ((entry.Severity == "info" && m_ShowInfo) ||
+                                     (entry.Severity == "warn" && m_ShowWarn) ||
+                                     (entry.Severity == "error" && m_ShowError)) &&
+                m_TextFilter.PassFilter(entry.Text.c_str());
+            if (visible)
+            {
+                text += '[' + entry.Time + "] [" + entry.Severity + "] " + entry.Text + '\n';
+            }
+        }
+        ImGui::SetClipboardText(text.c_str());
+        ui.StatusText = text.empty() ? "No visible output to copy" : "Copied visible output";
+    }
+    ImGui::SameLine();
     ImGui::Checkbox("Info", &m_ShowInfo);
     ImGui::SameLine();
     ImGui::Checkbox("Warn", &m_ShowWarn);
@@ -40,6 +58,12 @@ void OutputPanel::Draw(EditorUiState& ui)
     ImGui::Checkbox("Error", &m_ShowError);
     ImGui::SameLine();
     ImGui::Checkbox("Autoscroll", &m_AutoScroll);
+    ImGui::SameLine();
+    m_TextFilter.Draw("Search", 180.0F);
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Search output text");
+    }
 
     ImGui::Separator();
     if (ImGui::BeginChild("##output_list", ImVec2{0.0F, 0.0F}, ImGuiChildFlags_Borders))
@@ -49,9 +73,10 @@ void OutputPanel::Draw(EditorUiState& ui)
         for (std::size_t index = 0; index < entries.size(); ++index)
         {
             const OutputEntry& entry = entries[index];
-            const bool visible = (entry.Severity == "info" && m_ShowInfo) ||
-                (entry.Severity == "warn" && m_ShowWarn) ||
-                (entry.Severity == "error" && m_ShowError);
+            const bool visible = ((entry.Severity == "info" && m_ShowInfo) ||
+                                     (entry.Severity == "warn" && m_ShowWarn) ||
+                                     (entry.Severity == "error" && m_ShowError)) &&
+                m_TextFilter.PassFilter(entry.Text.c_str());
             if (!visible)
             {
                 continue;
@@ -100,6 +125,17 @@ void OutputPanel::Draw(EditorUiState& ui)
             else
             {
                 ImGui::TextWrapped("%s", entry.Text.c_str());
+            }
+            if (ImGui::BeginPopupContextItem("##output_entry_context"))
+            {
+                if (ImGui::MenuItem("Copy Message"))
+                {
+                    const std::string text =
+                        '[' + entry.Time + "] [" + entry.Severity + "] " + entry.Text;
+                    ImGui::SetClipboardText(text.c_str());
+                    ui.StatusText = "Copied output message";
+                }
+                ImGui::EndPopup();
             }
             ImGui::PopID();
         }

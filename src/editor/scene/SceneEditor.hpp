@@ -58,6 +58,7 @@ public:
     bool DuplicateSelection();
     bool DeleteSelection();
     bool RenameSelection(std::string name);
+    bool ToggleEditorVisibility(Uuid id);
     // Reject if newParent is entity itself or a descendant (ReparentEntityCommand already guards).
     bool Reparent(Uuid entity, Uuid newParent);
 

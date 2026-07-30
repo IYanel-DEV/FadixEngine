@@ -333,6 +333,11 @@ public:
         m_EditorVisuals = enabled;
     }
 
+    void SetGroundGridEnabled(const bool enabled) noexcept override
+    {
+        m_GroundGrid = enabled;
+    }
+
     void SetCollisionVisualizationEnabled(const bool enabled) noexcept override
     {
         m_CollisionVisualization = enabled;
@@ -1745,7 +1750,7 @@ private:
     {
         // The reference grid is editor tooling, not scene content; hide it in
         // play mode and game-camera preview like the other editor visuals.
-        if (!m_EditorVisuals)
+        if (!m_EditorVisuals || !m_GroundGrid)
         {
             return;
         }
@@ -1766,7 +1771,7 @@ private:
 
     void DrawGroundGridOverlay(rhi::CommandList& list)
     {
-        if (!m_EditorVisuals)
+        if (!m_EditorVisuals || !m_GroundGrid)
         {
             return;
         }
@@ -3176,6 +3181,7 @@ private:
     glm::vec4 m_FrameSkyGround{0.20F, 0.19F, 0.18F, 0.0F};
     bool m_Orthographic{false};
     bool m_EditorVisuals{false};
+    bool m_GroundGrid{true};
     bool m_CollisionVisualization{false};
     ViewportDebugView m_ViewportDebugView{ViewportDebugView::None};
     PostDebugView m_PostDebugView{PostDebugView::None};
