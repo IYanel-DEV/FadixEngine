@@ -349,8 +349,8 @@ void ImGuiLayer::RenderAndSubmit(const AfterImGuiPass& afterImGui)
             int width = 0;
             int height = 0;
             SDL_GetWindowSizeInPixels(m_Window, &width, &height);
-            const auto pixelWidth = static_cast<std::uint32_t>(std::max(width, 1));
-            const auto pixelHeight = static_cast<std::uint32_t>(std::max(height, 1));
+            const auto pixelWidth = static_cast<std::uint32_t>((std::max)(width, 1));
+            const auto pixelHeight = static_cast<std::uint32_t>((std::max)(height, 1));
             if (pixelWidth != m_BackbufferWidth || pixelHeight != m_BackbufferHeight)
             {
                 if (!m_D3D11Device->ResizeBackbuffer(pixelWidth, pixelHeight))
