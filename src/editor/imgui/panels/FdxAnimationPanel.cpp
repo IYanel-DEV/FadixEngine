@@ -1522,7 +1522,8 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
         graphPan.x += ImGui::GetIO().MouseDelta.x;
         graphPan.y += ImGui::GetIO().MouseDelta.y;
     }
-    if (canvasHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && connectingFrom < 0)
+    if (canvasHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+        connectingFrom < 0 && connectingFrom != -3)
     {
         selectedState = -1;
         selectedTransition = -1;
@@ -1564,7 +1565,7 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
         }
         connectingFrom = -1;
     }
-    if (connectingFrom >= 0 && ImGui::IsKeyPressed(ImGuiKey_Escape))
+    if ((connectingFrom >= 0 || connectingFrom == -3) && ImGui::IsKeyPressed(ImGuiKey_Escape))
         connectingFrom = -1;
     draw->PushClipRect(origin, ImVec2{origin.x + size.x, origin.y + size.y}, true);
     constexpr float grid = 32.0F;
@@ -1578,7 +1579,13 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
         draw->AddLine(ImVec2{origin.x, origin.y + y}, ImVec2{origin.x + size.x, origin.y + y},
             IM_COL32(48, 52, 61, 150));
     }
-    const auto stateCenter = [&](const std::string& name) {
+    // Any-State pseudo-node geometry — declared here so stateCenter lambda and in-progress
+    // line can both reference these.
+    constexpr ImVec2 anyStateSize{120.0F, 38.0F};
+    const ImVec2 anyTL{origin.x + graphPan.x + 14.0F, origin.y + graphPan.y + 14.0F};
+    const auto stateCenter = [&](const std::string& name) -> ImVec2 {
+        if (name == "Any State")
+            return {anyTL.x + anyStateSize.x * 0.5F, anyTL.y + anyStateSize.y * 0.5F};
         const AnimatorState* state = FindAnimatorState(controller, name);
         return state == nullptr ? origin : ImVec2{origin.x + graphPan.x + state->Position.x + 75.0F,
             origin.y + graphPan.y + state->Position.y + 27.0F};
@@ -1586,7 +1593,8 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
     for (int index = 0; index < static_cast<int>(controller.Transitions.size()); ++index)
     {
         const AnimatorTransition& transition = controller.Transitions[static_cast<std::size_t>(index)];
-        if (FindAnimatorState(controller, transition.From) == nullptr ||
+        if ((transition.From != "Any State" &&
+                FindAnimatorState(controller, transition.From) == nullptr) ||
             FindAnimatorState(controller, transition.To) == nullptr)
         {
             continue;
@@ -1703,13 +1711,85 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
         }
         ImGui::PopID();
     }
-    // In-progress connection line
-    if (connectingFrom >= 0 && connectingFrom < static_cast<int>(controller.States.size()))
+    // Any-State pseudo-node (fixed position, top-left of graph)
+    ImGui::SetCursorScreenPos(anyTL);
+    ImGui::PushID("AnyState");
+    ImGui::InvisibleButton("AnyState", anyStateSize);
+    if (ImGui::IsItemClicked())
     {
-        const AnimatorState& srcState =
-            controller.States[static_cast<std::size_t>(connectingFrom)];
-        const ImVec2 srcPort{origin.x + graphPan.x + srcState.Position.x + nodeSize.x,
-            origin.y + graphPan.y + srcState.Position.y + nodeSize.y * 0.5F};
+        selectedState = -2;
+        selectedTransition = -1;
+        connectingFrom = -1;
+    }
+    const bool anySelected = selectedState == -2;
+    draw->AddRectFilled(anyTL,
+        ImVec2{anyTL.x + anyStateSize.x, anyTL.y + anyStateSize.y},
+        IM_COL32(72, 45, 110, 255), 5.0F);
+    draw->AddRect(anyTL,
+        ImVec2{anyTL.x + anyStateSize.x, anyTL.y + anyStateSize.y},
+        anySelected ? IM_COL32(200, 170, 255, 255) : IM_COL32(140, 110, 190, 255),
+        5.0F, 0, anySelected ? 2.5F : 1.5F);
+    draw->AddText(ImVec2{anyTL.x + 10.0F, anyTL.y + 11.0F},
+        IM_COL32(220, 200, 255, 255), "Any State");
+    // Port on Any-State right edge
+    const ImVec2 anyPort{anyTL.x + anyStateSize.x, anyTL.y + anyStateSize.y * 0.5F};
+    const bool anyPortHit = canvasHovered &&
+        ImGui::IsMouseHoveringRect(
+            ImVec2{anyPort.x - 7.0F, anyPort.y - 7.0F},
+            ImVec2{anyPort.x + 7.0F, anyPort.y + 7.0F});
+    if (canvasHovered)
+    {
+        draw->AddCircleFilled(anyPort, 5.0F,
+            anyPortHit ? IM_COL32(255, 208, 76, 255) : IM_COL32(140, 110, 190, 210));
+    }
+    if (anyPortHit && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+    {
+        connectingFrom = -3; // sentinel: dragging from Any-State port
+        connectingEnd = anyPort;
+    }
+    ImGui::PopID();
+    // Any-State drag: release to create transition
+    if (connectingFrom == -3 && ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+    {
+        for (int ti = 0; ti < static_cast<int>(controller.States.size()); ++ti)
+        {
+            const AnimatorState& tgt = controller.States[static_cast<std::size_t>(ti)];
+            const ImVec2 tl{origin.x + graphPan.x + tgt.Position.x,
+                origin.y + graphPan.y + tgt.Position.y};
+            if (ImGui::IsMouseHoveringRect(tl,
+                    ImVec2{tl.x + nodeSize.x, tl.y + nodeSize.y}))
+            {
+                const std::string toName = tgt.Name;
+                CommitControllerEdit(scene, "Add Any-State Transition", [&]() {
+                    AnimatorTransition t;
+                    t.From = "Any State";
+                    t.To = toName;
+                    controller.Transitions.push_back(std::move(t));
+                    selectedTransition =
+                        static_cast<int>(controller.Transitions.size()) - 1;
+                    selectedState = -1;
+                });
+                break;
+            }
+        }
+        connectingFrom = -1;
+    }
+    // In-progress connection line
+    if ((connectingFrom >= 0 && connectingFrom < static_cast<int>(controller.States.size())) ||
+        connectingFrom == -3)
+    {
+        ImVec2 srcPort;
+        if (connectingFrom == -3)
+        {
+            srcPort = {anyTL.x + anyStateSize.x, anyTL.y + anyStateSize.y * 0.5F};
+        }
+        else
+        {
+            const AnimatorState& srcState =
+                controller.States[static_cast<std::size_t>(connectingFrom)];
+            srcPort = {origin.x + graphPan.x + srcState.Position.x + nodeSize.x,
+                origin.y + graphPan.y + srcState.Position.y + nodeSize.y * 0.5F};
+        }
         connectingEnd = ImGui::GetMousePos();
         draw->AddBezierCubic(srcPort,
             ImVec2{srcPort.x + 60.0F, srcPort.y},
@@ -1720,9 +1800,10 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
     draw->PopClipRect();
     ImGui::EndChild();
 
-    selectedState = selectedState >= 0 && selectedState < static_cast<int>(controller.States.size())
-        ? selectedState
-        : -1;
+    selectedState = selectedState == -2 ? -2
+        : (selectedState >= 0 && selectedState < static_cast<int>(controller.States.size())
+            ? selectedState
+            : -1);
     selectedTransition = selectedTransition >= 0 &&
             selectedTransition < static_cast<int>(controller.Transitions.size())
         ? selectedTransition
@@ -1905,6 +1986,37 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
                     transition.Conditions.erase(transition.Conditions.begin() + removeCondition);
                 });
             }
+        }
+        ImGui::EndChild();
+    }
+    if (selectedState == -2)
+    {
+        ImGui::BeginChild("AnyStateInspector", ImVec2{0.0F, 100.0F}, true);
+        ImGui::TextUnformatted("ANY STATE");
+        ImGui::SameLine();
+        ImGui::TextDisabled("— transitions fire from any active state");
+        ImGui::Separator();
+        ImGui::TextUnformatted("Add transition to:");
+        ImGui::SameLine();
+        for (int ti = 0; ti < static_cast<int>(controller.States.size()); ++ti)
+        {
+            ImGui::PushID(ti + 30000);
+            const std::string& name =
+                controller.States[static_cast<std::size_t>(ti)].Name;
+            if (ImGui::SmallButton((std::string{"+ "} + name).c_str()))
+            {
+                CommitControllerEdit(scene, "Add Any-State Transition", [&]() {
+                    AnimatorTransition t;
+                    t.From = "Any State";
+                    t.To = name;
+                    controller.Transitions.push_back(std::move(t));
+                    selectedTransition =
+                        static_cast<int>(controller.Transitions.size()) - 1;
+                    selectedState = -1;
+                });
+            }
+            ImGui::SameLine();
+            ImGui::PopID();
         }
         ImGui::EndChild();
     }
