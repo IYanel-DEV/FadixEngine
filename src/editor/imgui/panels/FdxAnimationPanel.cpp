@@ -1361,7 +1361,8 @@ void TrackControllerEditItem(SceneEditor& scene, const char* name)
 template <typename Animator>
 void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animator,
     const std::vector<std::string>& clipNames, const std::filesystem::path& projectRoot,
-    int& selectedState, int& selectedTransition, glm::vec2& graphPan)
+    int& selectedState, int& selectedTransition, glm::vec2& graphPan,
+    int& connectingFrom, ImVec2& connectingEnd)
 {
     ImGui::PushID(id);
     AnimatorController& controller = animator.Controller;
@@ -1521,12 +1522,50 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
         graphPan.x += ImGui::GetIO().MouseDelta.x;
         graphPan.y += ImGui::GetIO().MouseDelta.y;
     }
-    if (canvasHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+    if (canvasHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && connectingFrom < 0)
     {
         selectedState = -1;
         selectedTransition = -1;
     }
     ImDrawList* draw = ImGui::GetWindowDrawList();
+    constexpr ImVec2 nodeSize{150.0F, 54.0F};
+    if (connectingFrom >= 0 && ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+    {
+        int releaseTarget = -1;
+        for (int ti = 0; ti < static_cast<int>(controller.States.size()); ++ti)
+        {
+            if (ti == connectingFrom) continue;
+            const AnimatorState& tgt = controller.States[static_cast<std::size_t>(ti)];
+            const ImVec2 tl{origin.x + graphPan.x + tgt.Position.x,
+                origin.y + graphPan.y + tgt.Position.y};
+            if (ImGui::IsMouseHoveringRect(tl,
+                    ImVec2{tl.x + nodeSize.x, tl.y + nodeSize.y}))
+            {
+                releaseTarget = ti;
+                break;
+            }
+        }
+        if (releaseTarget >= 0)
+        {
+            const std::string fromName =
+                controller.States[static_cast<std::size_t>(connectingFrom)].Name;
+            const std::string toName =
+                controller.States[static_cast<std::size_t>(releaseTarget)].Name;
+            CommitControllerEdit(scene, "Add Animator Transition", [&]() {
+                AnimatorTransition t;
+                t.From = fromName;
+                t.To = toName;
+                t.HasExitTime = true;
+                controller.Transitions.push_back(std::move(t));
+                selectedTransition =
+                    static_cast<int>(controller.Transitions.size()) - 1;
+                selectedState = -1;
+            });
+        }
+        connectingFrom = -1;
+    }
+    if (connectingFrom >= 0 && ImGui::IsKeyPressed(ImGuiKey_Escape))
+        connectingFrom = -1;
     draw->PushClipRect(origin, ImVec2{origin.x + size.x, origin.y + size.y}, true);
     constexpr float grid = 32.0F;
     for (float x = std::fmod(graphPan.x, grid); x < size.x; x += grid)
@@ -1570,7 +1609,6 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
         }
         ImGui::PopID();
     }
-    constexpr ImVec2 nodeSize{150.0F, 54.0F};
     for (int index = 0; index < static_cast<int>(controller.States.size()); ++index)
     {
         AnimatorState& state = controller.States[static_cast<std::size_t>(index)];
@@ -1591,6 +1629,36 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
             selectedState = index;
             selectedTransition = -1;
         }
+        if (ImGui::BeginPopupContextItem("NodeCtx"))
+        {
+            if (ImGui::MenuItem("Set as Entry State"))
+            {
+                CommitControllerEdit(scene, "Set Animator Entry State",
+                    [&]() { controller.EntryState = state.Name; });
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Delete State"))
+            {
+                CommitControllerEdit(scene, "Delete Animator State", [&]() {
+                    const std::string removed = state.Name;
+                    controller.States.erase(controller.States.begin() + index);
+                    std::erase_if(controller.Transitions,
+                        [&](const AnimatorTransition& tr) {
+                            return tr.From == removed || tr.To == removed;
+                        });
+                    if (controller.EntryState == removed)
+                        controller.EntryState = controller.States.empty()
+                            ? std::string{}
+                            : controller.States.front().Name;
+                    if (animator.ActiveState == removed)
+                        animator.ClearControllerRuntime();
+                    selectedState = -1;
+                    selectedTransition = -1;
+                });
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::OpenPopupOnItemClick("NodeCtx", ImGuiPopupFlags_MouseButtonRight);
         const bool active = animator.ActiveState == state.Name;
         const bool entry = controller.EntryState == state.Name;
         const bool selected = selectedState == index;
@@ -1612,7 +1680,42 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
                 ImVec2{topLeft.x - 2.0F, topLeft.y + 27.0F},
                 ImVec2{topLeft.x - 12.0F, topLeft.y + 34.0F}, border);
         }
+        // Port circle on right edge
+        const ImVec2 portPos{topLeft.x + nodeSize.x, topLeft.y + nodeSize.y * 0.5F};
+        const bool portHit = canvasHovered &&
+            ImGui::IsMouseHoveringRect(
+                ImVec2{portPos.x - 7.0F, portPos.y - 7.0F},
+                ImVec2{portPos.x + 7.0F, portPos.y + 7.0F});
+        if (canvasHovered || connectingFrom == index)
+        {
+            const ImU32 portCol = portHit || connectingFrom == index
+                ? IM_COL32(255, 208, 76, 255)
+                : IM_COL32(140, 152, 168, 210);
+            draw->AddCircleFilled(portPos, 5.0F, portCol);
+            draw->AddCircle(portPos, 5.5F, IM_COL32(220, 228, 238, 180), 12, 1.2F);
+        }
+        if (portHit && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        {
+            connectingFrom = index;
+            connectingEnd = portPos;
+            selectedState = -1;
+            selectedTransition = -1;
+        }
         ImGui::PopID();
+    }
+    // In-progress connection line
+    if (connectingFrom >= 0 && connectingFrom < static_cast<int>(controller.States.size()))
+    {
+        const AnimatorState& srcState =
+            controller.States[static_cast<std::size_t>(connectingFrom)];
+        const ImVec2 srcPort{origin.x + graphPan.x + srcState.Position.x + nodeSize.x,
+            origin.y + graphPan.y + srcState.Position.y + nodeSize.y * 0.5F};
+        connectingEnd = ImGui::GetMousePos();
+        draw->AddBezierCubic(srcPort,
+            ImVec2{srcPort.x + 60.0F, srcPort.y},
+            ImVec2{connectingEnd.x - 60.0F, connectingEnd.y},
+            connectingEnd, IM_COL32(255, 208, 76, 200), 2.0F);
+        draw->AddCircleFilled(connectingEnd, 4.0F, IM_COL32(255, 208, 76, 200));
     }
     draw->PopClipRect();
     ImGui::EndChild();
@@ -1635,14 +1738,18 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
         ImGui::SetNextItemWidth(150.0F);
         if (ImGui::InputText("##StateName", stateName, sizeof(stateName)))
         {
-            const std::string oldName = state.Name;
-            state.Name = stateName;
-            if (controller.EntryState == oldName) controller.EntryState = state.Name;
-            if (animator.ActiveState == oldName) animator.ActiveState = state.Name;
-            for (AnimatorTransition& transition : controller.Transitions)
+            const std::string newName = stateName;
+            if (newName != "Any State")
             {
-                if (transition.From == oldName) transition.From = state.Name;
-                if (transition.To == oldName) transition.To = state.Name;
+                const std::string oldName = state.Name;
+                state.Name = newName;
+                if (controller.EntryState == oldName) controller.EntryState = state.Name;
+                if (animator.ActiveState == oldName) animator.ActiveState = state.Name;
+                for (AnimatorTransition& transition : controller.Transitions)
+                {
+                    if (transition.From == oldName) transition.From = state.Name;
+                    if (transition.To == oldName) transition.To = state.Name;
+                }
             }
         }
         TrackControllerEditItem(scene, "Rename Animator State");
@@ -1808,7 +1915,8 @@ void DrawTransformSection(SceneEditor& scene, const std::filesystem::path& proje
     entt::registry& registry, const entt::entity entity,
     TransformAnimatorComponent& anim, bool& previewPlaying, float& previewTime,
     int& selChannel, int& selKey, int& selEvent, int& selectedState,
-    int& selectedTransition, glm::vec2& graphPan, int& framesPerSecond,
+    int& selectedTransition, glm::vec2& graphPan, int& connectingFrom, ImVec2& connectingEnd,
+    int& framesPerSecond,
     bool& snapToFrames, float& pixelsPerSecond, float& startTime, float& endTime, int& dragTimeline,
     int& dragChannel, int& dragKey, float& dragStartTime, float& dragStartMouseX,
     const AnimationEditHooks& edits)
@@ -1946,7 +2054,8 @@ void DrawTransformSection(SceneEditor& scene, const std::filesystem::path& proje
         transformClipNames.push_back(candidate.Name);
     }
     DrawAnimatorController(scene, "TransformController", anim, transformClipNames,
-        projectRoot, selectedState, selectedTransition, graphPan);
+        projectRoot, selectedState, selectedTransition, graphPan,
+        connectingFrom, connectingEnd);
 
     AnimationClipAsset& clip = EnsureTransformClip(anim);
     AdvancePreview(clip, previewTime, previewPlaying, anim.Loop, anim.Speed);
@@ -2431,7 +2540,7 @@ void FdxAnimationPanel::Draw(
                 m_TransformPreviewPlaying, m_TransformPreviewTime,
                 m_TSelectedChannel, m_TSelectedKey, m_TSelectedEvent,
                 m_TSelectedAnimatorState, m_TSelectedAnimatorTransition,
-                m_TransformGraphPan,
+                m_TransformGraphPan, m_TConnectingFromState, m_TConnectingLineEnd,
                 m_FramesPerSecond, m_SnapToFrames,
                 m_TimelinePixelsPerSecond, m_TimelineStart, m_TimelineEnd, m_DragTimeline, m_DragChannel,
                 m_DragKey, m_DragStartTime, m_DragStartMouseX, edits);
@@ -2549,7 +2658,7 @@ void FdxAnimationPanel::Draw(
     }
     DrawAnimatorController(scene, "SkeletalController", *animator, skeletalClipNames,
         projectRoot, m_SelectedAnimatorState, m_SelectedAnimatorTransition,
-        m_SkeletalGraphPan);
+        m_SkeletalGraphPan, m_ConnectingFromState, m_ConnectingLineEnd);
 
     const bool insertSelected = DrawDopeSheet("SkeletalTimeline", 1, clip,
         m_SkeletalPreviewTime, m_SkeletalPreviewPlaying, animator->Loop, animator->Speed,
@@ -2766,7 +2875,7 @@ void FdxAnimationPanel::Draw(
                 m_TransformPreviewPlaying, m_TransformPreviewTime,
                 m_TSelectedChannel, m_TSelectedKey, m_TSelectedEvent,
                 m_TSelectedAnimatorState, m_TSelectedAnimatorTransition,
-                m_TransformGraphPan,
+                m_TransformGraphPan, m_TConnectingFromState, m_TConnectingLineEnd,
                 m_FramesPerSecond, m_SnapToFrames, m_TimelinePixelsPerSecond,
                 m_TimelineStart, m_TimelineEnd, m_DragTimeline, m_DragChannel,
                 m_DragKey, m_DragStartTime, m_DragStartMouseX, edits);
