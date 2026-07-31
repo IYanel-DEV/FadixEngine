@@ -131,7 +131,7 @@ template <typename Animator>
         animator.Controller.EntryState.empty() && !animator.Controller.States.empty()
             ? animator.Controller.States.front().Name
             : animator.Controller.EntryState);
-    if (entry == nullptr || entry->ClipName.empty())
+    if (entry == nullptr || (!entry->UseBlendTree && entry->ClipName.empty()))
     {
         return false;
     }
@@ -503,7 +503,10 @@ inline void UpdateTransformAnimations(entt::registry& registry, const float dt)
                 {
                     const std::string_view targetClip =
                         destination->UseBlendTree && !destination->BlendEntries.empty()
-                        ? std::string_view{destination->BlendEntries.front().ClipName}
+                        ? std::string_view{std::min_element(destination->BlendEntries.begin(),
+                              destination->BlendEntries.end(),
+                              [](const BlendTree1DEntry& a, const BlendTree1DEntry& b) {
+                                  return a.Threshold < b.Threshold; })->ClipName}
                         : std::string_view{destination->ClipName};
                     target = FindTransformClip(
                         static_cast<const TransformAnimatorComponent&>(anim), targetClip);
@@ -725,7 +728,10 @@ inline void UpdateWorldAnimations(
                 ? nullptr
                 : FindAnimationClip(*gltf, destination->UseBlendTree &&
                         !destination->BlendEntries.empty()
-                    ? destination->BlendEntries.front().ClipName
+                    ? std::min_element(destination->BlendEntries.begin(),
+                          destination->BlendEntries.end(),
+                          [](const BlendTree1DEntry& a, const BlendTree1DEntry& b) {
+                              return a.Threshold < b.Threshold; })->ClipName
                     : destination->ClipName);
             if (destination != nullptr && target != nullptr)
             {
