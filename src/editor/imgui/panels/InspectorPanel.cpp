@@ -849,6 +849,44 @@ void InspectorPanel::Draw(SceneEditor& scene, EditorUiState& ui)
                 ui.ShowFdxAnimation = true;
                 ui.FocusFdxAnimation = true; // panel follows current selection == this entity
             }
+
+            // Play-mode: live parameter editing
+            const bool inPlayMode = ui.PlayModeLabel != "Edit";
+            if (inPlayMode && !animator->Controller.Parameters.empty())
+            {
+                ImGui::Separator();
+                if (!animator->ActiveState.empty())
+                {
+                    ImGui::TextDisabled("State: %s", animator->ActiveState.c_str());
+                }
+                ImGui::TextUnformatted("Parameters:");
+                for (AnimatorParameter& param : animator->Controller.Parameters)
+                {
+                    ImGui::PushID(param.Name.c_str());
+                    ImGui::SetNextItemWidth(110.0F);
+                    if (param.Type == AnimatorParameterType::Float)
+                    {
+                        ImGui::DragFloat(param.Name.c_str(), &param.FloatValue, 0.02F);
+                    }
+                    else if (param.Type == AnimatorParameterType::Int)
+                    {
+                        ImGui::DragInt(param.Name.c_str(), &param.IntValue, 1.0F);
+                    }
+                    else if (param.Type == AnimatorParameterType::Bool)
+                    {
+                        ImGui::Checkbox(param.Name.c_str(), &param.BoolValue);
+                    }
+                    else // Trigger
+                    {
+                        if (ImGui::Button(param.Name.c_str()))
+                            param.BoolValue = true;
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("(trigger)");
+                    }
+                    ImGui::PopID();
+                }
+            }
+
             RemoveButton(scene, "remove-animator", ui);
         }
     }
