@@ -12,6 +12,7 @@ namespace fadix
 {
 inline void WriteAnimatorControllerData(std::ostream& out, const AnimatorController& controller)
 {
+    out << 2 << ' '; // format version
     out << std::quoted(controller.Name) << ' ' << std::quoted(controller.EntryState) << ' '
         << controller.Parameters.size() << ' ' << controller.States.size() << ' '
         << controller.Transitions.size() << ' ';
@@ -24,7 +25,13 @@ inline void WriteAnimatorControllerData(std::ostream& out, const AnimatorControl
     for (const AnimatorState& state : controller.States)
     {
         out << std::quoted(state.Name) << ' ' << std::quoted(state.ClipName) << ' '
-            << state.Position.x << ' ' << state.Position.y << ' ';
+            << state.Position.x << ' ' << state.Position.y << ' '
+            << state.UseBlendTree << ' ' << std::quoted(state.BlendParameter) << ' '
+            << state.BlendEntries.size() << ' ';
+        for (const BlendTree1DEntry& entry : state.BlendEntries)
+        {
+            out << std::quoted(entry.ClipName) << ' ' << entry.Threshold << ' ';
+        }
     }
     for (const AnimatorTransition& transition : controller.Transitions)
     {
@@ -41,6 +48,16 @@ inline void WriteAnimatorControllerData(std::ostream& out, const AnimatorControl
 
 inline bool ReadAnimatorControllerData(std::istream& row, AnimatorController& controller)
 {
+    // Detect version: v2+ starts with an unquoted int; v1 starts with a quoted name.
+    int version = 1;
+    const std::streampos startPos = row.tellg();
+    if (!(row >> version) || version < 1 || version > 100)
+    {
+        row.clear();
+        row.seekg(startPos);
+        version = 1;
+    }
+
     std::size_t parameterCount = 0;
     std::size_t stateCount = 0;
     std::size_t transitionCount = 0;
@@ -63,12 +80,24 @@ inline bool ReadAnimatorControllerData(std::istream& row, AnimatorController& co
         AnimatorState state;
         row >> std::quoted(state.Name) >> std::quoted(state.ClipName) >> state.Position.x >>
             state.Position.y;
+        if (version >= 2 && row)
+        {
+            int useBlendTree = 0;
+            std::size_t entryCount = 0;
+            row >> useBlendTree >> std::quoted(state.BlendParameter) >> entryCount;
+            state.UseBlendTree = (useBlendTree != 0);
+            for (std::size_t e = 0; e < entryCount && row; ++e)
+            {
+                BlendTree1DEntry entry;
+                row >> std::quoted(entry.ClipName) >> entry.Threshold;
+                state.BlendEntries.push_back(std::move(entry));
+            }
+        }
         controller.States.push_back(std::move(state));
     }
     for (std::size_t i = 0; i < transitionCount && row; ++i)
     {
         AnimatorTransition transition;
-        int comparison = 0;
         std::size_t conditionCount = 0;
         row >> std::quoted(transition.From) >> std::quoted(transition.To) >> transition.Duration >>
             transition.HasExitTime >> transition.ExitTime >> conditionCount;
@@ -77,6 +106,7 @@ inline bool ReadAnimatorControllerData(std::istream& row, AnimatorController& co
         for (std::size_t c = 0; c < conditionCount && row; ++c)
         {
             AnimatorCondition condition;
+            int comparison = 0;
             row >> std::quoted(condition.Parameter) >> comparison >> condition.Threshold;
             condition.Comparison =
                 static_cast<AnimatorComparison>(std::clamp(comparison, 0, 3));
