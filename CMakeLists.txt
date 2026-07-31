@@ -562,7 +562,7 @@ endif()
 
 add_executable(fadix_animation_smoke tools/AnimationSmoke.cpp)
 target_include_directories(fadix_animation_smoke PRIVATE src)
-target_link_libraries(fadix_animation_smoke PRIVATE glm::glm)
+target_link_libraries(fadix_animation_smoke PRIVATE glm::glm fadix_runtime)
 if(MSVC)
     target_compile_options(fadix_animation_smoke PRIVATE /W4 /permissive-)
 else()

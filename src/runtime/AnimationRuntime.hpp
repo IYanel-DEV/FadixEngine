@@ -61,7 +61,7 @@ struct BlendTree1DResult
 
 // entries is taken by value so it can be sorted locally without touching the state.
 // Returns a single-clip result (ClipB empty, Weight=0) when entries has one element
-// or value is exactly at an edge threshold.
+// or value is clamped to a boundary threshold.
 [[nodiscard]] inline BlendTree1DResult ResolveBlendTree1D(
     std::vector<BlendTree1DEntry> entries, const float value)
 {
@@ -79,15 +79,25 @@ struct BlendTree1DResult
     }
     const float clamped =
         std::clamp(value, entries.front().Threshold, entries.back().Threshold);
+
+    // Check if clamped value is exactly at a threshold (or very close)
+    for (std::size_t i = 0; i < entries.size(); ++i)
+    {
+        if (std::abs(clamped - entries[i].Threshold) < 1.0e-6F)
+        {
+            return {entries[i].ClipName, {}, 0.0F};
+        }
+    }
+
+    // Find the blend between two thresholds
     for (std::size_t i = 0; i + 1 < entries.size(); ++i)
     {
         const float lo = entries[i].Threshold;
         const float hi = entries[i + 1].Threshold;
-        if (clamped >= lo && clamped <= hi + 1.0e-6F)
+        if (clamped > lo && clamped < hi)
         {
             const float span = hi - lo;
-            const float weight =
-                span > 1.0e-6F ? (clamped - lo) / span : 0.0F;
+            const float weight = (clamped - lo) / span;
             return {entries[i].ClipName, entries[i + 1].ClipName, weight};
         }
     }
