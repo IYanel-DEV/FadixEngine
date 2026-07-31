@@ -1680,8 +1680,19 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
         draw->AddRect(topLeft, ImVec2{topLeft.x + nodeSize.x, topLeft.y + nodeSize.y}, border, 6.0F,
             0, selected || active ? 2.5F : 1.5F);
         draw->AddText(ImVec2{topLeft.x + 10.0F, topLeft.y + 8.0F}, IM_COL32_WHITE, state.Name.c_str());
-        draw->AddText(ImVec2{topLeft.x + 10.0F, topLeft.y + 29.0F}, IM_COL32(174, 182, 195, 255),
-            state.ClipName.empty() ? "No clip" : state.ClipName.c_str());
+        char nodeSubLabel[128]{};
+        if (state.UseBlendTree)
+        {
+            std::snprintf(nodeSubLabel, sizeof(nodeSubLabel),
+                "Blend Tree (%zu clips)", state.BlendEntries.size());
+        }
+        else
+        {
+            std::snprintf(nodeSubLabel, sizeof(nodeSubLabel), "%s",
+                state.ClipName.empty() ? "No clip" : state.ClipName.c_str());
+        }
+        draw->AddText(ImVec2{topLeft.x + 10.0F, topLeft.y + 29.0F},
+            IM_COL32(174, 182, 195, 255), nodeSubLabel);
         if (entry)
         {
             draw->AddTriangleFilled(ImVec2{topLeft.x - 12.0F, topLeft.y + 20.0F},
@@ -1811,7 +1822,10 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
     if (selectedState >= 0)
     {
         AnimatorState& state = controller.States[static_cast<std::size_t>(selectedState)];
-        ImGui::BeginChild("StateInspector", ImVec2{0.0F, 118.0F}, true);
+        const float stateInspectorH = state.UseBlendTree
+            ? (174.0F + static_cast<float>(state.BlendEntries.size()) * 28.0F)
+            : 118.0F;
+        ImGui::BeginChild("StateInspector", ImVec2{0.0F, stateInspectorH}, true);
         ImGui::TextUnformatted("STATE");
         ImGui::SameLine();
         char stateName[96]{};
@@ -1835,20 +1849,144 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
         }
         TrackControllerEditItem(scene, "Rename Animator State");
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(160.0F);
-        if (ImGui::BeginCombo("##StateClip", state.ClipName.empty() ? "Select clip" : state.ClipName.c_str()))
+        if (!state.UseBlendTree)
         {
-            for (const std::string& clipName : clipNames)
+            ImGui::SetNextItemWidth(160.0F);
+            if (ImGui::BeginCombo("##StateClip", state.ClipName.empty() ? "Select clip" : state.ClipName.c_str()))
             {
-                if (ImGui::Selectable(clipName.c_str(), clipName == state.ClipName))
+                for (const std::string& clipName : clipNames)
                 {
-                    CommitControllerEdit(scene, "Set Animator State Clip",
-                        [&]() { state.ClipName = clipName; });
+                    if (ImGui::Selectable(clipName.c_str(), clipName == state.ClipName))
+                    {
+                        CommitControllerEdit(scene, "Set Animator State Clip",
+                            [&]() { state.ClipName = clipName; });
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SameLine();
+        }
+        bool useBlendTree = state.UseBlendTree;
+        if (ImGui::Checkbox("Blend Tree", &useBlendTree))
+        {
+            CommitControllerEdit(scene, "Toggle Blend Tree", [&]() {
+                state.UseBlendTree = useBlendTree;
+            });
+        }
+        if (state.UseBlendTree)
+        {
+            ImGui::SameLine();
+            ImGui::TextUnformatted("Param:");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(130.0F);
+            std::vector<const char*> floatParamNames;
+            for (const AnimatorParameter& p : controller.Parameters)
+            {
+                if (p.Type == AnimatorParameterType::Float)
+                    floatParamNames.push_back(p.Name.c_str());
+            }
+            if (floatParamNames.empty())
+            {
+                ImGui::TextColored(ImVec4{1.0F, 0.6F, 0.3F, 1.0F}, "No float params");
+            }
+            else
+            {
+                const char* preview = state.BlendParameter.empty()
+                    ? floatParamNames[0]
+                    : state.BlendParameter.c_str();
+                if (ImGui::BeginCombo("##BlendParam", preview))
+                {
+                    for (const char* name : floatParamNames)
+                    {
+                        if (ImGui::Selectable(name, state.BlendParameter == name))
+                        {
+                            CommitControllerEdit(scene, "Set Blend Parameter",
+                                [&]() { state.BlendParameter = name; });
+                        }
+                    }
+                    ImGui::EndCombo();
                 }
             }
-            ImGui::EndCombo();
+            ImGui::Separator();
+            int removeEntry = -1;
+            for (int ei = 0; ei < static_cast<int>(state.BlendEntries.size()); ++ei)
+            {
+                BlendTree1DEntry& entry =
+                    state.BlendEntries[static_cast<std::size_t>(ei)];
+                ImGui::PushID(ei + 50000);
+                ImGui::SetNextItemWidth(70.0F);
+                ImGui::DragFloat("##Thresh", &entry.Threshold, 0.01F, -1000.0F, 1000.0F, "%.2f");
+                TrackControllerEditItem(scene, "Set Blend Threshold");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(140.0F);
+                if (ImGui::BeginCombo("##EClip",
+                        entry.ClipName.empty() ? "Select" : entry.ClipName.c_str()))
+                {
+                    for (const std::string& cn : clipNames)
+                    {
+                        if (ImGui::Selectable(cn.c_str(), cn == entry.ClipName))
+                        {
+                            CommitControllerEdit(scene, "Set Blend Entry Clip",
+                                [&]() { entry.ClipName = cn; });
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton(FADIX_ICON_TRASH "##re"))
+                    removeEntry = ei;
+                ImGui::PopID();
+            }
+            if (removeEntry >= 0)
+            {
+                CommitControllerEdit(scene, "Remove Blend Entry", [&]() {
+                    state.BlendEntries.erase(state.BlendEntries.begin() + removeEntry);
+                });
+            }
+            if (ImGui::SmallButton(FADIX_ICON_PLUS "  Add Entry"))
+            {
+                CommitControllerEdit(scene, "Add Blend Entry", [&]() {
+                    BlendTree1DEntry newEntry;
+                    newEntry.ClipName = clipNames.empty() ? std::string{} : clipNames.front();
+                    newEntry.Threshold = state.BlendEntries.empty()
+                        ? 0.0F
+                        : state.BlendEntries.back().Threshold + 1.0F;
+                    state.BlendEntries.push_back(std::move(newEntry));
+                });
+            }
+            if (!state.BlendEntries.empty())
+            {
+                ImGui::Spacing();
+                const ImVec2 rulerStart = ImGui::GetCursorScreenPos();
+                const float rulerW = ImGui::GetContentRegionAvail().x - 4.0F;
+                constexpr float rulerH = 6.0F;
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                dl->AddRectFilled(rulerStart,
+                    ImVec2{rulerStart.x + rulerW, rulerStart.y + rulerH},
+                    IM_COL32(50, 55, 66, 255), 3.0F);
+                float minT = state.BlendEntries[0].Threshold;
+                float maxT = state.BlendEntries[0].Threshold;
+                for (const BlendTree1DEntry& e : state.BlendEntries)
+                {
+                    minT = std::min(minT, e.Threshold);
+                    maxT = std::max(maxT, e.Threshold);
+                }
+                const float range = maxT - minT;
+                for (const BlendTree1DEntry& e : state.BlendEntries)
+                {
+                    const float t = range > 1.0e-5F
+                        ? (e.Threshold - minT) / range
+                        : 0.5F;
+                    const float x = rulerStart.x + t * rulerW;
+                    dl->AddLine(
+                        ImVec2{x, rulerStart.y - 2.0F},
+                        ImVec2{x, rulerStart.y + rulerH + 2.0F},
+                        IM_COL32(255, 208, 76, 220), 2.0F);
+                }
+                ImGui::Dummy(ImVec2{rulerW, rulerH + 4.0F});
+            }
         }
-        ImGui::SameLine();
+        if (!state.UseBlendTree) ImGui::SameLine();
         if (ImGui::Button("Set Entry"))
         {
             CommitControllerEdit(scene, "Set Animator Entry State",
