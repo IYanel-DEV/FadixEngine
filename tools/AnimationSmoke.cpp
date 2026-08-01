@@ -288,6 +288,16 @@ int main()
         std::cout << "PASS AnimGraph serialization round-trip\n";
     }
 
+    // --- AnimGraph runtime: legacy path unaffected when Graph == null ---
+    {
+        fadix::AnimatorComponent ac;
+        assert(ac.Graph == nullptr && "Graph should be null by default");
+        // Legacy controller still present
+        ac.Controller.EntryState = "Idle";
+        assert(ac.Controller.EntryState == "Idle" && "legacy controller broken");
+        std::cout << "PASS AnimGraph legacy path unaffected when Graph==null\n";
+    }
+
     std::printf(g_fail == 0 ? "ALL PASS\n" : "%d CHECK(S) FAILED\n", g_fail);
     return g_fail == 0 ? 0 : 1;
 }

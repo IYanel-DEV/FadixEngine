@@ -690,6 +690,42 @@ inline void UpdateWorldAnimations(
         {
             continue;
         }
+
+        // --- Animation Graph path ---
+        if (animator->Graph)
+        {
+            // Init RuntimeParameters from graph schema on first use
+            if (animator->RuntimeParameters.empty() &&
+                !animator->Graph->Parameters.empty())
+            {
+                animator->RuntimeParameters = animator->Graph->Parameters;
+            }
+
+            AnimGraphContext ctx;
+            ctx.DeltaTime   = dt;
+            ctx.MeshAsset   = gltf;
+            ctx.Parameters  = std::span<AnimGraphParameter>{animator->RuntimeParameters};
+
+            SkeletonPose pose = animator->Graph->Evaluate(ctx);
+            animator->Graph->ConsumeTriggers();
+
+            // Sync trigger consumption back to RuntimeParameters
+            for (std::size_t pi = 0; pi < animator->RuntimeParameters.size(); ++pi)
+                if (animator->RuntimeParameters[pi].ParamType == AnimGraphParameter::Type::Trigger)
+                    animator->RuntimeParameters[pi].BoolValue =
+                        animator->Graph->Parameters[pi].BoolValue;
+
+            // Apply pose to skeleton joints
+            if (!pose.Skeleton.Joints.empty())
+            {
+                skeleton->HasSkeleton = true;
+                skeleton->JointCount = static_cast<int>(pose.Skeleton.Joints.size());
+                skeleton->JointMatrices = pose.Skeleton.GetJointMatrices();
+            }
+            continue;  // skip legacy path for this entity
+        }
+        // --- Legacy AnimatorController path (unchanged below) ---
+
         if (!animator->Playing)
         {
             continue;

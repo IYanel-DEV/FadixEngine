@@ -2,6 +2,7 @@
 
 #include "engine/Uuid.hpp"
 #include "engine/animation/AnimationClip.hpp"
+#include "engine/animation/AnimationGraph.hpp"
 #include "engine/camera/CameraComponent.hpp"
 #include "engine/physics/IPhysicsWorld.hpp"
 #include "engine/reflection/PropertyRegistry.hpp"
@@ -607,6 +608,39 @@ struct AnimatorComponent
     float BlendElapsed{0.0F};
     bool EmitStartEvents{false};
     std::vector<AnimationEvent> PendingEvents;
+
+    // --- Animation Graph (takes priority over Controller when non-null) ---
+    std::unique_ptr<AnimationGraph> Graph;
+    std::vector<AnimGraphParameter> RuntimeParameters; // per-instance, synced from Graph::Parameters on init
+
+    // Graph is a unique_ptr so we define copy/move explicitly.
+    // Copying leaves Graph null (runtime-only asset; not cloned with the entity).
+    AnimatorComponent() = default;
+    AnimatorComponent(const AnimatorComponent& o)
+        : Controller(o.Controller), ActiveState(o.ActiveState), ClipName(o.ClipName)
+        , Speed(o.Speed), Loop(o.Loop), Playing(o.Playing), Paused(o.Paused)
+        , ClipIndex(o.ClipIndex), CurrentTime(o.CurrentTime)
+        , BlendFromClipName(o.BlendFromClipName), BlendFromTime(o.BlendFromTime)
+        , BlendDuration(o.BlendDuration), BlendElapsed(o.BlendElapsed)
+        , EmitStartEvents(o.EmitStartEvents), PendingEvents(o.PendingEvents)
+        , Graph(nullptr), RuntimeParameters(o.RuntimeParameters)
+    {}
+    AnimatorComponent& operator=(const AnimatorComponent& o)
+    {
+        if (this != &o)
+        {
+            Controller = o.Controller; ActiveState = o.ActiveState; ClipName = o.ClipName;
+            Speed = o.Speed; Loop = o.Loop; Playing = o.Playing; Paused = o.Paused;
+            ClipIndex = o.ClipIndex; CurrentTime = o.CurrentTime;
+            BlendFromClipName = o.BlendFromClipName; BlendFromTime = o.BlendFromTime;
+            BlendDuration = o.BlendDuration; BlendElapsed = o.BlendElapsed;
+            EmitStartEvents = o.EmitStartEvents; PendingEvents = o.PendingEvents;
+            Graph = nullptr; RuntimeParameters = o.RuntimeParameters;
+        }
+        return *this;
+    }
+    AnimatorComponent(AnimatorComponent&&) = default;
+    AnimatorComponent& operator=(AnimatorComponent&&) = default;
 
     void ClearBlend() noexcept
     {
