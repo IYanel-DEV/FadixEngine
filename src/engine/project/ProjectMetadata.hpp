@@ -11,7 +11,8 @@ namespace fadix
 enum class ProjectTemplate
 {
     Empty2D,
-    Empty3D
+    Empty3D,
+    TinyGame
 };
 
 struct ProjectMetadata

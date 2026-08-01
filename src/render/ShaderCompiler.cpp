@@ -1,5 +1,7 @@
 #include "render/ShaderCompiler.hpp"
 
+#include "assets/EmbeddedAssetProvider.hpp"
+
 #ifdef _WIN32
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -9,19 +11,15 @@
 
 #include <filesystem>
 #include <fstream>
+#include <cstring>
 #include <stdexcept>
 #include <string>
-
-#ifndef FADIX_ASSET_ROOT
-#define FADIX_ASSET_ROOT "assets"
-#endif
 
 namespace fadix::render
 {
 std::vector<std::byte> ReadShaderSource(const char* fileName)
 {
-    const std::filesystem::path path =
-        std::filesystem::path{FADIX_ASSET_ROOT} / "shaders" / fileName;
+    const std::filesystem::path path = RuntimeAssetRoot() / "shaders" / fileName;
     std::ifstream stream(path, std::ios::binary | std::ios::ate);
     if (!stream)
     {
@@ -67,8 +65,37 @@ std::vector<std::byte> CompileShader(
 #else
         D3DCOMPILE_OPTIMIZATION_LEVEL3;
 #endif
+    std::string compatibleSource;
+    const void* compileData = source.data();
+    std::size_t compileSize = source.size();
+    if (std::strcmp(target, "vs_5_0") == 0 || std::strcmp(target, "ps_5_0") == 0)
+    {
+        compatibleSource.assign(reinterpret_cast<const char*>(source.data()), source.size());
+        std::size_t position = 0;
+        while ((position = compatibleSource.find("register(", position)) != std::string::npos)
+        {
+            const std::size_t closing = compatibleSource.find(')', position);
+            if (closing == std::string::npos)
+            {
+                break;
+            }
+            const std::size_t space = compatibleSource.find(", space", position);
+            if (space != std::string::npos && space < closing)
+            {
+                compatibleSource.erase(space, closing - space);
+            }
+            position = compatibleSource.find(')', position);
+            if (position == std::string::npos)
+            {
+                break;
+            }
+            ++position;
+        }
+        compileData = compatibleSource.data();
+        compileSize = compatibleSource.size();
+    }
     const HRESULT result = compile(
-        source.data(), source.size(), sourceName, nullptr, nullptr,
+        compileData, compileSize, sourceName, nullptr, nullptr,
         entryPoint, target, flags, 0, &bytecode, &errors);
     std::string errorMessage;
     if (errors != nullptr)

@@ -7,41 +7,16 @@ import argparse
 from pathlib import Path
 
 
-DEFAULT_ASSETS = (
-    "editor/project_manager.rml",
-    "editor/project_manager.rcss",
-    "editor/workspace.rml",
-    "editor/workspace.rcss",
-    "editor/icons/entity.svg",
-    "editor/icons/mesh.svg",
-    "editor/icons/camera.svg",
-    "editor/icons/light.svg",
-    "editor/icons/point-light.svg",
-    "editor/icons/spot-light.svg",
-    "editor/icons/environment.svg",
-    "editor/icons/visibility.svg",
-    "editor/icons/scene.svg",
-    "editor/icons/physics3d.svg",
-    "editor/icons/physics2d.svg",
-    "editor/icons/network.svg",
-    "editor/icons/folder.svg",
-    "editor/icons/folder-empty.svg",
-    "editor/icons/file.svg",
-    "editor/icons/texture.svg",
-    "editor/icons/material.svg",
-    "editor/icons/script.svg",
-    "editor/icons/audio.svg",
-    "editor/icons/tool-select.svg",
-    "editor/icons/tool-move.svg",
-    "editor/icons/tool-rotate.svg",
-    "editor/icons/tool-scale.svg",
-    "editor/icons/tool-world.svg",
-    "editor/icons/tool-local.svg",
-    "editor/icons/chevron-left.svg",
-    "editor/icons/chevron-right.svg",
-    "editor/icons/fadix-logo.png",
-    "fonts/LatoLatin-Regular.ttf",
-)
+DEFAULT_DIRECTORIES = ("editor", "fonts", "shaders", "templates")
+
+
+def default_assets(asset_root: Path) -> list[str]:
+    return [
+        path.relative_to(asset_root).as_posix()
+        for directory in DEFAULT_DIRECTORIES
+        for path in (asset_root / directory).rglob("*")
+        if path.is_file()
+    ]
 
 
 def symbol_for(relative_path: str) -> str:
@@ -131,7 +106,7 @@ def main() -> None:
     generate(
         arguments.asset_root.resolve(),
         arguments.output.resolve(),
-        arguments.asset or list(DEFAULT_ASSETS),
+        arguments.asset or default_assets(arguments.asset_root.resolve()),
     )
 
 

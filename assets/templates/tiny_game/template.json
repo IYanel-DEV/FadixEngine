@@ -1,0 +1,4 @@
+{
+  "template": "TinyGame",
+  "description": "Gameplay FXS vertical slice: World.find, Prefab.spawn, Scene.load"
+}

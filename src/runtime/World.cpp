@@ -134,6 +134,7 @@ std::unique_ptr<IWorld> World::Clone() const
         FADIX_CLONE_COMPONENT(TerrainComponent);
         FADIX_CLONE_COMPONENT(SkeletonComponent);
         FADIX_CLONE_COMPONENT(AnimatorComponent);
+        FADIX_CLONE_COMPONENT(TransformAnimatorComponent);
 #undef FADIX_CLONE_COMPONENT
         if (auto* body = result->m_Registry.try_get<JoltBodyComponent>(destination))
         {
@@ -155,8 +156,22 @@ std::unique_ptr<IWorld> World::Clone() const
         }
         if (auto* animator = result->m_Registry.try_get<AnimatorComponent>(destination))
         {
+            animator->Playing = false;
+            animator->Paused = false;
             animator->ClipIndex = -1;
             animator->CurrentTime = 0.0F;
+            animator->ClearBlend();
+            animator->ClearEventState();
+            animator->ClearControllerRuntime();
+        }
+        if (auto* animator = result->m_Registry.try_get<TransformAnimatorComponent>(destination))
+        {
+            animator->Playing = false;
+            animator->Paused = false;
+            animator->CurrentTime = 0.0F;
+            animator->ClearBlend();
+            animator->ClearEventState();
+            animator->ClearControllerRuntime();
         }
     }
     return result;

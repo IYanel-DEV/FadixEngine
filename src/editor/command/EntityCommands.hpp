@@ -39,6 +39,7 @@ struct EntitySnapshot
     std::optional<TerrainComponent> Terrain;
     std::optional<SkeletonComponent> Skeleton;
     std::optional<AnimatorComponent> Animator;
+    std::optional<TransformAnimatorComponent> TransformAnimator;
 
     [[nodiscard]] static std::optional<EntitySnapshot> Capture(const IWorld& world, const Uuid& id);
     [[nodiscard]] entt::entity Restore(IWorld& world) const;

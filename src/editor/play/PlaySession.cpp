@@ -1,9 +1,20 @@
 #include "editor/play/PlaySession.hpp"
 
+#include "editor/scene/PrefabSerializer.hpp"
+#include "editor/scene/SceneSerializer.hpp"
+#include "engine/app/ModuleRegistration.hpp"
 #include "engine/scene/IWorld.hpp"
+#include "engine/scene/SceneDocument.hpp"
+#include "runtime/Components.hpp"
+
+#include <entt/entity/registry.hpp>
 
 #include <algorithm>
+#include <cctype>
+#include <filesystem>
+#include <system_error>
 #include <utility>
+#include <vector>
 
 namespace fadix
 {
@@ -40,8 +51,149 @@ void PlaySession::SetScriptContext(
     NativeScriptLoader* nativeLoader)
 {
     m_ScriptResolver = std::move(resolver);
+    m_Logger = logger;
     m_Scripts.SetLogger(std::move(logger));
     m_Scripts.SetNativeLoader(nativeLoader);
+}
+
+void PlaySession::SetGameServices(
+    std::function<std::unique_ptr<IPhysicsWorld>()> createPhysics,
+    std::function<std::filesystem::path(const std::string&)> resolvePath)
+{
+    m_CreatePhysics = std::move(createPhysics);
+    m_ResolvePath = std::move(resolvePath);
+    m_Scripts.SetGameCallbacks(
+        [this](const std::string& path, float x, float y, float z) {
+            return SpawnPrefab(path, x, y, z);
+        },
+        [this](const std::string& path) { m_PendingSceneLoad = path; });
+}
+
+std::optional<entt::entity> PlaySession::SpawnPrefab(
+    const std::string& path, const float x, const float y, const float z)
+{
+    if (!m_RuntimeWorld || !m_ResolvePath)
+    {
+        return std::nullopt;
+    }
+    const Result<Uuid> root =
+        PrefabSerializer::Instantiate(*m_RuntimeWorld, m_ResolvePath(path), std::nullopt);
+    if (!root)
+    {
+        if (m_Logger)
+        {
+            m_Logger("Prefab.spawn('" + path + "'): " + root.ErrorMessage(), "error");
+        }
+        return std::nullopt;
+    }
+    const std::optional<entt::entity> entity = m_RuntimeWorld->Find(root.Value());
+    if (!entity)
+    {
+        return std::nullopt;
+    }
+    if (auto* transform = m_RuntimeWorld->Registry().try_get<TransformComponent>(*entity))
+    {
+        transform->Position = {x, y, z};
+    }
+    // Bring the prefab's own scripts to life; Start already ran for the scene.
+    m_Scripts.StartEntity(m_RuntimeWorld->Registry(), *entity, m_ScriptResolver);
+    return entity;
+}
+
+namespace
+{
+// Scene.load argument that is not a file path: match it against scene display names
+// (root entity name, case-insensitive) and file stems under Scenes/. Returns all
+// matches so the caller can report "no match" vs "ambiguous" distinctly.
+std::vector<std::filesystem::path> ScenesMatchingDisplayName(
+    const std::filesystem::path& scenesDir, const std::string& query)
+{
+    auto lower = [](std::string s) {
+        std::transform(s.begin(), s.end(), s.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return s;
+    };
+    const std::string want = lower(query);
+    std::vector<std::filesystem::path> matches;
+    std::error_code ec;
+    if (!std::filesystem::exists(scenesDir, ec))
+    {
+        return matches;
+    }
+    for (const auto& entry : std::filesystem::recursive_directory_iterator{scenesDir, ec})
+    {
+        if (!entry.is_regular_file() || entry.path().extension() != ".scene")
+        {
+            continue;
+        }
+        if (lower(entry.path().stem().string()) == want)
+        {
+            matches.push_back(entry.path());
+            continue;
+        }
+        if (const auto display = SceneSerializer::PeekDisplayName(entry.path());
+            display && lower(*display) == want)
+        {
+            matches.push_back(entry.path());
+        }
+    }
+    return matches;
+}
+}
+
+void PlaySession::PerformSceneLoad()
+{
+    const std::string relative = std::move(m_PendingSceneLoad);
+    m_PendingSceneLoad.clear();
+    if (!m_ResolvePath || !m_CreatePhysics)
+    {
+        if (m_Logger)
+        {
+            m_Logger("Scene.load('" + relative + "'): game services not wired", "error");
+        }
+        return;
+    }
+    std::filesystem::path absolute = m_ResolvePath(relative);
+    // Not a path? Resolve against scene display names / file stems under Scenes/.
+    std::error_code exists;
+    if (!std::filesystem::exists(absolute, exists))
+    {
+        const auto matches = ScenesMatchingDisplayName(m_ResolvePath("Scenes"), relative);
+        if (matches.size() == 1)
+        {
+            absolute = matches.front();
+        }
+        else if (m_Logger)
+        {
+            m_Logger("Scene.load('" + relative + "'): " +
+                    (matches.empty() ? "no scene file or display name matches"
+                                     : "ambiguous display name (" +
+                            std::to_string(matches.size()) + " scenes match)"),
+                "error");
+            return;
+        }
+        else
+        {
+            return;
+        }
+    }
+    std::unique_ptr<IWorld> next = sceneplay::CreateEditWorld();
+    SceneDocument document{Uuid::Generate(), absolute.stem().string(), absolute, false};
+    SceneService scenes;
+    if (const Result<void> loaded = scenes.Load(document, *next, absolute); !loaded)
+    {
+        if (m_Logger)
+        {
+            m_Logger("Scene.load('" + relative + "'): " + loaded.ErrorMessage(), "error");
+        }
+        return; // keep the current world running
+    }
+    m_Scripts.Stop(m_RuntimeWorld->Registry()); // OnDestroy on the outgoing scene
+    m_RuntimeWorld = std::move(next);
+    m_Physics = m_CreatePhysics();
+    m_Scripts.Start(m_RuntimeWorld->Registry(), m_ScriptResolver);
+    m_Physics->SyncFromWorld(*m_RuntimeWorld);
+    m_Accumulator = 0.0F;
 }
 
 void PlaySession::BindAudio(AudioEngine* engine)
@@ -106,6 +258,13 @@ void PlaySession::Tick()
         // Push gameplay transforms into physics before stepping. Syncing in the
         // opposite order erases scripted movement on every dynamic body.
         m_Scripts.Update(m_RuntimeWorld->Registry(), m_FixedDeltaSeconds);
+        // A script may have requested a level transition; swap worlds before
+        // stepping physics we are about to discard.
+        if (!m_PendingSceneLoad.empty())
+        {
+            PerformSceneLoad();
+            return;
+        }
         m_Physics->SyncFromWorld(*m_RuntimeWorld);
         m_Physics->StepFixed(m_FixedDeltaSeconds);
         m_Physics->SyncToWorld(*m_RuntimeWorld);

@@ -1,9 +1,11 @@
 #include "render/ParticleRenderer.hpp"
 
+#include "assets/EmbeddedAssetProvider.hpp"
 #include "engine/rhi/Buffer.hpp"
 #include "engine/rhi/CommandList.hpp"
 #include "engine/rhi/Pipeline.hpp"
 #include "engine/rhi/Shader.hpp"
+#include "render/ShaderCompiler.hpp"
 #include "rhi/sdl/SdlRhi.hpp"
 
 #include <glm/geometric.hpp>
@@ -26,10 +28,6 @@
 #include <utility>
 #include <vector>
 
-#ifndef FADIX_ASSET_ROOT
-#define FADIX_ASSET_ROOT "assets"
-#endif
-
 namespace fadix
 {
 namespace
@@ -42,8 +40,7 @@ constexpr std::size_t kParticleVertexStride = 48;
 
 [[nodiscard]] std::vector<std::byte> ReadShaderSource()
 {
-    const std::filesystem::path path =
-        std::filesystem::path{FADIX_ASSET_ROOT} / "shaders" / "particle.hlsl";
+    const std::filesystem::path path = RuntimeAssetRoot() / "shaders" / "particle.hlsl";
     std::ifstream stream(path, std::ios::binary | std::ios::ate);
     if (!stream)
     {
@@ -64,76 +61,7 @@ constexpr std::size_t kParticleVertexStride = 48;
     const char* entryPoint,
     const char* target)
 {
-#ifdef _WIN32
-    HMODULE compiler = LoadLibraryW(L"d3dcompiler_47.dll");
-    if (compiler == nullptr)
-    {
-        throw std::runtime_error("d3dcompiler_47.dll is required for particle shaders");
-    }
-    using CompileFunction = HRESULT(WINAPI*)(
-        LPCVOID,
-        SIZE_T,
-        LPCSTR,
-        const D3D_SHADER_MACRO*,
-        ID3DInclude*,
-        LPCSTR,
-        LPCSTR,
-        UINT,
-        UINT,
-        ID3DBlob**,
-        ID3DBlob**);
-    const auto compile = reinterpret_cast<CompileFunction>(GetProcAddress(compiler, "D3DCompile"));
-    if (compile == nullptr)
-    {
-        FreeLibrary(compiler);
-        throw std::runtime_error("D3DCompile is unavailable");
-    }
-
-    ID3DBlob* bytecode = nullptr;
-    ID3DBlob* errors = nullptr;
-    const UINT flags =
-#ifndef NDEBUG
-        D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#else
-        D3DCOMPILE_OPTIMIZATION_LEVEL3;
-#endif
-    const HRESULT result = compile(
-        source.data(),
-        source.size(),
-        "particle.hlsl",
-        nullptr,
-        nullptr,
-        entryPoint,
-        target,
-        flags,
-        0,
-        &bytecode,
-        &errors);
-    std::string errorMessage;
-    if (errors != nullptr)
-    {
-        errorMessage.assign(
-            static_cast<const char*>(errors->GetBufferPointer()),
-            errors->GetBufferSize());
-        errors->Release();
-    }
-    if (FAILED(result) || bytecode == nullptr)
-    {
-        FreeLibrary(compiler);
-        throw std::runtime_error(
-            std::string{"Particle shader '"} + entryPoint + "' compilation failed: " + errorMessage);
-    }
-    const auto* begin = static_cast<const std::byte*>(bytecode->GetBufferPointer());
-    std::vector<std::byte> compiled(begin, begin + bytecode->GetBufferSize());
-    bytecode->Release();
-    FreeLibrary(compiler);
-    return compiled;
-#else
-    static_cast<void>(source);
-    static_cast<void>(entryPoint);
-    static_cast<void>(target);
-    throw std::runtime_error("Particle HLSL compilation currently requires Windows");
-#endif
+    return render::CompileShader(source, entryPoint, target, "particle.hlsl");
 }
 } // namespace
 
@@ -153,7 +81,8 @@ void ParticleRenderer::Initialize()
 
         const std::vector<std::byte> source = ReadShaderSource();
         {
-            const std::vector<std::byte> code = CompileShader(source, "VertexMain", "vs_5_1");
+            const std::vector<std::byte> code =
+                CompileShader(source, "VertexMain", m_Device.ShaderTarget(false));
             auto result = m_Device.CreateShader({"VertexMain", "particle_vertex"}, code);
             if (!result)
             {
@@ -162,7 +91,8 @@ void ParticleRenderer::Initialize()
             m_VertexShader = std::move(result).Value();
         }
         {
-            const std::vector<std::byte> code = CompileShader(source, "FragmentMain", "ps_5_1");
+            const std::vector<std::byte> code =
+                CompileShader(source, "FragmentMain", m_Device.ShaderTarget(true));
             auto result = m_Device.CreateShader({"FragmentMain", "particle_fragment"}, code);
             if (!result)
             {
@@ -334,10 +264,10 @@ void ParticleRenderer::Draw(
 
     list.BindPipeline(*m_Pipeline);
     list.BindVertexBuffer(*m_VertexBuffer);
-    rhi::sdl::BindIndexBuffer(list, *m_IndexBuffer);
+    list.BindIndexBuffer(*m_IndexBuffer);
     const ParticleVertexUniform uniforms{viewProjection, prevViewProjection};
-    rhi::sdl::PushVertexUniform(list, 0, &uniforms, sizeof(uniforms));
-    rhi::sdl::DrawIndexed(list, m_PreparedIndexCount);
+    list.PushVertexUniform(0, &uniforms, sizeof(uniforms));
+    list.DrawIndexed(m_PreparedIndexCount);
 }
 
 } // namespace fadix

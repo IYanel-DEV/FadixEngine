@@ -57,6 +57,7 @@ struct BufferDesc
     std::size_t Size{0};
     BufferUsage Usage{BufferUsage::Vertex};
     std::string DebugName;
+    std::uint32_t StructureStride{0};
 };
 
 struct TextureDesc
@@ -80,6 +81,10 @@ struct ShaderDesc
     std::string DebugName;
     std::uint32_t NumSamplers{0};
     std::uint32_t NumUniformBuffers{1};
+    // Read-only storage (structured) buffers the fragment stage samples, e.g.
+    // the Forward+ light + tile buffers. They occupy t-registers immediately
+    // after the sampled textures (see SdlRhi register mapping).
+    std::uint32_t NumStorageBuffers{0};
 };
 
 enum class PrimitiveTopology : std::uint8_t

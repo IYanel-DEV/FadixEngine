@@ -7,7 +7,18 @@ struct SDL_Window;
 struct SDL_GPUDevice;
 struct SDL_GPUCommandBuffer;
 struct SDL_GPUTexture;
+struct SDL_GPUGraphicsPipeline;
+struct SDL_GPUShader;
 union SDL_Event;
+
+namespace fadix::rhi
+{
+class Device;
+namespace d3d11
+{
+class D3D11Device;
+}
+}
 
 namespace fadix::editor
 {
@@ -27,7 +38,7 @@ public:
     ImGuiLayer(const ImGuiLayer&) = delete;
     ImGuiLayer& operator=(const ImGuiLayer&) = delete;
 
-    [[nodiscard]] bool Initialize(SDL_Window* window, SDL_GPUDevice* device);
+    [[nodiscard]] bool Initialize(SDL_Window* window, rhi::Device& device);
     void Shutdown();
 
     void ProcessEvent(const SDL_Event& event);
@@ -38,8 +49,18 @@ public:
     [[nodiscard]] bool Ready() const noexcept { return m_Ready; }
 
 private:
+    [[nodiscard]] bool CreateLegacyDxbcPipeline();
+    void DestroyLegacyDxbcPipeline();
+
     SDL_Window* m_Window{nullptr};
+    rhi::Device* m_RhiDevice{nullptr};
     SDL_GPUDevice* m_Device{nullptr};
+    rhi::d3d11::D3D11Device* m_D3D11Device{nullptr};
+    SDL_GPUGraphicsPipeline* m_LegacyDxbcPipeline{nullptr};
+    SDL_GPUShader* m_LegacyDxbcVertexShader{nullptr};
+    SDL_GPUShader* m_LegacyDxbcFragmentShader{nullptr};
+    std::uint32_t m_BackbufferWidth{0};
+    std::uint32_t m_BackbufferHeight{0};
     bool m_Ready{false};
 };
 }

@@ -10,7 +10,14 @@
 #define FADIX_ICON_PLAY "\xef\x81\x8b"                 // U+f04b
 #define FADIX_ICON_PAUSE "\xef\x81\x8c"                // U+f04c
 #define FADIX_ICON_STOP "\xef\x81\x8d"                 // U+f04d
+#define FADIX_ICON_FIRST "\xef\x81\x89"                 // U+f049 backward-fast
+#define FADIX_ICON_PREVIOUS_KEY "\xef\x81\x88"          // U+f048 backward-step
+#define FADIX_ICON_PREVIOUS_FRAME "\xef\x81\x8a"        // U+f04a backward
+#define FADIX_ICON_NEXT_FRAME "\xef\x81\x8e"            // U+f04e forward
 #define FADIX_ICON_STEP "\xef\x81\x91"                 // U+f051 forward-step
+#define FADIX_ICON_LAST "\xef\x81\x90"                  // U+f050 forward-fast
+#define FADIX_ICON_KEY "\xef\x82\x84"                   // U+f084 key
+#define FADIX_ICON_FILM "\xef\x80\x88"                  // U+f008 film
 #define FADIX_ICON_PLUS "\xef\x81\x95"                 // U+f055 circle-plus
 #define FADIX_ICON_SELECT "\xef\x89\x85"               // U+f245 arrow-pointer
 #define FADIX_ICON_MOVE "\xef\x81\x87"                 // U+f047 arrows-up-down-left-right

@@ -44,6 +44,11 @@ int main()
     {
         std::ofstream scene{root / "Scenes" / "Main.scene"};
         scene << "FADIX_SCENE 1\n";
+        std::filesystem::create_directories(root / "Assets" / "Animations", error);
+        std::ofstream animation{root / "Assets" / "Animations" / "Idle.fdxanim"};
+        animation << "fdxanim 1\nname Idle\nduration 1\n";
+        std::ofstream controller{root / "Assets" / "Animations" / "Hero.fdxcontroller"};
+        controller << "fdxcontroller 1 \"Hero\" \"Idle\" 0 0 0\n";
         std::ofstream external{root.parent_path() / "fadix-external-model.glb", std::ios::binary};
         external << "glTF";
     }
@@ -51,6 +56,14 @@ int main()
     AssetDatabase database{root};
     AssetBrowserController browser{database};
     Check(HasEntry(browser, "Project Scenes"), "Project Scenes is visible from Assets root");
+    Check(browser.OpenFolder(root / "Assets" / "Animations").IsOk(),
+        "Animation asset folder opens in Content Browser");
+    Check(HasEntry(browser, "Idle.fdxanim", "Animation"),
+        "FDX animation is indexed as an animation asset");
+    Check(HasEntry(browser, "Hero.fdxcontroller", "AnimatorController"),
+        "FDX controller is indexed as an Animator Controller asset");
+    Check(browser.NavigateHome().IsOk() && browser.CurrentFolder() == root / "Assets",
+        "Content Browser home returns to Assets root");
 
     Check(browser.OpenFolder(root / "Scenes").IsOk(), "Project Scenes opens in Content Browser");
     Check(HasEntry(browser, "Main.scene", "Scene"), "Scene file is indexed as a scene asset");

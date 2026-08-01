@@ -8,6 +8,7 @@
 #include "editor/imgui/WindowChrome.hpp"
 #include "editor/imgui/panels/ContentBrowserPanel.hpp"
 #include "editor/imgui/panels/ExportPanel.hpp"
+#include "editor/imgui/panels/FdxAnimationPanel.hpp"
 #include "editor/imgui/panels/HierarchyPanel.hpp"
 #include "editor/imgui/panels/InspectorPanel.hpp"
 #include "editor/imgui/panels/MaterialEditorPanel.hpp"
@@ -83,5 +84,6 @@ private:
     std::string m_IniPathStorage;
     HierarchyPanel m_Hierarchy;
     InspectorPanel m_Inspector;
+    FdxAnimationPanel m_FdxAnim;
 };
 }

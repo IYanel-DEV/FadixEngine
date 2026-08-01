@@ -1,9 +1,14 @@
 #include "editor/command/EntityCommands.hpp"
 
 #include "engine/scene/IWorld.hpp"
+#include "runtime/Components.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <stdexcept>
+#include <string>
+#include <string_view>
+#include <unordered_set>
 
 namespace fadix
 {
@@ -38,6 +43,64 @@ void Destroy(IWorld& world, const Uuid& id)
         // recreates via a fresh UUID only after World::Find no longer sees a valid entity.
     }
 }
+
+// "Point Light Copy Copy" / "Mesh (3)" -> "Point Light" / "Mesh" so the next
+// duplicate becomes "Name (2)", "Name (3)", ... instead of endless " Copy".
+[[nodiscard]] std::string StripDuplicateDecorations(std::string name)
+{
+    for (;;)
+    {
+        constexpr std::string_view kCopy = " Copy";
+        if (name.size() >= kCopy.size() &&
+            name.compare(name.size() - kCopy.size(), kCopy.size(), kCopy) == 0)
+        {
+            name.resize(name.size() - kCopy.size());
+            continue;
+        }
+        break;
+    }
+    if (name.size() >= 4 && name.back() == ')')
+    {
+        const auto open = name.rfind(" (");
+        if (open != std::string::npos && open + 2 < name.size())
+        {
+            bool digits = true;
+            for (std::size_t i = open + 2; i + 1 < name.size(); ++i)
+            {
+                if (!std::isdigit(static_cast<unsigned char>(name[i])))
+                {
+                    digits = false;
+                    break;
+                }
+            }
+            if (digits)
+            {
+                name.resize(open);
+            }
+        }
+    }
+    return name;
+}
+
+[[nodiscard]] std::string MakeNumberedDuplicateName(IWorld& world, std::string sourceName)
+{
+    const std::string base = StripDuplicateDecorations(std::move(sourceName));
+    std::unordered_set<std::string> used;
+    for (const auto [entity, name] : world.Registry().view<const NameComponent>().each())
+    {
+        (void)entity;
+        used.insert(name.Name);
+    }
+    for (int n = 2; n < 100000; ++n)
+    {
+        std::string candidate = base + " (" + std::to_string(n) + ")";
+        if (!used.contains(candidate))
+        {
+            return candidate;
+        }
+    }
+    return base + " (" + Uuid::Generate().ToString() + ")";
+}
 }
 
 std::optional<EntitySnapshot> EntitySnapshot::Capture(const IWorld& world, const Uuid& id)
@@ -70,7 +133,8 @@ std::optional<EntitySnapshot> EntitySnapshot::Capture(const IWorld& world, const
         CopyComponent<UICanvasComponent>(registry, *entity),
         CopyComponent<TerrainComponent>(registry, *entity),
         CopyComponent<SkeletonComponent>(registry, *entity),
-        CopyComponent<AnimatorComponent>(registry, *entity)};
+        CopyComponent<AnimatorComponent>(registry, *entity),
+        CopyComponent<TransformAnimatorComponent>(registry, *entity)};
 }
 
 entt::entity EntitySnapshot::Restore(IWorld& world) const
@@ -107,6 +171,7 @@ entt::entity EntitySnapshot::Restore(IWorld& world) const
     RestoreComponent(registry, entity, Terrain);
     RestoreComponent(registry, entity, Skeleton);
     RestoreComponent(registry, entity, Animator);
+    RestoreComponent(registry, entity, TransformAnimator);
     return entity;
 }
 
@@ -250,7 +315,7 @@ DuplicateEntityCommand::DuplicateEntityCommand(IWorld& world, const Uuid source)
     m_Duplicate.Id = Uuid::Generate();
     if (m_Duplicate.Name)
     {
-        m_Duplicate.Name->Name += " Copy";
+        m_Duplicate.Name->Name = MakeNumberedDuplicateName(m_World, m_Duplicate.Name->Name);
     }
     if (m_Duplicate.Network)
     {

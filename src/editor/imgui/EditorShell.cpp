@@ -13,18 +13,20 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <iterator>
 #include <string>
 #include <system_error>
+#include <vector>
 
 namespace fadix::editor
 {
 namespace
 {
-constexpr std::array<const char*, 10> kDebugViewMenuLabels{
+constexpr std::array<const char*, 11> kDebugViewMenuLabels{
     "None",
     "Unlit Base Color",
     "World Normals",
@@ -34,7 +36,8 @@ constexpr std::array<const char*, 10> kDebugViewMenuLabels{
     "Depth",
     "Cascade Colors (Experimental)",
     "AO (Experimental)",
-    "Motion Vectors (Experimental)"};
+    "Motion Vectors (Experimental)",
+    "Light Tiles (Forward+)"};
 
 void DisabledMenuItem(const char* label, const char* shortcut, const char* reason)
 {
@@ -163,6 +166,53 @@ void EditorShell::DrawMenus(EditorSession& session, EditorUiState& ui)
         editItem("Save", "Ctrl+S", &ui.RequestSaveScene);
         editItem("Save As...", nullptr, &ui.RequestSaveSceneAs);
         editItem("Save All", "Ctrl+Shift+S", &ui.RequestSaveAll);
+        if (ImGui::BeginMenu("Scenes"))
+        {
+            const std::filesystem::path root = session.ActiveProject().RootPath / "Scenes";
+            std::vector<std::filesystem::path> scenes;
+            std::error_code error;
+            for (std::filesystem::recursive_directory_iterator it{
+                     root,
+                     std::filesystem::directory_options::skip_permission_denied,
+                     error},
+                 end;
+                 it != end;
+                 it.increment(error))
+            {
+                if (error)
+                {
+                    error.clear();
+                    continue;
+                }
+                if (!it->is_regular_file(error))
+                {
+                    error.clear();
+                    continue;
+                }
+                std::string extension = it->path().extension().string();
+                std::transform(extension.begin(), extension.end(), extension.begin(),
+                    [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                if (extension == ".scene" || extension == ".fadixscene")
+                {
+                    scenes.push_back(it->path());
+                }
+            }
+            std::sort(scenes.begin(), scenes.end());
+            if (scenes.empty())
+            {
+                DisabledMenuItem("No scene files", nullptr, "The project Scenes folder is empty");
+            }
+            for (const std::filesystem::path& path : scenes)
+            {
+                const std::string label = path.lexically_relative(root).generic_string();
+                const bool current = path.lexically_normal() == session.Document().Path.lexically_normal();
+                if (ImGui::MenuItem(label.c_str(), nullptr, current, !current))
+                {
+                    ui.RequestOpenScenePath = path;
+                }
+            }
+            ImGui::EndMenu();
+        }
         ImGui::Separator();
         editItem("Import Model...", nullptr, &ui.RequestImportModel);
         ImGui::Separator();
@@ -223,6 +273,7 @@ void EditorShell::DrawMenus(EditorSession& session, EditorUiState& ui)
         ImGui::MenuItem("Output", nullptr, &ui.ShowOutput);
         ImGui::MenuItem("FXS Editor", nullptr, &ui.ShowScriptEditor);
         ImGui::MenuItem("Material Editor", nullptr, &ui.ShowMaterialEditor);
+        ImGui::MenuItem("FDX Animation", nullptr, &ui.ShowFdxAnimation);
         ImGui::MenuItem("Export...", nullptr, &ui.ShowExport);
         if (ImGui::BeginMenu("Rendering"))
         {
@@ -474,6 +525,7 @@ void EditorShell::DrawPanels(
     {
         m_Hierarchy.Draw(*scene, ui);
         m_Inspector.Draw(*scene, ui);
+        m_FdxAnim.Draw(*scene, ui, session.ActiveProject().RootPath, viewports);
     }
     if (contentBrowser != nullptr)
     {
