@@ -434,8 +434,8 @@ inline SkeletonPose StateMachineNode::Evaluate(AnimGraphContext& ctx)
         }
     }
 
-    // clipDuration=0 means HasExitTime transitions are always eligible
-    // (no clip duration tracked at the node-graph level).
+    // ponytail: clipDuration=0 makes HasExitTime transitions always eligible (normalized=1.0F);
+    // wire StateTime/clip length here if HasExitTime matters for this state machine node.
     const AnimatorTransition* t = FindAnimatorTransition(temp, 0.0F);
     if (t != nullptr)
     {
@@ -444,6 +444,34 @@ inline SkeletonPose StateMachineNode::Evaluate(AnimGraphContext& ctx)
         CrossfadeDuration = t->Duration;
         ActiveState       = t->To;
         StateTime         = 0.0F;
+    }
+
+    // Propagate consumed triggers back so they don't re-fire next frame
+    for (AnimatorParameter& cp : Controller.Parameters)
+    {
+        if (cp.Type != AnimatorParameterType::Trigger) continue;
+        for (const AnimatorParameter& tp : temp.Controller.Parameters)
+        {
+            if (tp.Name == cp.Name)
+            {
+                cp.BoolValue = tp.BoolValue;  // temp cleared it if consumed
+                break;
+            }
+        }
+    }
+
+    // Sync consumed triggers back into graph parameters
+    for (AnimGraphParameter& gp : ctx.Parameters)
+    {
+        if (gp.ParamType != AnimGraphParameter::Type::Trigger) continue;
+        for (const AnimatorParameter& cp : Controller.Parameters)
+        {
+            if (cp.Name == gp.Name)
+            {
+                gp.BoolValue = cp.BoolValue;
+                break;
+            }
+        }
     }
 
     StateTime += ctx.DeltaTime;
@@ -475,16 +503,31 @@ inline SkeletonPose StateMachineNode::Evaluate(AnimGraphContext& ctx)
     {
         CrossfadeElapsed += ctx.DeltaTime;
         const float w = std::min(CrossfadeElapsed / CrossfadeDuration, 1.0F);
+
+        SkeletonPose fromP;
         auto fromIt = StateChildIndices.find(CrossfadeFrom);
         if (fromIt != StateChildIndices.end())
         {
-            SkeletonPose fromP = EvalChild(ctx, fromIt->second);
-            SkeletonPose blended;
-            BlendSkeletonPoses(fromP, activeP, w, blended);
-            if (w >= 1.0F) CrossfadeFrom.clear();
-            return blended;
+            fromP = EvalChild(ctx, fromIt->second);
         }
+        else if (ctx.MeshAsset)
+        {
+            // Fallback: sample ClipName from the previous state
+            for (const AnimatorState& s : Controller.States)
+            {
+                if (s.Name != CrossfadeFrom) continue;
+                fromP.Skeleton = ctx.MeshAsset->Skeleton;
+                AnimationPlayer player;
+                const AnimationClipAsset* clip = FindAnimationClip(*ctx.MeshAsset, s.ClipName);
+                if (clip) { player.SetClip(clip); player.Update(0.0F, 1.0F, true, fromP); }
+                break;
+            }
+        }
+
+        SkeletonPose blended;
+        BlendSkeletonPoses(fromP, activeP, w, blended);
         if (w >= 1.0F) CrossfadeFrom.clear();
+        return blended;
     }
     return activeP;
 }
