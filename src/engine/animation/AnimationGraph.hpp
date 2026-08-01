@@ -4,7 +4,7 @@
 
 #include <glm/vec2.hpp>
 
-#include <functional>
+#include <iosfwd>
 #include <memory>
 #include <span>
 #include <string>
