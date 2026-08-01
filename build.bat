@@ -1,5 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
+set PATH=C:\Program Files\Python310\;C:\Program Files\Python310\Scripts\;%PATH%
 
 if "%~1"=="" goto :build_debug
 if "%~1"=="1" goto :build_debug
