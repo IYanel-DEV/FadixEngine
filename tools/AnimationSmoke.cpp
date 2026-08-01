@@ -1,6 +1,7 @@
 // FDX Animation self-check: proves the AnimationPlayer advances time and that a
 // joint's skinning matrix actually changes as a clip plays (not frozen bind pose).
 #include "engine/animation/AnimationClip.hpp"
+#include "engine/animation/AnimationGraph.hpp"
 #include "engine/animation/AnimationPlayer.hpp"
 #include "engine/animation/Skeleton.hpp"
 #include "runtime/AnimationRuntime.hpp"
