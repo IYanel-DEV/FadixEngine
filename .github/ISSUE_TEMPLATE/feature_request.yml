@@ -1,0 +1,50 @@
+name: Feature request
+description: Suggest a new feature or improvement for Fadix Engine
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement. Describe the problem it solves
+        and how it fits into the engine.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What does this feature enable or improve?
+      placeholder: As a user, I want to ...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed feature
+      description: A description of the feature and how it should work.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds or alternative designs you considered.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the engine does this affect?
+      options:
+        - Renderer / graphics
+        - Editor / UI
+        - Core / ECS / serialization
+        - Physics
+        - Audio
+        - Scripting
+        - Asset pipeline
+        - Build / CI / platform
+        - Other
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Mockups, references, or examples of similar features elsewhere.

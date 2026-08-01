@@ -1,0 +1,76 @@
+name: Bug report
+description: Report a bug or unexpected behavior in Fadix Engine
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Fill in as much detail as
+        you can so the issue can be reproduced and fixed.
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear, concise description of the bug.
+      placeholder: What went wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact steps to trigger the bug.
+      placeholder: |
+        1. Create an Empty 3D project.
+        2. Add a directional light.
+        3. Press Play.
+        4. See the crash/error.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected to happen instead.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: Paste any Output-panel messages, console output, or crash logs.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Fadix version
+      description: Which release or commit were you using (e.g. v0.9.134)?
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      description: e.g. Windows 11 23H2, Windows 10 22H2
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: Graphics adapter
+      description: e.g. NVIDIA RTX 3080, AMD Radeon 6700 XT, Intel Iris Xe
+  - type: dropdown
+    id: build
+    attributes:
+      label: Build type
+      description: How were you running Fadix?
+      options:
+        - Portable release executable
+        - Debug build from source
+        - Release build from source
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Anything else that may help, such as a minimal repro project.

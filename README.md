@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.9.125-2584d8">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.9.134-2584d8">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-0078d4">
   <img alt="Language" src="https://img.shields.io/badge/C%2B%2B-20-00599c">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-green"></a>
@@ -22,11 +22,11 @@
 
 Fadix combines a dockable Dear ImGui editor with an SDL GPU renderer, scene editing, scripting, asset management, audio, and 2D/3D physics. Projects are stored outside the engine checkout and begin from an Empty 2D or Empty 3D template.
 
-Current release: **0.9.127**
+Current release: **0.9.134**
 
 ## Download
 
-Windows users can download `FadixEngine-0.9.125-Windows-x64.exe` from the
+Windows users can download `FadixEngine-0.9.134-Windows-x64.exe` from the
 [latest GitHub release](https://github.com/IYanel-DEV/FadixEngine/releases/latest).
 It is a portable editor: no source checkout, compiler, build step, or separate
 engine asset folder is required. Fadix unpacks its embedded runtime resources
@@ -82,8 +82,8 @@ To produce the portable Windows release executables, run:
 The release artifacts are written to:
 
 ```text
-artifacts\FadixEngine-0.9.125-Windows-x64.exe
-artifacts\FadixPlayer-0.9.125-Windows-x64.exe
+artifacts\FadixEngine-0.9.134-Windows-x64.exe
+artifacts\FadixPlayer-0.9.134-Windows-x64.exe
 ```
 
 ### Manual CMake build
@@ -113,6 +113,21 @@ cmake --build .build\debug-cmake --config Debug --target fadix_player --parallel
 8. Use **File > Save All** or `Ctrl+Shift+S` before closing the editor.
 
 Fadix project folders contain a `project.fadix` manifest, a `Scenes` directory, and project asset directories. Generated import data and editor caches are kept under the project's `.fadix` directory.
+
+## Starting point for development
+
+New contributors should start from the `dev` branch, which branches from the
+latest release **v0.9.134** and is where active work lands. Everything released
+at or before v0.9.134 is considered a stable starting point:
+
+```powershell
+git clone https://github.com/IYanel-DEV/FadixEngine.git
+git checkout dev
+```
+
+Build from the `dev` branch with the same commands as the [Build](#build)
+section, then follow the [Contributing](CONTRIBUTING.md) guide for the
+branching, coding, and pull request workflow.
 
 ## Editor controls
 
@@ -184,9 +199,11 @@ Please report bugs with reproduction steps, the graphics adapter, Windows versio
 
 ## Contributing
 
-Contributions are welcome while the project is in preview:
+Contributions are welcome while the project is in preview. Start from the
+`dev` branch (see [Starting point for development](#starting-point-for-development))
+and read the full [Contributing guide](CONTRIBUTING.md):
 
-1. Create a branch from the current development branch.
+1. Create a branch from the current development branch (`dev`).
 2. Keep changes focused and follow the existing C++20 style.
 3. Build `fadix_editor` in Debug.
 4. Run the smoke target related to the changed system.
