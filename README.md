@@ -22,7 +22,7 @@
 
 Fadix combines a dockable Dear ImGui editor with an SDL GPU renderer, scene editing, scripting, asset management, audio, and 2D/3D physics. Projects are stored outside the engine checkout and begin from an Empty 2D or Empty 3D template.
 
-Current release: **0.9.125**
+Current release: **0.9.127**
 
 ## Download
 
