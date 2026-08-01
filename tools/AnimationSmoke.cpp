@@ -5,12 +5,15 @@
 #include "engine/animation/Skeleton.hpp"
 #include "runtime/AnimationRuntime.hpp"
 #include "engine/animation/AnimGraphNodes.hpp"
+#include "engine/animation/AnimGraphNodeRegistry.hpp"
+#include "engine/animation/AnimationGraphIO.hpp"
 
 #include <glm/gtc/quaternion.hpp>
 
 #include <cmath>
 #include <cstdio>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -245,6 +248,44 @@ int main()
         assert(blocked == nullptr && "Any-State must not re-enter active state");
 
         std::cout << "PASS Any-State transition\n";
+    }
+
+    // --- AnimGraph serialization round-trip ---
+    {
+        fadix::AnimGraphNodeRegistry::RegisterBuiltins();
+
+        fadix::AnimationGraph graph;
+        graph.Name = "TestGraph";
+        graph.Parameters.push_back({"Speed", fadix::AnimGraphParameter::Type::Float, 2.5F});
+
+        auto clip = std::make_unique<fadix::ClipNode>();
+        clip->ClipName = "Run"; clip->Speed = 1.5F; clip->Loop = false;
+        clip->EditorPosition = {100.0F, 200.0F};
+        graph.Nodes.push_back(std::move(clip));
+
+        auto out = std::make_unique<fadix::OutputNode>();
+        out->Child = 0; out->EditorPosition = {300.0F, 200.0F};
+        graph.Nodes.push_back(std::move(out));
+        graph.OutputNodeIndex = 1;
+
+        std::ostringstream oss;
+        fadix::WriteAnimationGraph(oss, graph);
+        const std::string serialized = oss.str();
+
+        fadix::AnimationGraph loaded;
+        std::istringstream iss{serialized};
+        assert(fadix::ReadAnimationGraph(iss, loaded) && "ReadAnimationGraph failed");
+        assert(loaded.Name == "TestGraph" && "graph name mismatch");
+        assert(loaded.Parameters.size() == 1 && "param count mismatch");
+        assert(std::abs(loaded.Parameters[0].FloatValue - 2.5F) < 1.0e-5F && "param value mismatch");
+        assert(loaded.Nodes.size() == 2 && "node count mismatch");
+        assert(loaded.Nodes[0]->TypeName() == std::string_view{"ClipNode"} && "node type mismatch");
+        const auto* loadedClip = static_cast<fadix::ClipNode*>(loaded.Nodes[0].get());
+        assert(loadedClip->ClipName == "Run" && "clip name mismatch");
+        assert(std::abs(loadedClip->Speed - 1.5F) < 1.0e-5F && "speed mismatch");
+        assert(!loadedClip->Loop && "loop mismatch");
+        assert(loaded.OutputNodeIndex == 1 && "output index mismatch");
+        std::cout << "PASS AnimGraph serialization round-trip\n";
     }
 
     std::printf(g_fail == 0 ? "ALL PASS\n" : "%d CHECK(S) FAILED\n", g_fail);
