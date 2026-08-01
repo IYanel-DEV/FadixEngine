@@ -52,6 +52,58 @@ inline void BlendTransformPoses(const TransformComponent& from, const TransformC
     result.Scale = glm::mix(from.Scale, to.Scale, weight);
 }
 
+struct BlendTree1DResult
+{
+    std::string ClipA;
+    std::string ClipB; // empty = single clip, no blending needed
+    float Weight{0.0F};
+};
+
+// entries is taken by value so it can be sorted locally without touching the state.
+// Returns a single-clip result (ClipB empty, Weight=0) when entries has one element
+// or value is clamped to a boundary threshold.
+[[nodiscard]] inline BlendTree1DResult ResolveBlendTree1D(
+    std::vector<BlendTree1DEntry> entries, const float value)
+{
+    if (entries.empty())
+    {
+        return {};
+    }
+    std::sort(entries.begin(), entries.end(),
+        [](const BlendTree1DEntry& a, const BlendTree1DEntry& b) {
+            return a.Threshold < b.Threshold;
+        });
+    if (entries.size() == 1)
+    {
+        return {entries[0].ClipName, {}, 0.0F};
+    }
+    const float clamped =
+        std::clamp(value, entries.front().Threshold, entries.back().Threshold);
+
+    // Check if clamped value is exactly at a threshold (or very close)
+    for (std::size_t i = 0; i < entries.size(); ++i)
+    {
+        if (std::abs(clamped - entries[i].Threshold) < 1.0e-6F)
+        {
+            return {entries[i].ClipName, {}, 0.0F};
+        }
+    }
+
+    // Find the blend between two thresholds
+    for (std::size_t i = 0; i + 1 < entries.size(); ++i)
+    {
+        const float lo = entries[i].Threshold;
+        const float hi = entries[i + 1].Threshold;
+        if (clamped > lo && clamped < hi)
+        {
+            const float span = hi - lo;
+            const float weight = (clamped - lo) / span;
+            return {entries[i].ClipName, entries[i + 1].ClipName, weight};
+        }
+    }
+    return {entries.back().ClipName, {}, 0.0F};
+}
+
 template <typename Animator>
 inline void QueueClipEvents(Animator& animator, const AnimationClipAsset& clip,
     const float previousTime, const float deltaTime)
@@ -79,7 +131,7 @@ template <typename Animator>
         animator.Controller.EntryState.empty() && !animator.Controller.States.empty()
             ? animator.Controller.States.front().Name
             : animator.Controller.EntryState);
-    if (entry == nullptr || entry->ClipName.empty())
+    if (entry == nullptr || (!entry->UseBlendTree && entry->ClipName.empty()))
     {
         return false;
     }
@@ -142,6 +194,7 @@ template <typename Animator>
     {
         return nullptr;
     }
+    // First pass: transitions from the active state.
     for (const AnimatorTransition& transition : animator.Controller.Transitions)
     {
         if (transition.From != animator.ActiveState || transition.To.empty())
@@ -167,6 +220,23 @@ template <typename Animator>
         }
         return &transition;
     }
+    // Second pass: Any-State transitions. Skip if destination == current state.
+    for (const AnimatorTransition& transition : animator.Controller.Transitions)
+    {
+        if (transition.From != "Any State" || transition.To.empty() ||
+            transition.To == animator.ActiveState)
+        {
+            continue;
+        }
+        if (!std::all_of(transition.Conditions.begin(), transition.Conditions.end(),
+                [&](const AnimatorCondition& condition) {
+                    return AnimatorConditionPasses(animator.Controller, condition);
+                }))
+        {
+            continue;
+        }
+        return &transition;
+    }
     return nullptr;
 }
 
@@ -177,7 +247,20 @@ inline void BeginAnimatorTransition(Animator& animator, const AnimatorTransition
     const std::string fromClip = animator.ClipName;
     const float fromTime = animator.CurrentTime;
     animator.ActiveState = destination.Name;
-    animator.ClipName = destination.ClipName;
+    if (destination.UseBlendTree && !destination.BlendEntries.empty())
+    {
+        // Primary clip = lowest-threshold entry; used for crossfade timing only.
+        const auto primaryIt = std::min_element(destination.BlendEntries.begin(),
+            destination.BlendEntries.end(),
+            [](const BlendTree1DEntry& a, const BlendTree1DEntry& b) {
+                return a.Threshold < b.Threshold;
+            });
+        animator.ClipName = primaryIt->ClipName;
+    }
+    else
+    {
+        animator.ClipName = destination.ClipName;
+    }
     animator.CurrentTime = 0.0F;
     animator.ClearBlend();
     animator.ClearEventState();
@@ -369,6 +452,29 @@ inline void ApplyTransformClip(
     }
 }
 
+inline void ApplyTransformBlendTree1D(const TransformAnimatorComponent& anim,
+    const BlendTree1DResult& blend, const float time, TransformComponent& transform)
+{
+    TransformComponent poseA = transform;
+    const AnimationClipAsset* clipA = FindTransformClip(anim, blend.ClipA);
+    if (clipA != nullptr)
+    {
+        ApplyTransformClip(*clipA, time, poseA);
+    }
+    if (blend.ClipB.empty() || blend.Weight <= 1.0e-6F)
+    {
+        transform = poseA;
+        return;
+    }
+    TransformComponent poseB = transform;
+    const AnimationClipAsset* clipB = FindTransformClip(anim, blend.ClipB);
+    if (clipB != nullptr)
+    {
+        ApplyTransformClip(*clipB, time, poseB);
+    }
+    BlendTransformPoses(poseA, poseB, blend.Weight, transform);
+}
+
 // Per-frame: advance every TransformAnimatorComponent (when playing) and write its
 // pose into the entity's TransformComponent. Runs before skeletal skinning so an
 // entity may carry both: transform clip poses the entity, skeletal poses the skin.
@@ -392,11 +498,19 @@ inline void UpdateTransformAnimations(entt::registry& registry, const float dt)
             {
                 const AnimatorState* destination =
                     FindAnimatorState(anim.Controller, transition->To);
-                const AnimationClipAsset* target = destination == nullptr
-                    ? nullptr
-                    : FindTransformClip(
-                          static_cast<const TransformAnimatorComponent&>(anim),
-                          destination->ClipName);
+                const AnimationClipAsset* target = nullptr;
+                if (destination != nullptr)
+                {
+                    const std::string_view targetClip =
+                        destination->UseBlendTree && !destination->BlendEntries.empty()
+                        ? std::string_view{std::min_element(destination->BlendEntries.begin(),
+                              destination->BlendEntries.end(),
+                              [](const BlendTree1DEntry& a, const BlendTree1DEntry& b) {
+                                  return a.Threshold < b.Threshold; })->ClipName}
+                        : std::string_view{destination->ClipName};
+                    target = FindTransformClip(
+                        static_cast<const TransformAnimatorComponent&>(anim), targetClip);
+                }
                 if (destination != nullptr && target != nullptr)
                 {
                     BeginAnimatorTransition(anim, *transition, *destination);
@@ -434,7 +548,22 @@ inline void UpdateTransformAnimations(entt::registry& registry, const float dt)
         else
         {
             ClearAnimationBlend(anim);
-            ApplyTransformClip(*clip, anim.CurrentTime, transform);
+            // Check if active state is a blend tree
+            const AnimatorState* activeState =
+                FindAnimatorState(anim.Controller, anim.ActiveState);
+            if (activeState != nullptr && activeState->UseBlendTree &&
+                !activeState->BlendEntries.empty())
+            {
+                const AnimatorParameter* param = FindAnimatorParameter(
+                    anim.Controller, activeState->BlendParameter);
+                const BlendTree1DResult blend = ResolveBlendTree1D(activeState->BlendEntries,
+                    param != nullptr ? param->FloatValue : 0.0F);
+                ApplyTransformBlendTree1D(anim, blend, anim.CurrentTime, transform);
+            }
+            else
+            {
+                ApplyTransformClip(*clip, anim.CurrentTime, transform);
+            }
         }
     }
 }
@@ -460,6 +589,43 @@ inline void UpdateTransformAnimations(entt::registry& registry, const float dt)
         }
     }
     return nullptr;
+}
+
+// Sample a 1D blend-tree pose from a GltfMeshAsset.
+// Both clips sample at the same time (synchronized playback).
+// Returns the blended SkeletonPose; pose.Skeleton is pre-set to gltf.Skeleton.
+[[nodiscard]] inline SkeletonPose SampleSkeletalBlendTree1D(const GltfMeshAsset& gltf,
+    const BlendTree1DResult& blend, const float time, const float dt,
+    const float speed, const bool loop)
+{
+    SkeletonPose poseA;
+    poseA.Skeleton = gltf.Skeleton;
+    const AnimationClipAsset* clipA = FindAnimationClip(gltf, blend.ClipA);
+    if (clipA != nullptr)
+    {
+        AnimationPlayer player;
+        player.SetClip(clipA);
+        player.SetTime(time);
+        player.Update(dt, speed, loop, poseA);
+    }
+    if (blend.ClipB.empty() || blend.Weight <= 1.0e-6F)
+    {
+        return poseA;
+    }
+    SkeletonPose poseB;
+    poseB.Skeleton = gltf.Skeleton;
+    const AnimationClipAsset* clipB = FindAnimationClip(gltf, blend.ClipB);
+    if (clipB != nullptr)
+    {
+        AnimationPlayer player;
+        player.SetClip(clipB);
+        player.SetTime(time);
+        player.Update(dt, speed, loop, poseB);
+    }
+    SkeletonPose result;
+    result.Skeleton = gltf.Skeleton;
+    BlendSkeletonPoses(poseA, poseB, blend.Weight, result);
+    return result;
 }
 
 // Ensure a skinned+animated imported mesh has the Skeleton/Animator components the
@@ -528,11 +694,31 @@ inline void UpdateWorldAnimations(
         {
             continue;
         }
-        const AnimationClipAsset* clip = FindAnimationClip(*gltf, animator->ClipName);
+        // --- clip / blend-tree resolution ---
+        const AnimatorState* activeState = FindAnimatorState(
+            animator->Controller, animator->ActiveState);
+        const bool usingBlendTree = activeState != nullptr &&
+            activeState->UseBlendTree && !activeState->BlendEntries.empty();
+        BlendTree1DResult blend;
+        const AnimationClipAsset* clip = nullptr;
+        if (usingBlendTree)
+        {
+            const AnimatorParameter* param = FindAnimatorParameter(
+                animator->Controller, activeState->BlendParameter);
+            blend = ResolveBlendTree1D(activeState->BlendEntries,
+                param != nullptr ? param->FloatValue : 0.0F);
+            clip = FindAnimationClip(*gltf, blend.ClipA);
+        }
+        else
+        {
+            clip = FindAnimationClip(*gltf, animator->ClipName);
+        }
         if (clip == nullptr)
         {
             continue;
         }
+
+        // --- transition check ---
         if (const AnimatorTransition* transition = FindAnimatorTransition(
                 *animator, clip->Duration, std::abs(dt * animator->Speed)))
         {
@@ -540,24 +726,59 @@ inline void UpdateWorldAnimations(
                 FindAnimatorState(animator->Controller, transition->To);
             const AnimationClipAsset* target = destination == nullptr
                 ? nullptr
-                : FindAnimationClip(*gltf, destination->ClipName);
+                : FindAnimationClip(*gltf, destination->UseBlendTree &&
+                        !destination->BlendEntries.empty()
+                    ? std::min_element(destination->BlendEntries.begin(),
+                          destination->BlendEntries.end(),
+                          [](const BlendTree1DEntry& a, const BlendTree1DEntry& b) {
+                              return a.Threshold < b.Threshold; })->ClipName
+                    : destination->ClipName);
             if (destination != nullptr && target != nullptr)
             {
                 BeginAnimatorTransition(*animator, *transition, *destination);
-                clip = target;
+                // Re-resolve after transition
+                activeState = FindAnimatorState(
+                    animator->Controller, animator->ActiveState);
+                const bool nowBlendTree = activeState != nullptr &&
+                    activeState->UseBlendTree && !activeState->BlendEntries.empty();
+                if (nowBlendTree)
+                {
+                    const AnimatorParameter* param = FindAnimatorParameter(
+                        animator->Controller, activeState->BlendParameter);
+                    blend = ResolveBlendTree1D(activeState->BlendEntries,
+                        param != nullptr ? param->FloatValue : 0.0F);
+                    clip = FindAnimationClip(*gltf, blend.ClipA);
+                }
+                else
+                {
+                    blend = {};
+                    clip = target;
+                }
+                if (clip == nullptr) { continue; }
             }
         }
 
         const float previousTime = animator->CurrentTime;
         QueueClipEvents(*animator, *clip, previousTime, dt * animator->Speed);
 
+        // --- pose sampling ---
         SkeletonPose targetPose;
-        targetPose.Skeleton = gltf->Skeleton;
-        AnimationPlayer targetPlayer;
-        targetPlayer.SetClip(clip);
-        targetPlayer.SetTime(animator->CurrentTime);
-        targetPlayer.Update(dt, animator->Speed, animator->Loop, targetPose);
-        animator->CurrentTime = targetPlayer.GetTime();
+        if (usingBlendTree || !blend.ClipA.empty())
+        {
+            targetPose = SampleSkeletalBlendTree1D(
+                *gltf, blend, animator->CurrentTime, dt, animator->Speed, animator->Loop);
+            animator->CurrentTime = AdvanceClipTime(
+                animator->CurrentTime, *clip, dt, animator->Speed, animator->Loop);
+        }
+        else
+        {
+            targetPose.Skeleton = gltf->Skeleton;
+            AnimationPlayer targetPlayer;
+            targetPlayer.SetClip(clip);
+            targetPlayer.SetTime(animator->CurrentTime);
+            targetPlayer.Update(dt, animator->Speed, animator->Loop, targetPose);
+            animator->CurrentTime = targetPlayer.GetTime();
+        }
 
         SkeletonPose pose = targetPose;
         const AnimationClipAsset* fromClip = animator->BlendFromClipName.empty()

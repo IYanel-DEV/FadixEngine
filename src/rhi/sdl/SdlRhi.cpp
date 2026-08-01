@@ -1272,6 +1272,22 @@ bool DynamicBufferUploader::Upload(
 }
 }
 
+#ifdef _WIN32
+namespace
+{
+// Plain C-style wrapper so __try/__except is valid (no C++ dtors in scope).
+// Some old Intel/AMD D3D12 drivers crash rather than returning a clean error;
+// this catches the SEH fault and lets us fall back to Direct3D 11.
+SDL_GPUDevice* TryCreateGpuDevice(SDL_PropertiesID properties) noexcept
+{
+    SDL_GPUDevice* device = nullptr;
+    __try { device = SDL_CreateGPUDeviceWithProperties(properties); }
+    __except (1) {} // EXCEPTION_EXECUTE_HANDLER = 1
+    return device;
+}
+}
+#endif
+
 namespace fadix
 {
 std::unique_ptr<rhi::Device> CreateDeviceFromWindow(void* sdlWindow)
@@ -1297,7 +1313,11 @@ std::unique_ptr<rhi::Device> CreateDeviceFromWindow(void* sdlWindow)
 #ifndef NDEBUG
     SDL_SetBooleanProperty(properties, SDL_PROP_GPU_DEVICE_CREATE_DEBUGMODE_BOOLEAN, true);
 #endif
+#ifdef _WIN32
+    SDL_GPUDevice* nativeDevice = TryCreateGpuDevice(properties);
+#else
     SDL_GPUDevice* nativeDevice = SDL_CreateGPUDeviceWithProperties(properties);
+#endif
     SDL_DestroyProperties(properties);
     if (nativeDevice == nullptr)
     {

@@ -1361,7 +1361,8 @@ void TrackControllerEditItem(SceneEditor& scene, const char* name)
 template <typename Animator>
 void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animator,
     const std::vector<std::string>& clipNames, const std::filesystem::path& projectRoot,
-    int& selectedState, int& selectedTransition, glm::vec2& graphPan)
+    int& selectedState, int& selectedTransition, glm::vec2& graphPan,
+    int& connectingFrom, ImVec2& connectingEnd)
 {
     ImGui::PushID(id);
     AnimatorController& controller = animator.Controller;
@@ -1521,12 +1522,51 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
         graphPan.x += ImGui::GetIO().MouseDelta.x;
         graphPan.y += ImGui::GetIO().MouseDelta.y;
     }
-    if (canvasHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+    if (canvasHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+        connectingFrom < 0 && connectingFrom != -3)
     {
         selectedState = -1;
         selectedTransition = -1;
     }
     ImDrawList* draw = ImGui::GetWindowDrawList();
+    constexpr ImVec2 nodeSize{150.0F, 54.0F};
+    if (connectingFrom >= 0 && ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+    {
+        int releaseTarget = -1;
+        for (int ti = 0; ti < static_cast<int>(controller.States.size()); ++ti)
+        {
+            if (ti == connectingFrom) continue;
+            const AnimatorState& tgt = controller.States[static_cast<std::size_t>(ti)];
+            const ImVec2 tl{origin.x + graphPan.x + tgt.Position.x,
+                origin.y + graphPan.y + tgt.Position.y};
+            if (ImGui::IsMouseHoveringRect(tl,
+                    ImVec2{tl.x + nodeSize.x, tl.y + nodeSize.y}))
+            {
+                releaseTarget = ti;
+                break;
+            }
+        }
+        if (releaseTarget >= 0)
+        {
+            const std::string fromName =
+                controller.States[static_cast<std::size_t>(connectingFrom)].Name;
+            const std::string toName =
+                controller.States[static_cast<std::size_t>(releaseTarget)].Name;
+            CommitControllerEdit(scene, "Add Animator Transition", [&]() {
+                AnimatorTransition t;
+                t.From = fromName;
+                t.To = toName;
+                t.HasExitTime = true;
+                controller.Transitions.push_back(std::move(t));
+                selectedTransition =
+                    static_cast<int>(controller.Transitions.size()) - 1;
+                selectedState = -1;
+            });
+        }
+        connectingFrom = -1;
+    }
+    if ((connectingFrom >= 0 || connectingFrom == -3) && ImGui::IsKeyPressed(ImGuiKey_Escape))
+        connectingFrom = -1;
     draw->PushClipRect(origin, ImVec2{origin.x + size.x, origin.y + size.y}, true);
     constexpr float grid = 32.0F;
     for (float x = std::fmod(graphPan.x, grid); x < size.x; x += grid)
@@ -1539,7 +1579,13 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
         draw->AddLine(ImVec2{origin.x, origin.y + y}, ImVec2{origin.x + size.x, origin.y + y},
             IM_COL32(48, 52, 61, 150));
     }
-    const auto stateCenter = [&](const std::string& name) {
+    // Any-State pseudo-node geometry — declared here so stateCenter lambda and in-progress
+    // line can both reference these.
+    constexpr ImVec2 anyStateSize{120.0F, 38.0F};
+    const ImVec2 anyTL{origin.x + graphPan.x + 14.0F, origin.y + graphPan.y + 14.0F};
+    const auto stateCenter = [&](const std::string& name) -> ImVec2 {
+        if (name == "Any State")
+            return {anyTL.x + anyStateSize.x * 0.5F, anyTL.y + anyStateSize.y * 0.5F};
         const AnimatorState* state = FindAnimatorState(controller, name);
         return state == nullptr ? origin : ImVec2{origin.x + graphPan.x + state->Position.x + 75.0F,
             origin.y + graphPan.y + state->Position.y + 27.0F};
@@ -1547,7 +1593,8 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
     for (int index = 0; index < static_cast<int>(controller.Transitions.size()); ++index)
     {
         const AnimatorTransition& transition = controller.Transitions[static_cast<std::size_t>(index)];
-        if (FindAnimatorState(controller, transition.From) == nullptr ||
+        if ((transition.From != "Any State" &&
+                FindAnimatorState(controller, transition.From) == nullptr) ||
             FindAnimatorState(controller, transition.To) == nullptr)
         {
             continue;
@@ -1570,7 +1617,6 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
         }
         ImGui::PopID();
     }
-    constexpr ImVec2 nodeSize{150.0F, 54.0F};
     for (int index = 0; index < static_cast<int>(controller.States.size()); ++index)
     {
         AnimatorState& state = controller.States[static_cast<std::size_t>(index)];
@@ -1591,6 +1637,36 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
             selectedState = index;
             selectedTransition = -1;
         }
+        if (ImGui::BeginPopupContextItem("NodeCtx"))
+        {
+            if (ImGui::MenuItem("Set as Entry State"))
+            {
+                CommitControllerEdit(scene, "Set Animator Entry State",
+                    [&]() { controller.EntryState = state.Name; });
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Delete State"))
+            {
+                CommitControllerEdit(scene, "Delete Animator State", [&]() {
+                    const std::string removed = state.Name;
+                    controller.States.erase(controller.States.begin() + index);
+                    std::erase_if(controller.Transitions,
+                        [&](const AnimatorTransition& tr) {
+                            return tr.From == removed || tr.To == removed;
+                        });
+                    if (controller.EntryState == removed)
+                        controller.EntryState = controller.States.empty()
+                            ? std::string{}
+                            : controller.States.front().Name;
+                    if (animator.ActiveState == removed)
+                        animator.ClearControllerRuntime();
+                    selectedState = -1;
+                    selectedTransition = -1;
+                });
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::OpenPopupOnItemClick("NodeCtx", ImGuiPopupFlags_MouseButtonRight);
         const bool active = animator.ActiveState == state.Name;
         const bool entry = controller.EntryState == state.Name;
         const bool selected = selectedState == index;
@@ -1604,22 +1680,141 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
         draw->AddRect(topLeft, ImVec2{topLeft.x + nodeSize.x, topLeft.y + nodeSize.y}, border, 6.0F,
             0, selected || active ? 2.5F : 1.5F);
         draw->AddText(ImVec2{topLeft.x + 10.0F, topLeft.y + 8.0F}, IM_COL32_WHITE, state.Name.c_str());
-        draw->AddText(ImVec2{topLeft.x + 10.0F, topLeft.y + 29.0F}, IM_COL32(174, 182, 195, 255),
-            state.ClipName.empty() ? "No clip" : state.ClipName.c_str());
+        char nodeSubLabel[128]{};
+        if (state.UseBlendTree)
+        {
+            std::snprintf(nodeSubLabel, sizeof(nodeSubLabel),
+                "Blend Tree (%zu clips)", state.BlendEntries.size());
+        }
+        else
+        {
+            std::snprintf(nodeSubLabel, sizeof(nodeSubLabel), "%s",
+                state.ClipName.empty() ? "No clip" : state.ClipName.c_str());
+        }
+        draw->AddText(ImVec2{topLeft.x + 10.0F, topLeft.y + 29.0F},
+            IM_COL32(174, 182, 195, 255), nodeSubLabel);
         if (entry)
         {
             draw->AddTriangleFilled(ImVec2{topLeft.x - 12.0F, topLeft.y + 20.0F},
                 ImVec2{topLeft.x - 2.0F, topLeft.y + 27.0F},
                 ImVec2{topLeft.x - 12.0F, topLeft.y + 34.0F}, border);
         }
+        // Port circle on right edge
+        const ImVec2 portPos{topLeft.x + nodeSize.x, topLeft.y + nodeSize.y * 0.5F};
+        const bool portHit = canvasHovered &&
+            ImGui::IsMouseHoveringRect(
+                ImVec2{portPos.x - 7.0F, portPos.y - 7.0F},
+                ImVec2{portPos.x + 7.0F, portPos.y + 7.0F});
+        if (canvasHovered || connectingFrom == index)
+        {
+            const ImU32 portCol = portHit || connectingFrom == index
+                ? IM_COL32(255, 208, 76, 255)
+                : IM_COL32(140, 152, 168, 210);
+            draw->AddCircleFilled(portPos, 5.0F, portCol);
+            draw->AddCircle(portPos, 5.5F, IM_COL32(220, 228, 238, 180), 12, 1.2F);
+        }
+        if (portHit && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        {
+            connectingFrom = index;
+            connectingEnd = portPos;
+            selectedState = -1;
+            selectedTransition = -1;
+        }
         ImGui::PopID();
+    }
+    // Any-State pseudo-node (fixed position, top-left of graph)
+    ImGui::SetCursorScreenPos(anyTL);
+    ImGui::PushID("AnyState");
+    ImGui::InvisibleButton("AnyState", anyStateSize);
+    if (ImGui::IsItemClicked())
+    {
+        selectedState = -2;
+        selectedTransition = -1;
+        connectingFrom = -1;
+    }
+    const bool anySelected = selectedState == -2;
+    draw->AddRectFilled(anyTL,
+        ImVec2{anyTL.x + anyStateSize.x, anyTL.y + anyStateSize.y},
+        IM_COL32(72, 45, 110, 255), 5.0F);
+    draw->AddRect(anyTL,
+        ImVec2{anyTL.x + anyStateSize.x, anyTL.y + anyStateSize.y},
+        anySelected ? IM_COL32(200, 170, 255, 255) : IM_COL32(140, 110, 190, 255),
+        5.0F, 0, anySelected ? 2.5F : 1.5F);
+    draw->AddText(ImVec2{anyTL.x + 10.0F, anyTL.y + 11.0F},
+        IM_COL32(220, 200, 255, 255), "Any State");
+    // Port on Any-State right edge
+    const ImVec2 anyPort{anyTL.x + anyStateSize.x, anyTL.y + anyStateSize.y * 0.5F};
+    const bool anyPortHit = canvasHovered &&
+        ImGui::IsMouseHoveringRect(
+            ImVec2{anyPort.x - 7.0F, anyPort.y - 7.0F},
+            ImVec2{anyPort.x + 7.0F, anyPort.y + 7.0F});
+    if (canvasHovered)
+    {
+        draw->AddCircleFilled(anyPort, 5.0F,
+            anyPortHit ? IM_COL32(255, 208, 76, 255) : IM_COL32(140, 110, 190, 210));
+    }
+    if (anyPortHit && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+    {
+        connectingFrom = -3; // sentinel: dragging from Any-State port
+        connectingEnd = anyPort;
+    }
+    ImGui::PopID();
+    // Any-State drag: release to create transition
+    if (connectingFrom == -3 && ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+    {
+        for (int ti = 0; ti < static_cast<int>(controller.States.size()); ++ti)
+        {
+            const AnimatorState& tgt = controller.States[static_cast<std::size_t>(ti)];
+            const ImVec2 tl{origin.x + graphPan.x + tgt.Position.x,
+                origin.y + graphPan.y + tgt.Position.y};
+            if (ImGui::IsMouseHoveringRect(tl,
+                    ImVec2{tl.x + nodeSize.x, tl.y + nodeSize.y}))
+            {
+                const std::string toName = tgt.Name;
+                CommitControllerEdit(scene, "Add Any-State Transition", [&]() {
+                    AnimatorTransition t;
+                    t.From = "Any State";
+                    t.To = toName;
+                    controller.Transitions.push_back(std::move(t));
+                    selectedTransition =
+                        static_cast<int>(controller.Transitions.size()) - 1;
+                    selectedState = -1;
+                });
+                break;
+            }
+        }
+        connectingFrom = -1;
+    }
+    // In-progress connection line
+    if ((connectingFrom >= 0 && connectingFrom < static_cast<int>(controller.States.size())) ||
+        connectingFrom == -3)
+    {
+        ImVec2 srcPort;
+        if (connectingFrom == -3)
+        {
+            srcPort = {anyTL.x + anyStateSize.x, anyTL.y + anyStateSize.y * 0.5F};
+        }
+        else
+        {
+            const AnimatorState& srcState =
+                controller.States[static_cast<std::size_t>(connectingFrom)];
+            srcPort = {origin.x + graphPan.x + srcState.Position.x + nodeSize.x,
+                origin.y + graphPan.y + srcState.Position.y + nodeSize.y * 0.5F};
+        }
+        connectingEnd = ImGui::GetMousePos();
+        draw->AddBezierCubic(srcPort,
+            ImVec2{srcPort.x + 60.0F, srcPort.y},
+            ImVec2{connectingEnd.x - 60.0F, connectingEnd.y},
+            connectingEnd, IM_COL32(255, 208, 76, 200), 2.0F);
+        draw->AddCircleFilled(connectingEnd, 4.0F, IM_COL32(255, 208, 76, 200));
     }
     draw->PopClipRect();
     ImGui::EndChild();
 
-    selectedState = selectedState >= 0 && selectedState < static_cast<int>(controller.States.size())
-        ? selectedState
-        : -1;
+    selectedState = selectedState == -2 ? -2
+        : (selectedState >= 0 && selectedState < static_cast<int>(controller.States.size())
+            ? selectedState
+            : -1);
     selectedTransition = selectedTransition >= 0 &&
             selectedTransition < static_cast<int>(controller.Transitions.size())
         ? selectedTransition
@@ -1627,7 +1822,10 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
     if (selectedState >= 0)
     {
         AnimatorState& state = controller.States[static_cast<std::size_t>(selectedState)];
-        ImGui::BeginChild("StateInspector", ImVec2{0.0F, 118.0F}, true);
+        const float stateInspectorH = state.UseBlendTree
+            ? (174.0F + static_cast<float>(state.BlendEntries.size()) * 28.0F)
+            : 118.0F;
+        ImGui::BeginChild("StateInspector", ImVec2{0.0F, stateInspectorH}, true);
         ImGui::TextUnformatted("STATE");
         ImGui::SameLine();
         char stateName[96]{};
@@ -1635,32 +1833,160 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
         ImGui::SetNextItemWidth(150.0F);
         if (ImGui::InputText("##StateName", stateName, sizeof(stateName)))
         {
-            const std::string oldName = state.Name;
-            state.Name = stateName;
-            if (controller.EntryState == oldName) controller.EntryState = state.Name;
-            if (animator.ActiveState == oldName) animator.ActiveState = state.Name;
-            for (AnimatorTransition& transition : controller.Transitions)
+            const std::string newName = stateName;
+            if (newName != "Any State")
             {
-                if (transition.From == oldName) transition.From = state.Name;
-                if (transition.To == oldName) transition.To = state.Name;
+                const std::string oldName = state.Name;
+                state.Name = newName;
+                if (controller.EntryState == oldName) controller.EntryState = state.Name;
+                if (animator.ActiveState == oldName) animator.ActiveState = state.Name;
+                for (AnimatorTransition& transition : controller.Transitions)
+                {
+                    if (transition.From == oldName) transition.From = state.Name;
+                    if (transition.To == oldName) transition.To = state.Name;
+                }
             }
         }
         TrackControllerEditItem(scene, "Rename Animator State");
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(160.0F);
-        if (ImGui::BeginCombo("##StateClip", state.ClipName.empty() ? "Select clip" : state.ClipName.c_str()))
+        if (!state.UseBlendTree)
         {
-            for (const std::string& clipName : clipNames)
+            ImGui::SetNextItemWidth(160.0F);
+            if (ImGui::BeginCombo("##StateClip", state.ClipName.empty() ? "Select clip" : state.ClipName.c_str()))
             {
-                if (ImGui::Selectable(clipName.c_str(), clipName == state.ClipName))
+                for (const std::string& clipName : clipNames)
                 {
-                    CommitControllerEdit(scene, "Set Animator State Clip",
-                        [&]() { state.ClipName = clipName; });
+                    if (ImGui::Selectable(clipName.c_str(), clipName == state.ClipName))
+                    {
+                        CommitControllerEdit(scene, "Set Animator State Clip",
+                            [&]() { state.ClipName = clipName; });
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SameLine();
+        }
+        bool useBlendTree = state.UseBlendTree;
+        if (ImGui::Checkbox("Blend Tree", &useBlendTree))
+        {
+            CommitControllerEdit(scene, "Toggle Blend Tree", [&]() {
+                state.UseBlendTree = useBlendTree;
+            });
+        }
+        if (state.UseBlendTree)
+        {
+            ImGui::SameLine();
+            ImGui::TextUnformatted("Param:");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(130.0F);
+            std::vector<const char*> floatParamNames;
+            for (const AnimatorParameter& p : controller.Parameters)
+            {
+                if (p.Type == AnimatorParameterType::Float)
+                    floatParamNames.push_back(p.Name.c_str());
+            }
+            if (floatParamNames.empty())
+            {
+                ImGui::TextColored(ImVec4{1.0F, 0.6F, 0.3F, 1.0F}, "No float params");
+            }
+            else
+            {
+                const char* preview = state.BlendParameter.empty()
+                    ? floatParamNames[0]
+                    : state.BlendParameter.c_str();
+                if (ImGui::BeginCombo("##BlendParam", preview))
+                {
+                    for (const char* name : floatParamNames)
+                    {
+                        if (ImGui::Selectable(name, state.BlendParameter == name))
+                        {
+                            CommitControllerEdit(scene, "Set Blend Parameter",
+                                [&]() { state.BlendParameter = name; });
+                        }
+                    }
+                    ImGui::EndCombo();
                 }
             }
-            ImGui::EndCombo();
+            ImGui::Separator();
+            int removeEntry = -1;
+            for (int ei = 0; ei < static_cast<int>(state.BlendEntries.size()); ++ei)
+            {
+                BlendTree1DEntry& entry =
+                    state.BlendEntries[static_cast<std::size_t>(ei)];
+                ImGui::PushID(ei + 50000);
+                ImGui::SetNextItemWidth(70.0F);
+                ImGui::DragFloat("##Thresh", &entry.Threshold, 0.01F, -1000.0F, 1000.0F, "%.2f");
+                TrackControllerEditItem(scene, "Set Blend Threshold");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(140.0F);
+                if (ImGui::BeginCombo("##EClip",
+                        entry.ClipName.empty() ? "Select" : entry.ClipName.c_str()))
+                {
+                    for (const std::string& cn : clipNames)
+                    {
+                        if (ImGui::Selectable(cn.c_str(), cn == entry.ClipName))
+                        {
+                            CommitControllerEdit(scene, "Set Blend Entry Clip",
+                                [&]() { entry.ClipName = cn; });
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton(FADIX_ICON_TRASH "##re"))
+                    removeEntry = ei;
+                ImGui::PopID();
+            }
+            if (removeEntry >= 0)
+            {
+                CommitControllerEdit(scene, "Remove Blend Entry", [&]() {
+                    state.BlendEntries.erase(state.BlendEntries.begin() + removeEntry);
+                });
+            }
+            if (ImGui::SmallButton(FADIX_ICON_PLUS "  Add Entry"))
+            {
+                CommitControllerEdit(scene, "Add Blend Entry", [&]() {
+                    BlendTree1DEntry newEntry;
+                    newEntry.ClipName = clipNames.empty() ? std::string{} : clipNames.front();
+                    newEntry.Threshold = state.BlendEntries.empty()
+                        ? 0.0F
+                        : state.BlendEntries.back().Threshold + 1.0F;
+                    state.BlendEntries.push_back(std::move(newEntry));
+                });
+            }
+            if (!state.BlendEntries.empty())
+            {
+                ImGui::Spacing();
+                const ImVec2 rulerStart = ImGui::GetCursorScreenPos();
+                const float rulerW = ImGui::GetContentRegionAvail().x - 4.0F;
+                constexpr float rulerH = 6.0F;
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                dl->AddRectFilled(rulerStart,
+                    ImVec2{rulerStart.x + rulerW, rulerStart.y + rulerH},
+                    IM_COL32(50, 55, 66, 255), 3.0F);
+                float minT = state.BlendEntries[0].Threshold;
+                float maxT = state.BlendEntries[0].Threshold;
+                for (const BlendTree1DEntry& e : state.BlendEntries)
+                {
+                    minT = std::min(minT, e.Threshold);
+                    maxT = std::max(maxT, e.Threshold);
+                }
+                const float range = maxT - minT;
+                for (const BlendTree1DEntry& e : state.BlendEntries)
+                {
+                    const float t = range > 1.0e-5F
+                        ? (e.Threshold - minT) / range
+                        : 0.5F;
+                    const float x = rulerStart.x + t * rulerW;
+                    dl->AddLine(
+                        ImVec2{x, rulerStart.y - 2.0F},
+                        ImVec2{x, rulerStart.y + rulerH + 2.0F},
+                        IM_COL32(255, 208, 76, 220), 2.0F);
+                }
+                ImGui::Dummy(ImVec2{rulerW, rulerH + 4.0F});
+            }
         }
-        ImGui::SameLine();
+        if (!state.UseBlendTree) ImGui::SameLine();
         if (ImGui::Button("Set Entry"))
         {
             CommitControllerEdit(scene, "Set Animator Entry State",
@@ -1801,6 +2127,37 @@ void DrawAnimatorController(SceneEditor& scene, const char* id, Animator& animat
         }
         ImGui::EndChild();
     }
+    if (selectedState == -2)
+    {
+        ImGui::BeginChild("AnyStateInspector", ImVec2{0.0F, 100.0F}, true);
+        ImGui::TextUnformatted("ANY STATE");
+        ImGui::SameLine();
+        ImGui::TextDisabled("— transitions fire from any active state");
+        ImGui::Separator();
+        ImGui::TextUnformatted("Add transition to:");
+        ImGui::SameLine();
+        for (int ti = 0; ti < static_cast<int>(controller.States.size()); ++ti)
+        {
+            ImGui::PushID(ti + 30000);
+            const std::string& name =
+                controller.States[static_cast<std::size_t>(ti)].Name;
+            if (ImGui::SmallButton((std::string{"+ "} + name).c_str()))
+            {
+                CommitControllerEdit(scene, "Add Any-State Transition", [&]() {
+                    AnimatorTransition t;
+                    t.From = "Any State";
+                    t.To = name;
+                    controller.Transitions.push_back(std::move(t));
+                    selectedTransition =
+                        static_cast<int>(controller.Transitions.size()) - 1;
+                    selectedState = -1;
+                });
+            }
+            ImGui::SameLine();
+            ImGui::PopID();
+        }
+        ImGui::EndChild();
+    }
     ImGui::PopID();
 }
 
@@ -1808,7 +2165,8 @@ void DrawTransformSection(SceneEditor& scene, const std::filesystem::path& proje
     entt::registry& registry, const entt::entity entity,
     TransformAnimatorComponent& anim, bool& previewPlaying, float& previewTime,
     int& selChannel, int& selKey, int& selEvent, int& selectedState,
-    int& selectedTransition, glm::vec2& graphPan, int& framesPerSecond,
+    int& selectedTransition, glm::vec2& graphPan, int& connectingFrom, ImVec2& connectingEnd,
+    int& framesPerSecond,
     bool& snapToFrames, float& pixelsPerSecond, float& startTime, float& endTime, int& dragTimeline,
     int& dragChannel, int& dragKey, float& dragStartTime, float& dragStartMouseX,
     const AnimationEditHooks& edits)
@@ -1946,7 +2304,8 @@ void DrawTransformSection(SceneEditor& scene, const std::filesystem::path& proje
         transformClipNames.push_back(candidate.Name);
     }
     DrawAnimatorController(scene, "TransformController", anim, transformClipNames,
-        projectRoot, selectedState, selectedTransition, graphPan);
+        projectRoot, selectedState, selectedTransition, graphPan,
+        connectingFrom, connectingEnd);
 
     AnimationClipAsset& clip = EnsureTransformClip(anim);
     AdvancePreview(clip, previewTime, previewPlaying, anim.Loop, anim.Speed);
@@ -2431,7 +2790,7 @@ void FdxAnimationPanel::Draw(
                 m_TransformPreviewPlaying, m_TransformPreviewTime,
                 m_TSelectedChannel, m_TSelectedKey, m_TSelectedEvent,
                 m_TSelectedAnimatorState, m_TSelectedAnimatorTransition,
-                m_TransformGraphPan,
+                m_TransformGraphPan, m_TConnectingFromState, m_TConnectingLineEnd,
                 m_FramesPerSecond, m_SnapToFrames,
                 m_TimelinePixelsPerSecond, m_TimelineStart, m_TimelineEnd, m_DragTimeline, m_DragChannel,
                 m_DragKey, m_DragStartTime, m_DragStartMouseX, edits);
@@ -2549,7 +2908,7 @@ void FdxAnimationPanel::Draw(
     }
     DrawAnimatorController(scene, "SkeletalController", *animator, skeletalClipNames,
         projectRoot, m_SelectedAnimatorState, m_SelectedAnimatorTransition,
-        m_SkeletalGraphPan);
+        m_SkeletalGraphPan, m_ConnectingFromState, m_ConnectingLineEnd);
 
     const bool insertSelected = DrawDopeSheet("SkeletalTimeline", 1, clip,
         m_SkeletalPreviewTime, m_SkeletalPreviewPlaying, animator->Loop, animator->Speed,
@@ -2766,7 +3125,7 @@ void FdxAnimationPanel::Draw(
                 m_TransformPreviewPlaying, m_TransformPreviewTime,
                 m_TSelectedChannel, m_TSelectedKey, m_TSelectedEvent,
                 m_TSelectedAnimatorState, m_TSelectedAnimatorTransition,
-                m_TransformGraphPan,
+                m_TransformGraphPan, m_TConnectingFromState, m_TConnectingLineEnd,
                 m_FramesPerSecond, m_SnapToFrames, m_TimelinePixelsPerSecond,
                 m_TimelineStart, m_TimelineEnd, m_DragTimeline, m_DragChannel,
                 m_DragKey, m_DragStartTime, m_DragStartMouseX, edits);

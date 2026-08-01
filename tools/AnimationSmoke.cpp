@@ -3,11 +3,13 @@
 #include "engine/animation/AnimationClip.hpp"
 #include "engine/animation/AnimationPlayer.hpp"
 #include "engine/animation/Skeleton.hpp"
+#include "runtime/AnimationRuntime.hpp"
 
 #include <glm/gtc/quaternion.hpp>
 
 #include <cmath>
 #include <cstdio>
+#include <iostream>
 #include <string>
 #include <vector>
 
@@ -144,6 +146,105 @@ int main()
         [&](const AnimationEvent& event) { events.push_back(event.Name + ":" + event.Payload); });
     Check(events == std::vector<std::string>{"Start:", "Footstep:right"},
         "reverse looping animation events fire in reverse playback order");
+
+    // --- BlendTree1D resolution ---
+    {
+        std::vector<fadix::BlendTree1DEntry> entries;
+        entries.push_back({"Idle", 0.0F});
+        entries.push_back({"Walk", 0.5F});
+        entries.push_back({"Run",  1.0F});
+
+        // Clamp below min
+        {
+            auto r = fadix::ResolveBlendTree1D(entries, -1.0F);
+            assert(r.ClipA == "Idle" && r.ClipB.empty() && r.Weight == 0.0F
+                && "Clamp below min failed");
+        }
+        // At min threshold
+        {
+            auto r = fadix::ResolveBlendTree1D(entries, 0.0F);
+            assert(!r.ClipA.empty() && "At-min failed");
+        }
+        // Midpoint Idle->Walk
+        {
+            auto r = fadix::ResolveBlendTree1D(entries, 0.25F);
+            assert(r.ClipA == "Idle" && r.ClipB == "Walk"
+                && std::abs(r.Weight - 0.5F) < 1.0e-5F && "Idle->Walk midpoint failed");
+        }
+        // Midpoint Walk->Run
+        {
+            auto r = fadix::ResolveBlendTree1D(entries, 0.75F);
+            assert(r.ClipA == "Walk" && r.ClipB == "Run"
+                && std::abs(r.Weight - 0.5F) < 1.0e-5F && "Walk->Run midpoint failed");
+        }
+        // Clamp above max
+        {
+            auto r = fadix::ResolveBlendTree1D(entries, 2.0F);
+            assert(r.ClipA == "Run" && r.ClipB.empty() && "Clamp above max failed");
+        }
+        // Single entry
+        {
+            std::vector<fadix::BlendTree1DEntry> one{{"Solo", 0.5F}};
+            auto r = fadix::ResolveBlendTree1D(one, 0.7F);
+            assert(r.ClipA == "Solo" && r.ClipB.empty() && r.Weight == 0.0F
+                && "Single-entry failed");
+        }
+        // Unsorted input (entries passed out of order)
+        {
+            std::vector<fadix::BlendTree1DEntry> unsorted{{"Run", 1.0F}, {"Idle", 0.0F}};
+            auto r = fadix::ResolveBlendTree1D(unsorted, 0.5F);
+            assert(r.ClipA == "Idle" && r.ClipB == "Run"
+                && std::abs(r.Weight - 0.5F) < 1.0e-5F && "Unsorted input failed");
+        }
+        std::cout << "PASS blend tree resolution\n";
+    }
+
+    // --- Any-State transition ---
+    {
+        fadix::AnimatorController controller;
+        fadix::AnimatorState stateA; stateA.Name = "A"; stateA.ClipName = "ClipA";
+        fadix::AnimatorState stateB; stateB.Name = "B"; stateB.ClipName = "ClipB";
+        controller.States = {stateA, stateB};
+        controller.EntryState = "A";
+
+        // Normal A->B transition with unsatisfied bool condition
+        fadix::AnimatorTransition normal;
+        normal.From = "A"; normal.To = "B";
+        fadix::AnimatorCondition cond;
+        cond.Parameter = "jump";
+        cond.Comparison = fadix::AnimatorComparison::Equal;
+        cond.Threshold = 1.0F;
+        normal.Conditions = {cond};
+
+        // Any-State -> B transition with no conditions (always fires)
+        fadix::AnimatorTransition anyTrans;
+        anyTrans.From = "Any State"; anyTrans.To = "B";
+
+        controller.Transitions = {normal, anyTrans};
+        controller.Parameters.push_back({"jump", fadix::AnimatorParameterType::Bool, false});
+
+        fadix::AnimatorComponent animator;
+        animator.Controller = controller;
+        animator.ActiveState = "A";
+        animator.CurrentTime = 0.0F;
+
+        // Normal transition should NOT fire (condition unsatisfied)
+        // Any-State transition SHOULD fire
+        const fadix::AnimatorTransition* found =
+            fadix::FindAnimatorTransition(animator, 1.0F);
+        assert(found != nullptr && found->From == "Any State"
+            && "Any-State transition not found");
+
+        // Any-State must not re-enter current state
+        anyTrans.To = "A"; // target == active state
+        controller.Transitions = {anyTrans};
+        animator.Controller = controller;
+        const fadix::AnimatorTransition* blocked =
+            fadix::FindAnimatorTransition(animator, 1.0F);
+        assert(blocked == nullptr && "Any-State must not re-enter active state");
+
+        std::cout << "PASS Any-State transition\n";
+    }
 
     std::printf(g_fail == 0 ? "ALL PASS\n" : "%d CHECK(S) FAILED\n", g_fail);
     return g_fail == 0 ? 0 : 1;

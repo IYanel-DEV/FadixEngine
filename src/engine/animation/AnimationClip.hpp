@@ -150,11 +150,20 @@ struct AnimatorCondition
     float Threshold{1.0F};
 };
 
+struct BlendTree1DEntry
+{
+    std::string ClipName;
+    float Threshold{0.0F};
+};
+
 struct AnimatorState
 {
     std::string Name{"State"};
     std::string ClipName;
     glm::vec2 Position{40.0F, 40.0F};
+    bool UseBlendTree{false};
+    std::string BlendParameter;
+    std::vector<BlendTree1DEntry> BlendEntries;
 };
 
 struct AnimatorTransition

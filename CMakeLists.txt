@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(FadixEngine VERSION 0.9.130 LANGUAGES C CXX)
+project(FadixEngine VERSION 0.9.133 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -562,7 +562,7 @@ endif()
 
 add_executable(fadix_animation_smoke tools/AnimationSmoke.cpp)
 target_include_directories(fadix_animation_smoke PRIVATE src)
-target_link_libraries(fadix_animation_smoke PRIVATE glm::glm)
+target_link_libraries(fadix_animation_smoke PRIVATE glm::glm fadix_runtime)
 if(MSVC)
     target_compile_options(fadix_animation_smoke PRIVATE /W4 /permissive-)
 else()
