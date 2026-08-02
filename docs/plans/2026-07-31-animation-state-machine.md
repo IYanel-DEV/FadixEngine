@@ -1,7 +1,7 @@
 # Animation State Machine v2 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
+ 
 **Goal:** Add 1D blend trees, Any-State transitions, port-drag transition creation, and play-mode live parameter controls to the existing animator system.
 
 **Architecture:** The existing `AnimatorController` / `AnimatorState` / `AnimatorTransition` data model is extended minimally — one new struct and three new fields on `AnimatorState`. Runtime helpers in `AnimationRuntime.hpp` grow a `ResolveBlendTree1D` function and a second-pass Any-State check in `FindAnimatorTransition`. All UI work lives in `FdxAnimationPanel.cpp` and `InspectorPanel.cpp` (`.cpp`-only, no cascade after the header work is done).
