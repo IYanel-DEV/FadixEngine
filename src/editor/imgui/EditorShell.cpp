@@ -731,6 +731,14 @@ void EditorShell::DrawTitleBarFrame(
             ImVec2{300.0F / 408.0F, 211.0F / 408.0F});
         cursorX += logoSize.x + 8.0F;
     }
+    else
+    {
+        ImGui::SetCursorScreenPos(ImVec2{cursorX, centerY - ImGui::GetFontSize() * 0.5F});
+        ImGui::PushStyleColor(ImGuiCol_Text, theme.Accent);
+        ImGui::TextUnformatted("FX");
+        ImGui::PopStyleColor();
+        cursorX = ImGui::GetItemRectMax().x + 8.0F;
+    }
     ImGui::SetCursorScreenPos(ImVec2{cursorX, centerY - ImGui::GetFontSize() * 0.5F});
     ImGui::PushStyleColor(ImGuiCol_Text, theme.TextBright);
     ImGui::TextUnformatted("FADIX");
