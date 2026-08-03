@@ -1103,18 +1103,32 @@ void ImGuiEditorApplication::SavePerformanceSettings()
     const std::filesystem::path folder = root / "Saved" / "Editor";
     std::error_code error;
     std::filesystem::create_directories(folder, error);
-    if (error) return;
+    if (error)
+    {
+        m_Log.Log("Could not create performance settings folder: " + error.message(), "error");
+        return;
+    }
     const std::string json = editor::StringifyPerformancePreferences(m_PerfPrefs);
     const std::filesystem::path path = folder / "performance.json";
     const std::filesystem::path tmp = folder / "performance.json.tmp";
     {
         std::ofstream output(tmp, std::ios::binary | std::ios::trunc);
-        if (!output) return;
+        if (!output)
+        {
+            m_Log.Log("Could not write performance settings " + tmp.generic_string(), "error");
+            return;
+        }
         output << json;
     }
     std::filesystem::remove(path, error);
     error.clear();
     std::filesystem::rename(tmp, path, error);
+    if (error)
+    {
+        m_Log.Log(
+            "Could not replace performance settings " + path.generic_string() + ": " + error.message(),
+            "error");
+    }
 }
 
 void ImGuiEditorApplication::ApplyPerformancePreferences()
@@ -1124,7 +1138,106 @@ void ImGuiEditorApplication::ApplyPerformancePreferences()
     m_FpsMinimized = m_PerfPrefs.FpsMinimized;
 }
 
-void ImGuiEditorApplication::DrawPerformanceWindow() {}
+void ImGuiEditorApplication::DrawPerformanceWindow()
+{
+    if (!m_Ui.ShowPerformanceWindow)
+    {
+        return;
+    }
+    if (!ImGui::Begin("Performance###Performance", &m_Ui.ShowPerformanceWindow))
+    {
+        ImGui::End();
+        return;
+    }
+
+    editor::PerformancePreferences& prefs = m_PerfPrefs;
+    bool changed = false;
+
+    // --- Preset selector ---
+    static constexpr std::array<const char*, 3> kPresetLabels{
+        "Low Spec", "Balanced", "Full Quality"};
+    int presetIndex = static_cast<int>(prefs.ActivePreset);
+    if (ImGui::Combo("Preset", &presetIndex, kPresetLabels.data(),
+            static_cast<int>(kPresetLabels.size())))
+    {
+        prefs.ApplyPreset(static_cast<editor::PerformancePreset>(presetIndex));
+        changed = true;
+    }
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Frame-rate limits (0 = unlimited)");
+
+    auto fpsInput = [&](const char* label, float& value) {
+        if (ImGui::InputFloat(label, &value, 1.0F, 5.0F, "%.0f"))
+        {
+            if (value < 0.0F) value = 0.0F;
+            if (value > 999.0F) value = 999.0F;
+            prefs.ActivePreset = editor::PerformancePreset::Balanced; // custom
+            changed = true;
+        }
+    };
+    fpsInput("Foreground FPS", prefs.FpsForeground);
+    fpsInput("Unfocused FPS", prefs.FpsUnfocused);
+    fpsInput("Minimized FPS", prefs.FpsMinimized);
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Background work budget (per frame)");
+    if (ImGui::InputInt("Thumbnails per frame", &prefs.ThumbnailsPerFrame))
+    {
+        prefs.ThumbnailsPerFrame = std::max(1, prefs.ThumbnailsPerFrame);
+        changed = true;
+    }
+    if (ImGui::InputInt("Import polls per frame", &prefs.ImportsPolledPerFrame))
+    {
+        prefs.ImportsPolledPerFrame = std::max(1, prefs.ImportsPolledPerFrame);
+        changed = true;
+    }
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Diagnostics");
+
+    const float fps = m_FrameDelta > 0.0F ? 1.0F / m_FrameDelta : 0.0F;
+    ImGui::Text("FPS %.1f  Frame %.2f ms", fps, m_FrameDelta * 1000.0F);
+    ImGui::Text("Preset: %s", editor::ToString(prefs.ActivePreset));
+
+    const bool hasFocus =
+        m_Window && (SDL_GetWindowFlags(m_Window) & SDL_WINDOW_INPUT_FOCUS) != 0;
+    const bool minimized =
+        m_Window && (SDL_GetWindowFlags(m_Window) & SDL_WINDOW_MINIMIZED) != 0;
+    ImGui::Text(
+        "Window: %s",
+        minimized ? "minimized" : hasFocus ? "focused" : "unfocused");
+
+    if (m_Session.assetDatabase)
+    {
+        const auto* db = dynamic_cast<AssetDatabase*>(m_Session.assetDatabase.get());
+        if (db != nullptr)
+        {
+            const std::size_t pending = std::count_if(
+                db->ImportStatuses().begin(),
+                db->ImportStatuses().end(),
+                [](const AssetImportStatus& s) {
+                    return s.State == AssetImportState::Queued
+                        || s.State == AssetImportState::Importing;
+                });
+            ImGui::Text("Import queue: %zu", pending);
+        }
+    }
+
+    if (ImGui::Button("Reset to Balanced"))
+    {
+        prefs.ApplyPreset(editor::PerformancePreset::Balanced);
+        changed = true;
+    }
+
+    if (changed)
+    {
+        ApplyPerformancePreferences();
+        SavePerformanceSettings();
+    }
+
+    ImGui::End();
+}
 
 void ImGuiEditorApplication::SyncGameCameraFromWorld()
 {
