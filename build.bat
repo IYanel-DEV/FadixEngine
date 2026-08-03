@@ -1,5 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
+set PATH=C:\Program Files\Python310\;C:\Program Files\Python310\Scripts\;%PATH%
 
 rem =============================================================================
 rem Fadix Engine build script.
