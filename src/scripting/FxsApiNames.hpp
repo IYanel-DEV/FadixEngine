@@ -65,6 +65,15 @@ inline constexpr const char* kSave = "Save";
 inline constexpr const char* kSaveWrite = "write";
 inline constexpr const char* kSaveLoad = "load";
 
+inline constexpr const char* kEntityGetSpriteTint = "getSpriteTint";
+inline constexpr const char* kEntitySetSpriteTint = "setSpriteTint";
+inline constexpr const char* kEntitySetSpriteVisible = "setSpriteVisible";
+inline constexpr const char* kEntitySetSortOrder = "setSortOrder";
+inline constexpr const char* kEntityPlaySpriteAnimation = "playSpriteAnimation";
+inline constexpr const char* kEntityGetVelocity2D = "getVelocity2D";
+inline constexpr const char* kEntitySetVelocity2D = "setVelocity2D";
+inline constexpr const char* kEntityApplyImpulse2D = "applyImpulse2D";
+
 inline constexpr const char* kOnStart = "OnStart";
 inline constexpr const char* kOnUpdate = "OnUpdate";
 inline constexpr const char* kOnDestroy = "OnDestroy";

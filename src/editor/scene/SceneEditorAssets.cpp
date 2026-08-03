@@ -492,4 +492,113 @@ bool SceneEditor::AssignMeshFromSelection()
     Report("Assigned imported mesh");
     return true;
 }
+
+bool SceneEditor::AssignSpriteTexture(const AssetHandle handle)
+{
+    if (!m_Selection)
+    {
+        return false;
+    }
+    const auto entity = m_World.Find(*m_Selection);
+    if (!entity)
+    {
+        return false;
+    }
+    Sprite2DComponent* sprite = m_World.Registry().try_get<Sprite2DComponent>(*entity);
+    if (sprite == nullptr)
+    {
+        return false;
+    }
+    auto before = EntitySnapshot::Capture(m_World, *m_Selection);
+    sprite->Texture = handle;
+    if (auto after = EntitySnapshot::Capture(m_World, *m_Selection); before && after)
+    {
+        m_History.Push(std::make_unique<SnapshotEntityCommand>(
+            m_World, std::move(*before), std::move(*after), "Assign Sprite Texture"));
+    }
+    MarkChanged();
+    return true;
+}
+
+bool SceneEditor::ClearSpriteTexture()
+{
+    if (!m_Selection)
+    {
+        return false;
+    }
+    const auto entity = m_World.Find(*m_Selection);
+    if (!entity)
+    {
+        return false;
+    }
+    Sprite2DComponent* sprite = m_World.Registry().try_get<Sprite2DComponent>(*entity);
+    if (sprite == nullptr || !sprite->Texture.IsValid())
+    {
+        return false;
+    }
+    auto before = EntitySnapshot::Capture(m_World, *m_Selection);
+    sprite->Texture = AssetHandle{};
+    if (auto after = EntitySnapshot::Capture(m_World, *m_Selection); before && after)
+    {
+        m_History.Push(std::make_unique<SnapshotEntityCommand>(
+            m_World, std::move(*before), std::move(*after), "Clear Sprite Texture"));
+    }
+    MarkChanged();
+    return true;
+}
+
+bool SceneEditor::AssignTileSetTexture(const AssetHandle handle)
+{
+    if (!m_Selection)
+    {
+        return false;
+    }
+    const auto entity = m_World.Find(*m_Selection);
+    if (!entity)
+    {
+        return false;
+    }
+    TileMapComponent* tilemap = m_World.Registry().try_get<TileMapComponent>(*entity);
+    if (tilemap == nullptr)
+    {
+        return false;
+    }
+    auto before = EntitySnapshot::Capture(m_World, *m_Selection);
+    tilemap->TileSetTexture = handle;
+    if (auto after = EntitySnapshot::Capture(m_World, *m_Selection); before && after)
+    {
+        m_History.Push(std::make_unique<SnapshotEntityCommand>(
+            m_World, std::move(*before), std::move(*after), "Assign Tile Set Texture"));
+    }
+    MarkChanged();
+    return true;
+}
+
+bool SceneEditor::ClearTileSetTexture()
+{
+    if (!m_Selection)
+    {
+        return false;
+    }
+    const auto entity = m_World.Find(*m_Selection);
+    if (!entity)
+    {
+        return false;
+    }
+    TileMapComponent* tilemap = m_World.Registry().try_get<TileMapComponent>(*entity);
+    if (tilemap == nullptr || !tilemap->TileSetTexture.IsValid())
+    {
+        return false;
+    }
+    auto before = EntitySnapshot::Capture(m_World, *m_Selection);
+    tilemap->TileSetTexture = AssetHandle{};
+    if (auto after = EntitySnapshot::Capture(m_World, *m_Selection); before && after)
+    {
+        m_History.Push(std::make_unique<SnapshotEntityCommand>(
+            m_World, std::move(*before), std::move(*after), "Clear Tile Set Texture"));
+    }
+    MarkChanged();
+    return true;
+}
+
 } // namespace fadix

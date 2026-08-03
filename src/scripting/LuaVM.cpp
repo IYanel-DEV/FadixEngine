@@ -573,6 +573,75 @@ struct LuaEntity
         }
         return sol::make_object(state, sol::lua_nil);
     }
+
+    [[nodiscard]] std::tuple<float, float, float, float> getSpriteTint() const
+    {
+        if (const auto* s = reg ? reg->try_get<Sprite2DComponent>(e) : nullptr)
+        {
+            return {s->Tint.r, s->Tint.g, s->Tint.b, s->Tint.a};
+        }
+        return {1.0F, 1.0F, 1.0F, 1.0F};
+    }
+    void setSpriteTint(float r, float g, float b, float a)
+    {
+        if (auto* s = reg ? reg->try_get<Sprite2DComponent>(e) : nullptr)
+        {
+            s->Tint = {r, g, b, a};
+        }
+    }
+    void setSpriteVisible(const bool visible)
+    {
+        if (auto* s = reg ? reg->try_get<Sprite2DComponent>(e) : nullptr)
+        {
+            s->Tint.a = visible ? 1.0F : 0.0F;
+        }
+    }
+    void setSortOrder(const int layer, const int order)
+    {
+        if (auto* s = reg ? reg->try_get<Sprite2DComponent>(e) : nullptr)
+        {
+            s->SortingLayer = layer;
+            s->OrderInLayer = order;
+        }
+    }
+    void playSpriteAnimation(const std::string& clipName)
+    {
+        if (auto* a = reg ? reg->try_get<SpriteFrameAnimatorComponent>(e) : nullptr)
+        {
+            a->CurrentClip = clipName;
+            a->Playing = true;
+            a->CurrentTime = 0.0F;
+            a->CurrentFrame = 0;
+        }
+    }
+    [[nodiscard]] std::tuple<float, float> getVelocity2D() const
+    {
+        if (reg == nullptr)
+        {
+            return {0.0F, 0.0F};
+        }
+        const RigidBody2DComponent* rb = reg->try_get<RigidBody2DComponent>(e);
+        if (rb == nullptr)
+        {
+            return {0.0F, 0.0F};
+        }
+        return {rb->InitialLinearVelocity.x, rb->InitialLinearVelocity.y};
+    }
+    void setVelocity2D(const float vx, const float vy)
+    {
+        if (auto* rb = reg ? reg->try_get<RigidBody2DComponent>(e) : nullptr)
+        {
+            rb->InitialLinearVelocity = {vx, vy};
+        }
+    }
+    void applyImpulse2D(const float ix, const float iy)
+    {
+        if (auto* rb = reg ? reg->try_get<RigidBody2DComponent>(e) : nullptr)
+        {
+            rb->InitialLinearVelocity.x += ix;
+            rb->InitialLinearVelocity.y += iy;
+        }
+    }
 };
 
 // Physical scancodes via SDL so WASD stays layout-stable. Returns false when
@@ -839,7 +908,15 @@ public:
             fxs::kEntitySetAnimatorInt, &LuaEntity::setAnimatorInt,
             fxs::kEntityTriggerAnimator, &LuaEntity::triggerAnimator,
             fxs::kEntityDestroy, &LuaEntity::destroy,
-            fxs::kEntityGetTarget, &LuaEntity::getTarget);
+            fxs::kEntityGetTarget, &LuaEntity::getTarget,
+            fxs::kEntityGetSpriteTint, &LuaEntity::getSpriteTint,
+            fxs::kEntitySetSpriteTint, &LuaEntity::setSpriteTint,
+            fxs::kEntitySetSpriteVisible, &LuaEntity::setSpriteVisible,
+            fxs::kEntitySetSortOrder, &LuaEntity::setSortOrder,
+            fxs::kEntityPlaySpriteAnimation, &LuaEntity::playSpriteAnimation,
+            fxs::kEntityGetVelocity2D, &LuaEntity::getVelocity2D,
+            fxs::kEntitySetVelocity2D, &LuaEntity::setVelocity2D,
+            fxs::kEntityApplyImpulse2D, &LuaEntity::applyImpulse2D);
 
         // Route print() to the editor's Output panel instead of stdout.
         m_Lua.set_function(fxs::kPrint, [this](sol::variadic_args args) {

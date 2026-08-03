@@ -513,6 +513,16 @@ bool SceneEditor::AddComponent(const std::string_view id)
     }
     else if (id == "add-component-box2d")
         registry.emplace_or_replace<Box2DBodyComponent>(*entity);
+    else if (id == "add-component-sprite2d")
+        registry.emplace_or_replace<Sprite2DComponent>(*entity);
+    else if (id == "add-component-rigidbody2d")
+        registry.emplace_or_replace<RigidBody2DComponent>(*entity);
+    else if (id == "add-component-collider2d")
+        registry.emplace_or_replace<Collider2DComponent>(*entity);
+    else if (id == "add-component-spriteframeanimator")
+        registry.emplace_or_replace<SpriteFrameAnimatorComponent>(*entity);
+    else if (id == "add-component-tilemap")
+        registry.emplace_or_replace<TileMapComponent>(*entity, MakeDefaultTileMap());
     else if (id == "add-component-network")
         registry.emplace_or_replace<NetworkIdentityComponent>(*entity);
     else if (id == "add-component-script") registry.emplace_or_replace<ScriptComponent>(*entity);
@@ -563,6 +573,12 @@ bool SceneEditor::RemoveComponent(const std::string_view removeId)
     else if (removeId == "remove-animator") registry.remove<AnimatorComponent>(*entity);
     else if (removeId == "remove-transform-animator")
         registry.remove<TransformAnimatorComponent>(*entity);
+    else if (removeId == "remove-sprite2d") registry.remove<Sprite2DComponent>(*entity);
+    else if (removeId == "remove-rigidbody2d") registry.remove<RigidBody2DComponent>(*entity);
+    else if (removeId == "remove-collider2d") registry.remove<Collider2DComponent>(*entity);
+    else if (removeId == "remove-spriteframeanimator")
+        registry.remove<SpriteFrameAnimatorComponent>(*entity);
+    else if (removeId == "remove-tilemap") registry.remove<TileMapComponent>(*entity);
     else return false;
 
     if (before)

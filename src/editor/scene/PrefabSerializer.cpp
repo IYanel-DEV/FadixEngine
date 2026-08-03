@@ -61,6 +61,10 @@ void SanitizeRuntimeHandles(IWorld& world, entt::entity entity)
     {
         box2d->Handle = InvalidPhysicsBody;
     }
+    if (auto* rb2d = registry.try_get<RigidBody2DComponent>(entity))
+    {
+        rb2d->Handle = InvalidPhysicsBody;
+    }
     if (auto* audio = registry.try_get<AudioSourceComponent>(entity))
     {
         audio->ActiveTrack = -1;

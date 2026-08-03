@@ -225,6 +225,32 @@ void CopyEntityComponents(
         copy.ClearControllerRuntime();
         to.emplace<TransformAnimatorComponent>(destinationEntity, std::move(copy));
     }
+    if (const auto* value = from.try_get<Sprite2DComponent>(sourceEntity))
+    {
+        to.emplace<Sprite2DComponent>(destinationEntity, *value);
+    }
+    if (const auto* value = from.try_get<RigidBody2DComponent>(sourceEntity))
+    {
+        RigidBody2DComponent copy = *value;
+        copy.Handle = InvalidPhysicsBody;
+        to.emplace<RigidBody2DComponent>(destinationEntity, copy);
+    }
+    if (const auto* value = from.try_get<Collider2DComponent>(sourceEntity))
+    {
+        to.emplace<Collider2DComponent>(destinationEntity, *value);
+    }
+    if (const auto* value = from.try_get<SpriteFrameAnimatorComponent>(sourceEntity))
+    {
+        SpriteFrameAnimatorComponent copy = *value;
+        copy.Playing = false;
+        copy.CurrentTime = 0.0F;
+        copy.CurrentFrame = 0;
+        to.emplace<SpriteFrameAnimatorComponent>(destinationEntity, std::move(copy));
+    }
+    if (const auto* value = from.try_get<TileMapComponent>(sourceEntity))
+    {
+        to.emplace<TileMapComponent>(destinationEntity, *value);
+    }
 }
 
 void CopyWorldInto(const IWorld& source, IWorld& destination)
@@ -343,7 +369,7 @@ void WriteEntityLine(
     if (const CameraComponent* camera = registry.try_get<CameraComponent>(entity))
     {
         out << "C " << camera->FieldOfView << ' ' << camera->NearPlane << ' ' << camera->FarPlane << ' '
-            << camera->Primary << ' ';
+            << camera->Primary << ' ' << camera->Orthographic << ' ' << camera->OrthoSize << ' ';
     }
     if (const NetworkIdentityComponent* network = registry.try_get<NetworkIdentityComponent>(entity))
     {
@@ -437,6 +463,64 @@ void WriteEntityLine(
             std::ostringstream graph;
             WriteAnimationGraph(graph, *animator->Graph);
             out << "AG " << HexEncode(graph.str()) << ' ';
+        }
+    }
+    if (const Sprite2DComponent* spr = registry.try_get<Sprite2DComponent>(entity))
+    {
+        out << "SP2 "
+            << (spr->Texture.IsValid() ? spr->Texture.ToString() : "-") << ' '
+            << spr->Tint.r << ' ' << spr->Tint.g << ' ' << spr->Tint.b << ' ' << spr->Tint.a << ' '
+            << spr->Size.x << ' ' << spr->Size.y << ' '
+            << spr->Pivot.x << ' ' << spr->Pivot.y << ' '
+            << spr->UvRect.x << ' ' << spr->UvRect.y << ' ' << spr->UvRect.z << ' ' << spr->UvRect.w << ' '
+            << spr->FlipX << ' ' << spr->FlipY << ' '
+            << spr->SortingLayer << ' ' << spr->OrderInLayer << ' '
+            << spr->PixelsPerUnit << ' ' << spr->NearestFilter << ' ' << spr->PixelSnap << ' ';
+    }
+    if (const RigidBody2DComponent* rb = registry.try_get<RigidBody2DComponent>(entity))
+    {
+        out << "RB2 " << static_cast<unsigned>(rb->Type) << ' '
+            << rb->Mass << ' ' << rb->GravityScale << ' '
+            << rb->LinearDamping << ' ' << rb->AngularDamping << ' '
+            << rb->FixedRotation << ' '
+            << rb->InitialLinearVelocity.x << ' ' << rb->InitialLinearVelocity.y << ' '
+            << rb->InitialAngularVelocity << ' ';
+    }
+    if (const Collider2DComponent* col = registry.try_get<Collider2DComponent>(entity))
+    {
+        out << "CD2 " << static_cast<unsigned>(col->Shape) << ' '
+            << col->Offset.x << ' ' << col->Offset.y << ' '
+            << col->Size.x << ' ' << col->Size.y << ' '
+            << col->Friction << ' ' << col->Restitution << ' ' << col->Density << ' '
+            << col->Sensor << ' ' << col->CollisionLayer << ' ' << col->CollisionMask << ' ';
+    }
+    if (const SpriteFrameAnimatorComponent* sfa =
+            registry.try_get<SpriteFrameAnimatorComponent>(entity))
+    {
+        out << "SFA " << sfa->Playing << ' ' << sfa->Autoplay << ' ' << sfa->Speed << ' '
+            << std::quoted(sfa->CurrentClip) << ' ' << sfa->Clips.size() << ' ';
+        for (const SpriteAnimationClip& clip : sfa->Clips)
+        {
+            out << std::quoted(clip.Name) << ' ' << clip.Loop << ' ' << clip.Frames.size() << ' ';
+            for (const SpriteFrame& frame : clip.Frames)
+            {
+                out << frame.UvRect.x << ' ' << frame.UvRect.y << ' '
+                    << frame.UvRect.z << ' ' << frame.UvRect.w << ' '
+                    << frame.Duration << ' ';
+            }
+        }
+    }
+    if (const TileMapComponent* tm = registry.try_get<TileMapComponent>(entity))
+    {
+        out << "TMC "
+            << (tm->TileSetTexture.IsValid() ? tm->TileSetTexture.ToString() : "-") << ' '
+            << tm->TileWidth << ' ' << tm->TileHeight << ' '
+            << tm->GridWidth << ' ' << tm->GridHeight << ' '
+            << tm->SheetColumns << ' ' << tm->PixelsPerUnit << ' '
+            << tm->LayerCount << ' ' << tm->TileData.size() << ' ';
+        for (const int tile : tm->TileData)
+        {
+            out << tile << ' ';
         }
     }
     if (const TransformAnimatorComponent* anim =
@@ -738,6 +822,17 @@ Result<void> ParseEntityLine(std::string_view line, IWorld& world)
         {
             CameraComponent value;
             row >> value.FieldOfView >> value.NearPlane >> value.FarPlane >> value.Primary;
+            const auto orthoPos = row.tellg();
+            CameraComponent extended = value;
+            if (row >> extended.Orthographic >> extended.OrthoSize)
+            {
+                value = extended;
+            }
+            else
+            {
+                row.clear();
+                row.seekg(orthoPos);
+            }
             registry.emplace<CameraComponent>(entity, value);
         }
         else if (marker == "N")
@@ -967,6 +1062,120 @@ Result<void> ParseEntityLine(std::string_view line, IWorld& world)
                     animator->RuntimeParameters = animator->Graph->Parameters;
                 }
             }
+        }
+        else if (marker == "SP2")
+        {
+            Sprite2DComponent value;
+            std::string texToken;
+            row >> texToken;
+            if (texToken != "-")
+            {
+                if (const auto id = Uuid::Parse(texToken)) { value.Texture = *id; }
+            }
+            int flipX = 0;
+            int flipY = 0;
+            row >> value.Tint.r >> value.Tint.g >> value.Tint.b >> value.Tint.a
+                >> value.Size.x >> value.Size.y
+                >> value.Pivot.x >> value.Pivot.y
+                >> value.UvRect.x >> value.UvRect.y >> value.UvRect.z >> value.UvRect.w
+                >> flipX >> flipY
+                >> value.SortingLayer >> value.OrderInLayer
+                >> value.PixelsPerUnit;
+            value.FlipX = flipX != 0;
+            value.FlipY = flipY != 0;
+            const auto nearPos = row.tellg();
+            int nearest = 0;
+            int pixSnap = 0;
+            if (row >> nearest >> pixSnap)
+            {
+                value.NearestFilter = nearest != 0;
+                value.PixelSnap = pixSnap != 0;
+            }
+            else
+            {
+                row.clear();
+                row.seekg(nearPos);
+            }
+            registry.emplace<Sprite2DComponent>(entity, value);
+        }
+        else if (marker == "RB2")
+        {
+            RigidBody2DComponent value;
+            unsigned type = 0;
+            int fixedRot = 0;
+            row >> type >> value.Mass >> value.GravityScale
+                >> value.LinearDamping >> value.AngularDamping
+                >> fixedRot
+                >> value.InitialLinearVelocity.x >> value.InitialLinearVelocity.y
+                >> value.InitialAngularVelocity;
+            value.Type = SanitizeBody2DType(type);
+            value.FixedRotation = fixedRot != 0;
+            value.Handle = InvalidPhysicsBody;
+            registry.emplace<RigidBody2DComponent>(entity, value);
+        }
+        else if (marker == "CD2")
+        {
+            Collider2DComponent value;
+            unsigned shape = 0;
+            int sensor = 0;
+            row >> shape >> value.Offset.x >> value.Offset.y
+                >> value.Size.x >> value.Size.y
+                >> value.Friction >> value.Restitution >> value.Density
+                >> sensor >> value.CollisionLayer >> value.CollisionMask;
+            value.Shape = SanitizeCollider2DShape(shape);
+            value.Sensor = sensor != 0;
+            registry.emplace<Collider2DComponent>(entity, value);
+        }
+        else if (marker == "SFA")
+        {
+            SpriteFrameAnimatorComponent value;
+            int playing = 0;
+            int autoplay = 0;
+            std::size_t clipCount = 0;
+            row >> playing >> autoplay >> value.Speed
+                >> std::quoted(value.CurrentClip) >> clipCount;
+            value.Playing = false;
+            value.Autoplay = autoplay != 0;
+            value.CurrentTime = 0.0F;
+            value.CurrentFrame = 0;
+            for (std::size_t ci = 0; ci < clipCount && row; ++ci)
+            {
+                SpriteAnimationClip clip;
+                int loop = 1;
+                std::size_t frameCount = 0;
+                row >> std::quoted(clip.Name) >> loop >> frameCount;
+                clip.Loop = loop != 0;
+                for (std::size_t fi = 0; fi < frameCount && row; ++fi)
+                {
+                    SpriteFrame frame;
+                    row >> frame.UvRect.x >> frame.UvRect.y
+                        >> frame.UvRect.z >> frame.UvRect.w
+                        >> frame.Duration;
+                    clip.Frames.push_back(frame);
+                }
+                value.Clips.push_back(std::move(clip));
+            }
+            registry.emplace<SpriteFrameAnimatorComponent>(entity, std::move(value));
+        }
+        else if (marker == "TMC")
+        {
+            TileMapComponent value;
+            std::string tsToken;
+            std::size_t tileDataCount = 0;
+            row >> tsToken >> value.TileWidth >> value.TileHeight
+                >> value.GridWidth >> value.GridHeight
+                >> value.SheetColumns >> value.PixelsPerUnit
+                >> value.LayerCount >> tileDataCount;
+            if (tsToken != "-")
+            {
+                if (const auto id = Uuid::Parse(tsToken)) { value.TileSetTexture = *id; }
+            }
+            value.TileData.resize(tileDataCount, -1);
+            for (std::size_t i = 0; i < tileDataCount && row; ++i)
+            {
+                row >> value.TileData[i];
+            }
+            registry.emplace<TileMapComponent>(entity, std::move(value));
         }
         else if (marker == "TA" || marker == "TL" || marker == "T2")
         {

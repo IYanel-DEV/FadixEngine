@@ -84,6 +84,7 @@ using viewport_geometry::AppendCylinder;
 using viewport_geometry::AppendPlanePrimitive;
 using viewport_geometry::AppendQuad;
 using viewport_geometry::AppendSphere;
+using viewport_geometry::AppendSpriteQuad;
 using viewport_geometry::AppendTorus;
 using viewport_geometry::MeshRange;
 
@@ -1119,6 +1120,9 @@ private:
         m_Graph.AddPass("WorldGeometry", [this, &world](rhi::CommandList& list) {
             DrawWorldGeometry(list, world);
         });
+        m_Graph.AddPass("Sprites2D", [this, &world](rhi::CommandList& list) {
+            DrawSprites2D(list, world);
+        });
         m_Graph.AddPass("MeshDropPreview", [this](rhi::CommandList& list) {
             DrawMeshPreview(list);
         });
@@ -1827,6 +1831,122 @@ private:
         case MeshKind::Cylinder: break;
         }
         return {0.5F, 0.5F, 0.5F};
+    }
+
+    void DrawSprites2D(rhi::CommandList& list, const IWorld& world)
+    {
+        if (m_Sprite2DPipeline == nullptr)
+        {
+            return;
+        }
+
+        struct SpriteEntry
+        {
+            entt::entity Entity;
+            int SortingLayer;
+            int OrderInLayer;
+        };
+        std::vector<SpriteEntry> sprites;
+        for (const auto [entity, sprite] :
+             world.Registry().view<const Sprite2DComponent>().each())
+        {
+            if (HiddenInCurrentView(world.Registry(), entity))
+            {
+                continue;
+            }
+            sprites.push_back({entity, sprite.SortingLayer, sprite.OrderInLayer});
+        }
+        if (sprites.empty())
+        {
+            return;
+        }
+        std::stable_sort(sprites.begin(), sprites.end(),
+            [](const SpriteEntry& a, const SpriteEntry& b) {
+                if (a.SortingLayer != b.SortingLayer)
+                {
+                    return a.SortingLayer < b.SortingLayer;
+                }
+                return a.OrderInLayer < b.OrderInLayer;
+            });
+
+        list.BindPipeline(*m_Sprite2DPipeline);
+        list.BindVertexBuffer(*m_VertexBuffer);
+        list.BindIndexBuffer(*m_IndexBuffer);
+
+        struct SpriteVertexUniform
+        {
+            glm::mat4 ViewProjection;
+            glm::mat4 Model;
+        };
+        struct SpriteFragmentUniform
+        {
+            glm::vec4 Tint;
+            glm::vec4 UvRect;
+        };
+
+        for (const SpriteEntry& entry : sprites)
+        {
+            const Sprite2DComponent& sprite =
+                world.Registry().get<const Sprite2DComponent>(entry.Entity);
+            const TransformComponent* transform =
+                world.Registry().try_get<const TransformComponent>(entry.Entity);
+
+            glm::vec3 position{0.0F};
+            glm::quat rotation{1.0F, 0.0F, 0.0F, 0.0F};
+            if (transform != nullptr)
+            {
+                position = transform->Position;
+                rotation = transform->Rotation;
+            }
+            if (sprite.PixelSnap && sprite.PixelsPerUnit > 0.0F)
+            {
+                const float inv = 1.0F / sprite.PixelsPerUnit;
+                position.x = std::round(position.x / inv) * inv;
+                position.y = std::round(position.y / inv) * inv;
+            }
+
+            const float sx = sprite.Size.x * (sprite.FlipX ? -1.0F : 1.0F);
+            const float sy = sprite.Size.y * (sprite.FlipY ? -1.0F : 1.0F);
+            const glm::vec3 pivotOffset{0.5F - sprite.Pivot.x, sprite.Pivot.y - 0.5F, 0.0F};
+
+            const glm::mat4 model =
+                glm::translate(glm::mat4{1.0F}, position) *
+                glm::mat4_cast(rotation) *
+                glm::scale(glm::mat4{1.0F}, {sx, sy, 1.0F}) *
+                glm::translate(glm::mat4{1.0F}, pivotOffset);
+
+            rhi::Texture* tex = nullptr;
+            if (sprite.Texture.IsValid())
+            {
+                tex = m_Cache->GetTexture(sprite.Texture, false);
+            }
+            if (tex == nullptr)
+            {
+                tex = m_Cache->GetWhiteTexture();
+            }
+
+            TextureImportSettings samplerSettings;
+            samplerSettings.Filter =
+                sprite.NearestFilter ? TextureFilter::Nearest : TextureFilter::Linear;
+            rhi::Sampler* sampler = m_Cache->GetSampler(samplerSettings);
+            if (sampler == nullptr)
+            {
+                sampler = m_DefaultSampler.get();
+            }
+
+            std::array<rhi::Texture*, 1> textures = {tex};
+            std::array<rhi::Sampler*, 1> samplers = {sampler};
+            list.BindFragmentSamplers(0, textures, samplers);
+
+            const SpriteVertexUniform vert{m_Projection * m_View, model};
+            list.PushVertexUniform(0, &vert, sizeof(vert));
+
+            const SpriteFragmentUniform frag{sprite.Tint, sprite.UvRect};
+            list.PushFragmentUniform(0, &frag, sizeof(frag));
+
+            list.DrawIndexed(m_SpriteQuad.IndexCount, m_SpriteQuad.FirstIndex);
+            RecordDrawCall();
+        }
     }
 
     void DrawWorldGeometry(rhi::CommandList& list, const IWorld& world)
@@ -2760,6 +2880,7 @@ private:
         record(m_Quad, [&]() { AppendQuad(vertices, indices); });
         record(m_PlanePrimitive, [&]() { AppendPlanePrimitive(vertices, indices); });
         record(m_Capsule, [&]() { AppendCapsule(vertices, indices, 20, 8); });
+        record(m_SpriteQuad, [&]() { AppendSpriteQuad(vertices, indices); });
 
         auto vertexResult = m_Device.CreateBuffer(
             {vertices.size() * sizeof(Vertex), rhi::BufferUsage::Vertex, "ViewportVertices"});
@@ -2986,6 +3107,43 @@ private:
             m_ShadowFragmentShader.reset();
             Report(std::string{"Directional shadows disabled: "} + error.what());
         }
+
+        try
+        {
+            const std::vector<std::byte> spriteSource = render::ReadShaderSource("sprite2d.hlsl");
+            const auto makeSpriteShader =
+                [&](const char* entry, const char* target, const char* name,
+                    std::uint32_t samplers, std::uint32_t uniforms) {
+                    const std::vector<std::byte> code = render::CompileShader(
+                        spriteSource, entry, m_Device.ShaderTarget(target[0] == 'p'), "sprite2d.hlsl");
+                    auto result = m_Device.CreateShader({entry, name, samplers, uniforms}, code);
+                    if (!result)
+                    {
+                        throw std::runtime_error(std::string{"Sprite2D shader failed ("} + name +
+                            "): " + result.ErrorMessage());
+                    }
+                    return std::move(result).Value();
+                };
+            m_SpriteVertexShader = makeSpriteShader("VertexMain", "vs_5_1", "sprite2d_vertex", 0, 1);
+            m_SpriteFragmentShader = makeSpriteShader("FragmentMain", "ps_5_1", "sprite2d_fragment", 1, 1);
+
+            rhi::PipelineDesc sprite = mesh;
+            sprite.DebugName = "ViewportSprite2D";
+            sprite.VertexShader = m_SpriteVertexShader.get();
+            sprite.FragmentShader = m_SpriteFragmentShader.get();
+            sprite.AlphaBlend = true;
+            sprite.DepthTest = false;
+            sprite.DepthWrite = false;
+            sprite.Cull = rhi::CullMode::None;
+            m_Sprite2DPipeline = makePipeline(sprite);
+        }
+        catch (const std::exception& error)
+        {
+            m_Sprite2DPipeline.reset();
+            m_SpriteVertexShader.reset();
+            m_SpriteFragmentShader.reset();
+            Report(std::string{"Sprite2D pipeline disabled: "} + error.what());
+        }
     }
 
     void BuildPickables(const IWorld& world)
@@ -3159,6 +3317,10 @@ private:
     MeshRange m_Quad;
     MeshRange m_PlanePrimitive;
     MeshRange m_Capsule;
+    MeshRange m_SpriteQuad;
+    std::unique_ptr<rhi::Shader> m_SpriteVertexShader;
+    std::unique_ptr<rhi::Shader> m_SpriteFragmentShader;
+    std::unique_ptr<rhi::Pipeline> m_Sprite2DPipeline;
     LightSet m_FrameLights;
     // Forward+ frame state: uploaded point lights + the CPU tile assignment and
     // the fp_params uniform (tile size, tiles across, count, enabled).

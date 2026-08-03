@@ -134,7 +134,12 @@ std::optional<EntitySnapshot> EntitySnapshot::Capture(const IWorld& world, const
         CopyComponent<TerrainComponent>(registry, *entity),
         CopyComponent<SkeletonComponent>(registry, *entity),
         CopyComponent<AnimatorComponent>(registry, *entity),
-        CopyComponent<TransformAnimatorComponent>(registry, *entity)};
+        CopyComponent<TransformAnimatorComponent>(registry, *entity),
+        CopyComponent<Sprite2DComponent>(registry, *entity),
+        CopyComponent<RigidBody2DComponent>(registry, *entity),
+        CopyComponent<Collider2DComponent>(registry, *entity),
+        CopyComponent<SpriteFrameAnimatorComponent>(registry, *entity),
+        CopyComponent<TileMapComponent>(registry, *entity)};
 }
 
 entt::entity EntitySnapshot::Restore(IWorld& world) const
@@ -172,6 +177,11 @@ entt::entity EntitySnapshot::Restore(IWorld& world) const
     RestoreComponent(registry, entity, Skeleton);
     RestoreComponent(registry, entity, Animator);
     RestoreComponent(registry, entity, TransformAnimator);
+    RestoreComponent(registry, entity, Sprite2D);
+    RestoreComponent(registry, entity, RigidBody2D);
+    RestoreComponent(registry, entity, Collider2D);
+    RestoreComponent(registry, entity, SpriteFrameAnimator);
+    RestoreComponent(registry, entity, TileMap);
     return entity;
 }
 
