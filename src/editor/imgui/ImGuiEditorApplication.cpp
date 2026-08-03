@@ -686,6 +686,7 @@ void ImGuiEditorApplication::EnterWorkbench(const ProjectMetadata& project)
         m_Viewports.SetGltfMeshCache(m_GltfMeshes.get());
         m_Viewports.SetQualityChangedHandler([this]() { SaveGraphicsSettings(); });
         LoadGraphicsSettings(project.RootPath);
+        LoadPerformanceSettings(project.RootPath);
     }
     WireAssetBrowser();
     m_Shell.SetProjectIniPath(project.RootPath, m_Ui);
@@ -1076,6 +1077,54 @@ void ImGuiEditorApplication::SaveGraphicsSettings()
             "error");
     }
 }
+
+void ImGuiEditorApplication::LoadPerformanceSettings(const std::filesystem::path& root)
+{
+    if (root.empty()) return;
+    const std::filesystem::path path = root / "Saved" / "Editor" / "performance.json";
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return;
+    std::ostringstream text;
+    text << input.rdbuf();
+    editor::PerformancePreferences prefs = editor::PerformancePreferences::Defaults();
+    if (!editor::ParsePerformancePreferences(text.str(), prefs))
+    {
+        m_Log.Log("Ignoring invalid performance settings " + path.generic_string(), "warn");
+        return;
+    }
+    m_PerfPrefs = prefs;
+    ApplyPerformancePreferences();
+}
+
+void ImGuiEditorApplication::SavePerformanceSettings()
+{
+    const std::filesystem::path& root = m_Session.activeProject.RootPath;
+    if (root.empty()) return;
+    const std::filesystem::path folder = root / "Saved" / "Editor";
+    std::error_code error;
+    std::filesystem::create_directories(folder, error);
+    if (error) return;
+    const std::string json = editor::StringifyPerformancePreferences(m_PerfPrefs);
+    const std::filesystem::path path = folder / "performance.json";
+    const std::filesystem::path tmp = folder / "performance.json.tmp";
+    {
+        std::ofstream output(tmp, std::ios::binary | std::ios::trunc);
+        if (!output) return;
+        output << json;
+    }
+    std::filesystem::remove(path, error);
+    error.clear();
+    std::filesystem::rename(tmp, path, error);
+}
+
+void ImGuiEditorApplication::ApplyPerformancePreferences()
+{
+    m_FpsForeground = m_PerfPrefs.FpsForeground;
+    m_FpsUnfocused = m_PerfPrefs.FpsUnfocused;
+    m_FpsMinimized = m_PerfPrefs.FpsMinimized;
+}
+
+void ImGuiEditorApplication::DrawPerformanceWindow() {}
 
 void ImGuiEditorApplication::SyncGameCameraFromWorld()
 {
@@ -1723,6 +1772,7 @@ void ImGuiEditorApplication::DrawUi()
             &m_ExportPanel);
         m_Shell.DrawModals(m_Session, m_Ui, m_Theme);
         DrawGraphicsWindow();
+        DrawPerformanceWindow();
         DrawProfilerWindow();
     }
     else

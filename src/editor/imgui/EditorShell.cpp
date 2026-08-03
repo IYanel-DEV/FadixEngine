@@ -275,6 +275,7 @@ void EditorShell::DrawMenus(EditorSession& session, EditorUiState& ui)
         ImGui::MenuItem("Material Editor", nullptr, &ui.ShowMaterialEditor);
         ImGui::MenuItem("FDX Animation", nullptr, &ui.ShowFdxAnimation);
         ImGui::MenuItem("Profiler", nullptr, &ui.ShowProfiler);
+        ImGui::MenuItem("Performance...", nullptr, &ui.ShowPerformanceWindow);
         ImGui::MenuItem("Export...", nullptr, &ui.ShowExport);
         if (ImGui::BeginMenu("Rendering"))
         {

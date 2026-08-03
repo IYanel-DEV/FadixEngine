@@ -9,6 +9,7 @@
 #include "editor/gizmo/GizmoSystem.hpp"
 #include "editor/imgui/EditorShell.hpp"
 #include "editor/imgui/GraphicsPreferences.hpp"
+#include "editor/imgui/PerformancePreferences.hpp"
 #include "editor/imgui/EditorTheme.hpp"
 #include "editor/imgui/EditorUiState.hpp"
 #include "editor/imgui/ImGuiLayer.hpp"
@@ -84,6 +85,10 @@ private:
     void ApplyGraphicsPreferences();
     void DrawGraphicsWindow();
     void DrawProfilerWindow();
+    void LoadPerformanceSettings(const std::filesystem::path& root);
+    void SavePerformanceSettings();
+    void ApplyPerformancePreferences();
+    void DrawPerformanceWindow();
     void CommandNewScene();
     void CommandOpenScene();
     void CommandSaveScene();
@@ -102,6 +107,7 @@ private:
     editor::ProjectManagerPanel m_ProjectManager;
     editor::ViewportPanel m_Viewports;
     editor::GraphicsPreferences m_GraphicsPrefs{editor::GraphicsPreferences::Defaults()};
+    editor::PerformancePreferences m_PerfPrefs{editor::PerformancePreferences::Defaults()};
     editor::ContentBrowserPanel m_ContentBrowser;
     editor::OutputPanel m_Output;
     editor::ScriptEditorPanel m_ScriptPanel;
