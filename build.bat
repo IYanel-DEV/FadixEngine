@@ -1,5 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
+set PATH=C:\Program Files\Python310\;C:\Program Files\Python310\Scripts\;%PATH%
 
 rem =============================================================================
 rem Fadix Engine build script.
@@ -12,13 +13,32 @@ rem reproducible toolchain and avoids the Conan/FetchContent hybrid that used to
 rem break FreeType (its Meson build grabbed C:\Windows\python3.exe and died).
 rem =============================================================================
 
-if "%~1"=="" goto :build_debug
-if "%~1"=="1" goto :build_debug
+if "%~1"=="" goto :build_debug_editor
+if /I "%~1"=="editor" goto :build_debug_editor
+if /I "%~1"=="player" goto :build_debug_player
+if "%~1"=="1" goto :build_debug_all
 if "%~1"=="2" goto :build_release
-echo Usage: build.bat ^<1^|2^>
-echo   1 - build fadix_editor + fadix_player Debug
-echo   2 - build the portable fadix_editor + fadix_player Release executables
+echo Usage: build.bat [editor^|player^|1^|2]
+echo   editor - build only fadix_editor Debug (default)
+echo   player - build only fadix_player Debug
+echo   1      - build fadix_editor + fadix_player Debug
+echo   2      - build the portable fadix_editor + fadix_player Release executables
+echo.
+echo Low-spec defaults: 2 Debug jobs, 1 Release job, and low process priority.
+echo Override with FADIX_BUILD_JOBS or FADIX_RELEASE_JOBS if needed.
 exit /b 2
+
+:build_debug_editor
+set "FADIX_DEBUG_TARGETS=fadix_editor"
+goto :build_debug
+
+:build_debug_player
+set "FADIX_DEBUG_TARGETS=fadix_player"
+goto :build_debug
+
+:build_debug_all
+set "FADIX_DEBUG_TARGETS=fadix_editor fadix_player"
+goto :build_debug
 
 rem -----------------------------------------------------------------------------
 rem Ensure the MSVC x64 toolchain is on PATH (idempotent).
@@ -50,11 +70,15 @@ set "Path="
 set "PATH=%FADIX_PATH%"
 
 set "CMAKE_EXE=C:\Program Files\CMake\bin\cmake.exe"
-"%CMAKE_EXE%" -S . -B .build\debug-cmake -DFADIX_ENABLE_PHYSICS=ON -DFADIX_PORTABLE_BUILD=OFF -DFADIX_STATIC_MSVC_RUNTIME=OFF
-if errorlevel 1 exit /b %errorlevel%
-"%CMAKE_EXE%" --build .build\debug-cmake --config Debug --target fadix_editor --parallel 8
-if errorlevel 1 exit /b %errorlevel%
-"%CMAKE_EXE%" --build .build\debug-cmake --config Debug --target fadix_player --parallel 8
+if not defined FADIX_BUILD_JOBS set "FADIX_BUILD_JOBS=2"
+if not exist ".build\debug-cmake\CMakeCache.txt" (
+    "%CMAKE_EXE%" -S . -B .build\debug-cmake -DFADIX_ENABLE_PHYSICS=ON -DFADIX_PORTABLE_BUILD=OFF -DFADIX_STATIC_MSVC_RUNTIME=OFF
+    if errorlevel 1 exit /b !errorlevel!
+) else (
+    echo [Fadix] Reusing .build\debug-cmake
+)
+echo [Fadix] Building %FADIX_DEBUG_TARGETS% with %FADIX_BUILD_JOBS% low-priority job^(s^)
+"%CMAKE_EXE%" --build .build\debug-cmake --config Debug --target %FADIX_DEBUG_TARGETS% --parallel %FADIX_BUILD_JOBS% -- -lowPriority
 exit /b %errorlevel%
 
 :build_release
@@ -67,18 +91,21 @@ set "PATH=%FADIX_PATH%"
 
 set "CMAKE_EXE=C:\Program Files\CMake\bin\cmake.exe"
 if not defined FADIX_RELEASE_JOBS set "FADIX_RELEASE_JOBS=1"
-"%CMAKE_EXE%" -S . -B .build\release-cmake -DFADIX_ENABLE_PHYSICS=ON -DFADIX_PORTABLE_BUILD=ON -DFADIX_STATIC_MSVC_RUNTIME=ON
-if errorlevel 1 exit /b %errorlevel%
-"%CMAKE_EXE%" --build .build\release-cmake --config Release --target fadix_editor --parallel %FADIX_RELEASE_JOBS%
-if errorlevel 1 exit /b %errorlevel%
-"%CMAKE_EXE%" --build .build\release-cmake --config Release --target fadix_player --parallel %FADIX_RELEASE_JOBS%
+if not exist ".build\release-cmake\CMakeCache.txt" (
+    "%CMAKE_EXE%" -S . -B .build\release-cmake -DFADIX_ENABLE_PHYSICS=ON -DFADIX_PORTABLE_BUILD=ON -DFADIX_STATIC_MSVC_RUNTIME=ON
+    if errorlevel 1 exit /b !errorlevel!
+) else (
+    echo [Fadix] Reusing .build\release-cmake
+)
+echo [Fadix] Building Release with %FADIX_RELEASE_JOBS% low-priority job^(s^)
+"%CMAKE_EXE%" --build .build\release-cmake --config Release --target fadix_editor fadix_player --parallel %FADIX_RELEASE_JOBS% -- -lowPriority
 if errorlevel 1 exit /b %errorlevel%
 
 if not exist artifacts mkdir artifacts
-copy /Y "bin\Release\fadix_editor.exe" "artifacts\FadixEngine-0.9.129-Windows-x64.exe" >nul
+copy /Y "bin\Release\fadix_editor.exe" "artifacts\FadixEngine-0.9.136-Windows-x64.exe" >nul
 if errorlevel 1 exit /b %errorlevel%
-copy /Y "bin\Release\fadix_player.exe" "artifacts\FadixPlayer-0.9.129-Windows-x64.exe" >nul
+copy /Y "bin\Release\fadix_player.exe" "artifacts\FadixPlayer-0.9.136-Windows-x64.exe" >nul
 if errorlevel 1 exit /b %errorlevel%
-echo [Fadix] Portable release editor:  artifacts\FadixEngine-0.9.129-Windows-x64.exe
-echo [Fadix] Portable release player:  artifacts\FadixPlayer-0.9.129-Windows-x64.exe
+echo [Fadix] Portable release editor:  artifacts\FadixEngine-0.9.136-Windows-x64.exe
+echo [Fadix] Portable release player:  artifacts\FadixPlayer-0.9.136-Windows-x64.exe
 exit /b 0

@@ -274,6 +274,7 @@ void EditorShell::DrawMenus(EditorSession& session, EditorUiState& ui)
         ImGui::MenuItem("FXS Editor", nullptr, &ui.ShowScriptEditor);
         ImGui::MenuItem("Material Editor", nullptr, &ui.ShowMaterialEditor);
         ImGui::MenuItem("FDX Animation", nullptr, &ui.ShowFdxAnimation);
+        ImGui::MenuItem("Profiler", nullptr, &ui.ShowProfiler);
         ImGui::MenuItem("Export...", nullptr, &ui.ShowExport);
         if (ImGui::BeginMenu("Rendering"))
         {
@@ -439,9 +440,23 @@ void EditorShell::DrawStatusBar(EditorUiState& ui, const EditorTheme& theme, SDL
     ImGui::PopStyleColor();
     ImGui::PopStyleVar(3);
 
-    ImGui::PushStyleColor(ImGuiCol_Text, theme.TextMuted);
-    ImGui::TextUnformatted(ui.StatusText.c_str());
+    if (ui.CompilationActive)
+    {
+        const int dots = 1 + static_cast<int>(ImGui::GetTime() * 3.0) % 3;
+        const std::string label =
+            ui.CompilationText + std::string(static_cast<std::size_t>(dots), '.');
+        ImGui::PushStyleColor(ImGuiCol_Text, theme.Accent);
+        ImGui::TextUnformatted(label.c_str());
+        ImGui::PopStyleColor();
+    }
+    else
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, theme.TextMuted);
+        ImGui::TextUnformatted(ui.StatusText.c_str());
+        ImGui::PopStyleColor();
+    }
     ImGui::SameLine(ImGui::GetWindowWidth() - 420.0F);
+    ImGui::PushStyleColor(ImGuiCol_Text, theme.TextMuted);
     const float scale = window != nullptr ? SDL_GetWindowDisplayScale(window) : 1.0F;
     ImGui::Text(
         "%s | %s | ents %d | DPI %.0f%%",
@@ -730,6 +745,14 @@ void EditorShell::DrawTitleBarFrame(
             ImVec2{102.0F / 408.0F, 67.0F / 408.0F},
             ImVec2{300.0F / 408.0F, 211.0F / 408.0F});
         cursorX += logoSize.x + 8.0F;
+    }
+    else
+    {
+        ImGui::SetCursorScreenPos(ImVec2{cursorX, centerY - ImGui::GetFontSize() * 0.5F});
+        ImGui::PushStyleColor(ImGuiCol_Text, theme.Accent);
+        ImGui::TextUnformatted("FX");
+        ImGui::PopStyleColor();
+        cursorX = ImGui::GetItemRectMax().x + 8.0F;
     }
     ImGui::SetCursorScreenPos(ImVec2{cursorX, centerY - ImGui::GetFontSize() * 0.5F});
     ImGui::PushStyleColor(ImGuiCol_Text, theme.TextBright);

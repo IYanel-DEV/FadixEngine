@@ -7,6 +7,7 @@ namespace fadix
 {
 ReplicationRegistry::ReplicationRegistry()
 {
+    // Schema, not sockets: this keeps wire IDs stable; packets remain somebody else's problem.
     Register({"Transform", ReplicationReliability::UnreliableSequenced, 30.0F,
         {{"position", ReplicationCondition::Always, 0.001F},
          {"rotation", ReplicationCondition::Always, 0.0001F},
@@ -23,6 +24,7 @@ void ReplicationRegistry::Register(ReplicatedComponentSchema schema)
 
     schema.StableId = Hash(schema.Name, 14695981039346656037ULL);
     m_Schemas.push_back(std::move(schema));
+    // Registration order must not fork the protocol. Multiplayer has enough ways to do that already.
     std::ranges::sort(m_Schemas, {}, &ReplicatedComponentSchema::StableId);
     RebuildProtocolHash();
 }

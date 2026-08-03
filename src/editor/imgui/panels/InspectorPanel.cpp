@@ -4,6 +4,7 @@
 #include "editor/assets/AssetBrowserController.hpp"
 #include "assets/GltfMeshCache.hpp"
 #include "engine/assets/GltfMeshAsset.hpp"
+#include "engine/animation/AnimGraphNodes.hpp"
 #include "engine/scene/IWorld.hpp"
 #include "runtime/AnimationRuntime.hpp"
 #include "runtime/Components.hpp"
@@ -849,10 +850,45 @@ void InspectorPanel::Draw(SceneEditor& scene, EditorUiState& ui)
                 ui.ShowFdxAnimation = true;
                 ui.FocusFdxAnimation = true; // panel follows current selection == this entity
             }
+            ImGui::SameLine();
+            if (!animator->Graph && ImGui::Button("Create Anim Graph"))
+            {
+                animator->Graph = std::make_unique<AnimationGraph>();
+                animator->Graph->Name = "Animation Graph";
+                auto clipNode = std::make_unique<ClipNode>();
+                clipNode->ClipName = animator->ClipName;
+                animator->Graph->Nodes.push_back(std::move(clipNode));
+                auto output = std::make_unique<OutputNode>();
+                output->Child = 0;
+                output->EditorPosition = {230.0F, 0.0F};
+                animator->Graph->Nodes.push_back(std::move(output));
+                animator->Graph->OutputNodeIndex = 1;
+                scene.MarkChanged();
+                ui.ShowFdxAnimation = true;
+                ui.FocusFdxAnimation = true;
+            }
 
             // Play-mode: live parameter editing
             const bool inPlayMode = ui.PlayModeLabel != "Edit";
-            if (inPlayMode && !animator->Controller.Parameters.empty())
+            if (inPlayMode && animator->Graph && !animator->RuntimeParameters.empty())
+            {
+                ImGui::Separator();
+                ImGui::TextUnformatted("Graph Parameters:");
+                for (AnimGraphParameter& param : animator->RuntimeParameters)
+                {
+                    ImGui::PushID(param.Name.c_str());
+                    if (param.ParamType == AnimGraphParameter::Type::Float)
+                        ImGui::DragFloat(param.Name.c_str(), &param.FloatValue, 0.02F);
+                    else if (param.ParamType == AnimGraphParameter::Type::Int)
+                        ImGui::DragInt(param.Name.c_str(), &param.IntValue);
+                    else if (param.ParamType == AnimGraphParameter::Type::Bool)
+                        ImGui::Checkbox(param.Name.c_str(), &param.BoolValue);
+                    else if (ImGui::Button(param.Name.c_str()))
+                        param.BoolValue = true;
+                    ImGui::PopID();
+                }
+            }
+            else if (inPlayMode && !animator->Controller.Parameters.empty())
             {
                 ImGui::Separator();
                 if (!animator->ActiveState.empty())

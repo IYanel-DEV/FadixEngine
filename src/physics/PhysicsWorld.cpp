@@ -200,6 +200,7 @@ PhysicsWorld::~PhysicsWorld()
 void PhysicsWorld::Step(const float deltaSeconds)
 {
     constexpr float fixedDeltaSeconds = 1.0F / 60.0F;
+    // Clamp the backlog: physics may run late, but it should not spend next Tuesday catching up.
     m_Accumulator = std::min(m_Accumulator + std::max(deltaSeconds, 0.0F), fixedDeltaSeconds * 4.0F);
     while (m_Accumulator >= fixedDeltaSeconds)
     {

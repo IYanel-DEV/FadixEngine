@@ -144,6 +144,7 @@ bool AssetThumbnailCache::EnsureTextureThumb(const AssetHandle& handle)
 
     const std::filesystem::path path = ThumbPath(handle);
     std::error_code error;
+    // Thumbnails are disposable; timestamps save us from decoding the same texture every repaint.
     const auto importedTime = std::filesystem::last_write_time(meta->ImportedPath, error);
     if (!error && std::filesystem::exists(path, error))
     {

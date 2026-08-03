@@ -503,6 +503,7 @@ Result<ProjectMetadata> ProjectService::Create(
     {
         return Result<ProjectMetadata>::Error(result.ErrorMessage());
     }
+    // From here on, failures remove the root. Half-created projects become folklore fast.
     if (const auto result = CopyTemplate(projectTemplate, root); !result)
     {
         std::error_code cleanupError;

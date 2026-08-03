@@ -272,8 +272,8 @@ Result<void> ConvertModelWithBlender(
         return Result<void>::Error(
             "Could not start Blender (Windows error " + std::to_string(GetLastError()) + ")");
     }
-    // The editor invokes this blocking process on its external-import worker,
-    // keeping Blender startup time off the viewport thread.
+    // Blender is not famous for quick cold starts, so keep it on the import worker
+    // and far away from the viewport thread.
     WaitForSingleObject(process.hProcess, INFINITE);
     DWORD exitCode = 1;
     GetExitCodeProcess(process.hProcess, &exitCode);
@@ -388,6 +388,7 @@ std::future<Result<AssetHandle>> AssetDatabase::ImportAsync(
     m_Statuses.push_back(AssetImportStatus{
         job->Metadata.Handle, job->Metadata.SourcePath, AssetImportState::Queued, 0.0F, {}});
     std::future<Result<AssetHandle>> result = job->Promise.get_future();
+    // The unique_ptr moves into m_Jobs, but the ImportJob stays put. Raw pointer, supervised.
     ImportJob* jobPointer = job.get();
 
     job->Worker = std::async(std::launch::async, [jobPointer]()

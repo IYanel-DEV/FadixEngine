@@ -1,6 +1,7 @@
 #pragma once
 
 #include "editor/imgui/EditorUiState.hpp"
+#include "editor/imgui/panels/AnimGraphPanel.hpp"
 #include "editor/scene/SceneEditor.hpp"
 #include "engine/Uuid.hpp"
 #include "engine/animation/AnimationClip.hpp"
@@ -38,6 +39,7 @@ private:
     int m_TSelectedAnimatorTransition{-1};
     glm::vec2 m_SkeletalGraphPan{20.0F, 20.0F};
     glm::vec2 m_TransformGraphPan{20.0F, 20.0F};
+    AnimGraphPanel m_AnimGraphPanel;
     int m_ConnectingFromState{-1};    // skeletal graph drag state; -1 = idle
     ImVec2 m_ConnectingLineEnd{};
     int m_TConnectingFromState{-1};   // transform graph drag state

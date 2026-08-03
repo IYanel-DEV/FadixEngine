@@ -22,7 +22,14 @@ int main()
     CharacterControllerComponent character;
     character.Grounded = true;
     registry.emplace<CharacterControllerComponent>(entity, character);
-    registry.emplace<AnimatorComponent>(entity);
+    AnimatorComponent skeletalAnimator;
+    skeletalAnimator.Graph = std::make_unique<AnimationGraph>();
+    skeletalAnimator.Graph->Parameters = {
+        {"GraphBool", AnimGraphParameter::Type::Bool},
+        {"GraphFloat", AnimGraphParameter::Type::Float},
+        {"GraphInt", AnimGraphParameter::Type::Int},
+        {"GraphTrigger", AnimGraphParameter::Type::Trigger}};
+    registry.emplace<AnimatorComponent>(entity, std::move(skeletalAnimator));
     TransformAnimatorComponent transformAnimator;
     AnimationClipAsset walk;
     walk.Name = "Walk";
@@ -58,6 +65,16 @@ function OnStart(e)
     if Input.isDown("W") then
         error("Input.isDown should be false without SDL keyboard")
     end
+    if not Input.bind("Jump", "Space") then error("keyboard action binding failed") end
+    if not Input.addBinding("Jump", "Mouse:Left") then error("mouse action binding failed") end
+    if not Input.addBinding("Jump", "Gamepad:A") then error("gamepad action binding failed") end
+    if Input.addBinding("Jump", "Mouse:Unknown") then error("invalid binding was accepted") end
+    if Input.action("Jump") then error("action should be false without SDL input") end
+    if not Input.clear("jump") then error("action names should be case-insensitive") end
+    if not e:setAnimatorBool("GraphBool", true) then error("graph bool should exist") end
+    if not e:setAnimatorFloat("GraphFloat", 2.5) then error("graph float should exist") end
+    if not e:setAnimatorInt("GraphInt", 3) then error("graph int should exist") end
+    if not e:triggerAnimator("GraphTrigger") then error("graph trigger should exist") end
     if not e:playAnimation("Run") or not e:isAnimationPlaying() then
         error("playAnimation should start the requested clip")
     end
@@ -123,6 +140,12 @@ end
         && "Lua must send character movement input");
     assert(movedCharacter.JumpRequested && "Lua must request a grounded character jump");
     const auto& animator = registry.get<AnimatorComponent>(entity);
+    assert(animator.RuntimeParameters.size() == 4 &&
+        animator.RuntimeParameters[0].BoolValue &&
+        std::fabs(animator.RuntimeParameters[1].FloatValue - 2.5F) < 1e-5F &&
+        animator.RuntimeParameters[2].IntValue == 3 &&
+        animator.RuntimeParameters[3].BoolValue &&
+        "Lua must drive Animation Graph parameters");
     assert(animator.ClipName == "Run" && "Lua must select the requested animation clip");
     assert(!animator.Playing && !animator.Paused && animator.CurrentTime == 0.0F &&
         "Lua stop must reset skeletal animation playback");

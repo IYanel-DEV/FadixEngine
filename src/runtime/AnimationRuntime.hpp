@@ -150,6 +150,24 @@ template <typename Animator>
 [[nodiscard]] inline bool SetAnimatorBool(Animator& animator, const std::string& name,
     const bool value)
 {
+    if constexpr (requires { animator.Graph; animator.RuntimeParameters; })
+    {
+        if (animator.Graph)
+        {
+            if (animator.RuntimeParameters.empty())
+                animator.RuntimeParameters = animator.Graph->Parameters;
+            for (AnimGraphParameter& parameter : animator.RuntimeParameters)
+            {
+                if (parameter.Name == name &&
+                    (parameter.ParamType == AnimGraphParameter::Type::Bool ||
+                        parameter.ParamType == AnimGraphParameter::Type::Trigger))
+                {
+                    parameter.BoolValue = value;
+                    return true;
+                }
+            }
+        }
+    }
     AnimatorParameter* parameter = FindAnimatorParameter(animator.Controller, name);
     if (parameter == nullptr || (parameter->Type != AnimatorParameterType::Bool &&
             parameter->Type != AnimatorParameterType::Trigger))
@@ -164,6 +182,23 @@ template <typename Animator>
 [[nodiscard]] inline bool SetAnimatorFloat(Animator& animator, const std::string& name,
     const float value)
 {
+    if constexpr (requires { animator.Graph; animator.RuntimeParameters; })
+    {
+        if (animator.Graph)
+        {
+            if (animator.RuntimeParameters.empty())
+                animator.RuntimeParameters = animator.Graph->Parameters;
+            for (AnimGraphParameter& parameter : animator.RuntimeParameters)
+            {
+                if (parameter.Name == name &&
+                    parameter.ParamType == AnimGraphParameter::Type::Float)
+                {
+                    parameter.FloatValue = value;
+                    return true;
+                }
+            }
+        }
+    }
     AnimatorParameter* parameter = FindAnimatorParameter(animator.Controller, name);
     if (parameter == nullptr || parameter->Type != AnimatorParameterType::Float)
     {
@@ -177,6 +212,23 @@ template <typename Animator>
 [[nodiscard]] inline bool SetAnimatorInt(Animator& animator, const std::string& name,
     const int value)
 {
+    if constexpr (requires { animator.Graph; animator.RuntimeParameters; })
+    {
+        if (animator.Graph)
+        {
+            if (animator.RuntimeParameters.empty())
+                animator.RuntimeParameters = animator.Graph->Parameters;
+            for (AnimGraphParameter& parameter : animator.RuntimeParameters)
+            {
+                if (parameter.Name == name &&
+                    parameter.ParamType == AnimGraphParameter::Type::Int)
+                {
+                    parameter.IntValue = value;
+                    return true;
+                }
+            }
+        }
+    }
     AnimatorParameter* parameter = FindAnimatorParameter(animator.Controller, name);
     if (parameter == nullptr || parameter->Type != AnimatorParameterType::Int)
     {
@@ -690,6 +742,48 @@ inline void UpdateWorldAnimations(
         {
             continue;
         }
+
+        // --- Animation Graph path ---
+        if (animator->Graph)
+        {
+            if (!animator->Playing || animator->Paused)
+            {
+                continue;
+            }
+            // Init RuntimeParameters from graph schema on first use
+            if (animator->RuntimeParameters.empty() &&
+                !animator->Graph->Parameters.empty())
+            {
+                animator->RuntimeParameters = animator->Graph->Parameters;
+            }
+
+            AnimGraphContext ctx;
+            ctx.DeltaTime   = dt * animator->Speed;
+            ctx.MeshAsset   = gltf;
+            ctx.Parameters  = std::span<AnimGraphParameter>{animator->RuntimeParameters};
+
+            SkeletonPose pose = animator->Graph->Evaluate(ctx);
+            animator->Graph->ConsumeTriggers();
+
+            for (AnimGraphParameter& parameter : animator->RuntimeParameters)
+            {
+                if (parameter.ParamType == AnimGraphParameter::Type::Trigger)
+                {
+                    parameter.BoolValue = false;
+                }
+            }
+
+            // Apply pose to skeleton joints
+            if (!pose.Skeleton.Joints.empty())
+            {
+                skeleton->HasSkeleton = true;
+                skeleton->JointCount = static_cast<int>(pose.Skeleton.Joints.size());
+                skeleton->JointMatrices = pose.Skeleton.GetJointMatrices();
+            }
+            continue;  // skip legacy path for this entity
+        }
+        // --- Legacy AnimatorController path (unchanged below) ---
+
         if (!animator->Playing)
         {
             continue;

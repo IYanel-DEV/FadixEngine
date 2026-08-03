@@ -26,6 +26,9 @@ struct ScriptWorldApi
         SpawnPrefab;
     // Queue a level transition to the project-relative scene path.
     std::function<void(const std::string& path)> LoadScene;
+    // Queue a whole-world save/load after the current script update.
+    std::function<bool(const std::string& slot)> WriteSave;
+    std::function<bool(const std::string& slot)> LoadSave;
 };
 
 // A lightweight, non-owning handle to one entity in a specific world registry.

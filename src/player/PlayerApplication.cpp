@@ -154,7 +154,7 @@ int PlayerApplication::Run()
         SDL_SetHint(SDL_HINT_GPU_DRIVER, "direct3d12");
     }
 #endif
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO))
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD))
     {
         throw std::runtime_error(std::string{"SDL_Init failed: "} + SDL_GetError());
     }
@@ -285,9 +285,17 @@ int PlayerApplication::Run()
         nullptr);
     // Gameplay world API for the shipped runtime: same Prefab.spawn / Scene.load
     // the editor exposes, backed by the player's mesh cache and project root.
+    std::filesystem::path saveDirectory = project.RootPath / "Saved" / "Saves";
+    const std::string saveId = project.Id.ToString();
+    if (char* pref = SDL_GetPrefPath("FadixEngine", saveId.c_str()); pref != nullptr)
+    {
+        saveDirectory = std::filesystem::path{pref} / "Saves";
+        SDL_free(pref);
+    }
     play.SetGameServices(
         [&gltf]() { return sceneplay::CreatePhysicsWorldAdapter(gltf.get()); },
-        [&project](const std::string& relative) { return project.RootPath / relative; });
+        [&project](const std::string& relative) { return project.RootPath / relative; },
+        std::move(saveDirectory));
 
     std::unique_ptr<AudioEngine> audio = std::make_unique<AudioEngine>();
     std::unique_ptr<AudioPlayback> audioPlayback;

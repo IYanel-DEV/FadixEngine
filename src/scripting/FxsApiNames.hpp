@@ -39,6 +39,10 @@ inline constexpr const char* kEntityTriggerAnimator = "triggerAnimator";
 inline constexpr const char* kPrint = "print";
 inline constexpr const char* kInput = "Input";
 inline constexpr const char* kInputIsDown = "isDown";
+inline constexpr const char* kInputAction = "action";
+inline constexpr const char* kInputBind = "bind";
+inline constexpr const char* kInputAddBinding = "addBinding";
+inline constexpr const char* kInputClear = "clear";
 
 inline constexpr const char* kAudio = "audio";
 inline constexpr const char* kAudioLoad = "load";
@@ -57,6 +61,9 @@ inline constexpr const char* kPrefab = "Prefab";
 inline constexpr const char* kPrefabSpawn = "spawn";
 inline constexpr const char* kScene = "Scene";
 inline constexpr const char* kSceneLoad = "load";
+inline constexpr const char* kSave = "Save";
+inline constexpr const char* kSaveWrite = "write";
+inline constexpr const char* kSaveLoad = "load";
 
 inline constexpr const char* kOnStart = "OnStart";
 inline constexpr const char* kOnUpdate = "OnUpdate";

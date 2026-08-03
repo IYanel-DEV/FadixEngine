@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(FadixEngine VERSION 0.9.133 LANGUAGES C CXX)
+project(FadixEngine VERSION 0.9.136 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -222,6 +222,14 @@ if(WIN32)
         set_target_properties(fadix_fxs_editor PROPERTIES
             MSVC_RUNTIME_LIBRARY "${FADIX_MSVC_RUNTIME}")
     endif()
+
+    add_executable(fadix_script_compile_smoke
+        tools/ScriptCompileSmoke.cpp
+        src/assets/ScriptAsset.cpp
+        src/assets/ScriptDatabase.cpp
+        src/project/ProjectJson.cpp)
+    target_include_directories(fadix_script_compile_smoke PRIVATE src)
+    target_link_libraries(fadix_script_compile_smoke PRIVATE fadix_fxs_editor)
 endif()
 
 set(TINYGLTF_BUILD_LOADER_EXAMPLE OFF CACHE BOOL "" FORCE)
@@ -285,6 +293,7 @@ if(FADIX_ENABLE_LUA)
 endif()
 
 add_library(fadix_runtime STATIC
+    src/runtime/AnimationGraph.cpp
     src/runtime/World.cpp
     src/runtime/World.hpp
     src/runtime/Components.hpp
@@ -531,7 +540,7 @@ if(FADIX_ENABLE_LUA)
         src/engine/audio/AudioEngine.cpp)
     target_include_directories(fadix_lua_smoke PRIVATE src)
     target_link_libraries(fadix_lua_smoke PRIVATE
-        fadix_lua SDL3::SDL3-static SDL3_mixer::SDL3_mixer EnTT::EnTT glm::glm)
+        fadix_lua fadix_runtime SDL3::SDL3-static SDL3_mixer::SDL3_mixer EnTT::EnTT glm::glm)
 
     add_executable(fadix_script_runtime_smoke
         tools/ScriptRuntimeSmoke.cpp
@@ -595,6 +604,7 @@ add_executable(fadix_scene_persistence_smoke
     tools/ScenePersistenceSmoke.cpp
     src/editor/scene/EntityTextIO.cpp
     src/editor/scene/SceneSerializer.cpp
+    src/project/SaveGameService.cpp
     src/engine/Uuid.cpp)
 target_include_directories(fadix_scene_persistence_smoke PRIVATE src)
 target_link_libraries(fadix_scene_persistence_smoke PRIVATE fadix_runtime)

@@ -218,10 +218,23 @@ std::vector<FxsApiEntry> BuildCatalog()
         "Writes to the editor Output panel."));
 
     out.push_back(Make(names::kInput, "", FxsCompletionKind::Module,
-        "Input", {}, "table", "Keyboard input helpers."));
+        "Input", {}, "table", "Keyboard, mouse, and gamepad input actions."));
     out.push_back(Make(names::kInputIsDown, names::kInput, FxsCompletionKind::Function,
         "Input.isDown(key)", {{"key", "string"}}, "boolean",
         "True while the named scancode key is held (SDL)."));
+    out.push_back(Make(names::kInputAction, names::kInput, FxsCompletionKind::Function,
+        "Input.action(name)", {{"name", "string"}}, "boolean",
+        "True while any binding for the named action is held."));
+    out.push_back(Make(names::kInputBind, names::kInput, FxsCompletionKind::Function,
+        "Input.bind(name, binding)", {{"name", "string"}, {"binding", "string"}}, "boolean",
+        "Replace an action with one binding such as Space, Mouse:Left, or Gamepad:A."));
+    out.push_back(Make(names::kInputAddBinding, names::kInput, FxsCompletionKind::Function,
+        "Input.addBinding(name, binding)",
+        {{"name", "string"}, {"binding", "string"}}, "boolean",
+        "Add an alternative binding to an action."));
+    out.push_back(Make(names::kInputClear, names::kInput, FxsCompletionKind::Function,
+        "Input.clear(name)", {{"name", "string"}}, "boolean",
+        "Remove every binding from an action."));
 
     out.push_back(Make(names::kAudio, "", FxsCompletionKind::Module,
         "audio", {}, "table|nil",
@@ -266,6 +279,15 @@ std::vector<FxsApiEntry> BuildCatalog()
         "Load a scene at end of tick. Accepts a project-relative path "
         "(\"Scenes/Level2.scene\") or a scene display name (\"Lobby Scene\"); "
         "display-name match is case-insensitive and must be unique."));
+
+    out.push_back(Make(names::kSave, "", FxsCompletionKind::Module,
+        "Save", {}, "table", "Per-user runtime save slots."));
+    out.push_back(Make(names::kSaveWrite, names::kSave, FxsCompletionKind::Function,
+        "Save.write(slot)", {{"slot", "string"}}, "boolean",
+        "Queue a whole-world snapshot into the named slot."));
+    out.push_back(Make(names::kSaveLoad, names::kSave, FxsCompletionKind::Function,
+        "Save.load(slot)", {{"slot", "string"}}, "boolean",
+        "Queue loading a whole-world snapshot from the named slot."));
 
     // Libraries actually opened by LuaVM::open_libraries (table names only).
     out.push_back(Make("math", "", FxsCompletionKind::Module, "math", {}, "table",
@@ -436,6 +458,10 @@ std::string NormalizeOwner(std::string_view raw)
     {
         return names::kAudio;
     }
+    if (raw == names::kSave)
+    {
+        return names::kSave;
+    }
     return std::string{raw};
 }
 }
@@ -481,6 +507,10 @@ std::vector<std::string> FxsApiCatalog::RequiredPublicApiKeys()
         std::string(names::kEntityType) + "/" + names::kEntityTriggerAnimator,
         std::string("/") + names::kPrint,
         std::string(names::kInput) + "/" + names::kInputIsDown,
+        std::string(names::kInput) + "/" + names::kInputAction,
+        std::string(names::kInput) + "/" + names::kInputBind,
+        std::string(names::kInput) + "/" + names::kInputAddBinding,
+        std::string(names::kInput) + "/" + names::kInputClear,
         std::string(names::kAudio) + "/" + names::kAudioLoad,
         std::string(names::kAudio) + "/" + names::kAudioPlay,
         std::string(names::kAudio) + "/" + names::kAudioStop,
@@ -490,6 +520,8 @@ std::vector<std::string> FxsApiCatalog::RequiredPublicApiKeys()
         std::string(names::kWorld) + "/" + names::kWorldFind,
         std::string(names::kPrefab) + "/" + names::kPrefabSpawn,
         std::string(names::kScene) + "/" + names::kSceneLoad,
+        std::string(names::kSave) + "/" + names::kSaveWrite,
+        std::string(names::kSave) + "/" + names::kSaveLoad,
         "/math",
         "/string",
         "/table",

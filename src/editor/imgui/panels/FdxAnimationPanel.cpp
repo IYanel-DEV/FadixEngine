@@ -9,6 +9,7 @@
 #include "engine/command/ICommand.hpp"
 #include "engine/command/UndoStack.hpp"
 #include "engine/animation/AnimationClip.hpp"
+#include "engine/animation/AnimGraphNodes.hpp"
 #include "engine/animation/AnimatorControllerIO.hpp"
 #include "engine/assets/GltfMeshAsset.hpp"
 #include "engine/scene/IWorld.hpp"
@@ -2810,6 +2811,71 @@ void FdxAnimationPanel::Draw(
             ImGui::End();
             return;
         }
+    }
+
+    if (ImGui::CollapsingHeader("Animation Graph", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        if (!animator->Graph)
+        {
+            ImGui::TextWrapped("Build a pose graph from clips, blends, layers, saved poses, and the existing state machine.");
+            if (ImGui::Button("Create Animation Graph"))
+            {
+                animator->Graph = std::make_unique<AnimationGraph>();
+                animator->Graph->Name = entityName + " Graph";
+                auto clipNode = std::make_unique<ClipNode>();
+                clipNode->ClipName = animator->ClipName;
+                clipNode->EditorPosition = {30.0F, 80.0F};
+                animator->Graph->Nodes.push_back(std::move(clipNode));
+                auto output = std::make_unique<OutputNode>();
+                output->Child = 0;
+                output->EditorPosition = {270.0F, 80.0F};
+                animator->Graph->Nodes.push_back(std::move(output));
+                animator->Graph->OutputNodeIndex = 1;
+                animator->RuntimeParameters.clear();
+                scene.MarkChanged();
+            }
+        }
+        else
+        {
+            ImGui::SetNextItemWidth(260.0F);
+            std::array<char, 160> graphName{};
+            std::snprintf(graphName.data(), graphName.size(), "%s", animator->Graph->Name.c_str());
+            if (ImGui::InputText("Graph name", graphName.data(), graphName.size()))
+            {
+                animator->Graph->Name = graphName.data();
+                scene.MarkChanged();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Remove Graph"))
+            {
+                ImGui::OpenPopup("Remove Animation Graph?");
+            }
+            if (ImGui::BeginPopupModal(
+                    "Remove Animation Graph?", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                ImGui::TextUnformatted("Remove this entity's animation graph?");
+                if (ImGui::Button("Remove"))
+                {
+                    animator->Graph.reset();
+                    animator->RuntimeParameters.clear();
+                    scene.MarkChanged();
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel"))
+                {
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+            if (animator->Graph)
+            {
+                ImGui::BeginChild("##AnimationGraphAuthoring", ImVec2{0.0F, 520.0F}, false);
+                m_AnimGraphPanel.Draw(scene, *animator->Graph, *animator);
+                ImGui::EndChild();
+            }
+        }
+        ImGui::Separator();
     }
 
     // Resolve the active clip (mutable) by animator clip name, default first.

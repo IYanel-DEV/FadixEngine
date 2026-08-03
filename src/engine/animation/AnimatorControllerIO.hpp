@@ -48,7 +48,7 @@ inline void WriteAnimatorControllerData(std::ostream& out, const AnimatorControl
 
 inline bool ReadAnimatorControllerData(std::istream& row, AnimatorController& controller)
 {
-    // Detect version: v2+ starts with an unquoted int; v1 starts with a quoted name.
+    // v2+ starts with an int; v1 starts with a quoted name. Old projects keep their limbs.
     int version = 1;
     const std::streampos startPos = row.tellg();
     if (!(row >> version) || version < 1 || version > 100)

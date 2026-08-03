@@ -431,6 +431,7 @@ void LoadSkeleton(const tinygltf::Model& model, GltfMeshAsset& asset)
 [[nodiscard]] std::string UniqueClipName(
     const GltfMeshAsset& asset, const std::string& desired, const std::size_t ordinal)
 {
+    // DCC tools happily export duplicate clip names. Runtime lookup is less easygoing.
     std::string base = desired.empty() ? ("Clip" + std::to_string(ordinal)) : desired;
     const auto taken = [&asset](const std::string& candidate) {
         for (const AnimationClipAsset& existing : asset.Animations)

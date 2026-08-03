@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.9.134-2584d8">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.9.136-2584d8">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-0078d4">
   <img alt="Language" src="https://img.shields.io/badge/C%2B%2B-20-00599c">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-green"></a>
@@ -22,15 +22,24 @@
 
 Fadix combines a dockable Dear ImGui editor with an SDL GPU renderer, scene editing, scripting, asset management, audio, and 2D/3D physics. Projects are stored outside the engine checkout and begin from an Empty 2D or Empty 3D template.
 
-Current release: **0.9.134**
+Current release: **0.9.136**
 
 ## Download
 
-Windows users can download `FadixEngine-0.9.134-Windows-x64.exe` from the
+Windows users can download `FadixEngine-0.9.136-Windows-x64.exe` from the
 [latest GitHub release](https://github.com/IYanel-DEV/FadixEngine/releases/latest).
 It is a portable editor: no source checkout, compiler, build step, or separate
 engine asset folder is required. Fadix unpacks its embedded runtime resources
 into the user's local application cache when it starts.
+
+## What's new in 0.9.136
+
+- Animation graph authoring and runtime playback with blend, layer, state-machine, saved-pose, and output nodes
+- Expanded FXS/Lua editor validation, compile diagnostics, runtime APIs, and smoke coverage
+- Save-game persistence and stronger scene/export handling for scripts, prefabs, and project metadata
+- Refined project manager with GitHub editor-version downloads and cleaner project workflows
+- Low-spec build defaults: editor-only builds, cache reuse, low process priority, and conservative parallel jobs
+- Contextual maintainer comments across the engine's major subsystems
 
 ## Highlights
 
@@ -58,20 +67,22 @@ Every third-party library (FreeType, SDL, Jolt, Box2D, RmlUi, ImGui, glm, EnTT, 
 
 ## Build
 
-Clone or download the repository, open PowerShell in its root directory, and run:
+Clone or download the repository, open PowerShell in its root directory, and build only the editor for normal development:
 
 ```powershell
+.\build.bat editor
+```
+
+The script detects the Visual Studio toolchain, configures CMake in `.build\debug-cmake` when needed, and builds at low process priority. It defaults to two Debug jobs so Windows remains responsive on lower-spec PCs. The resulting editor is `bin\Debug\fadix_editor.exe`.
+
+Use `player` to build only the Debug player, or `1` to build both Debug targets:
+
+```powershell
+.\build.bat player
 .\build.bat 1
 ```
 
-The script detects the Visual Studio toolchain, configures CMake in `.build\debug-cmake` (FetchContent downloads the dependencies), and builds the Debug editor and player. The resulting executables are:
-
-```text
-bin\Debug\fadix_editor.exe
-bin\Debug\fadix_player.exe
-```
-
-The first build can take a while because dependencies are compiled locally. Later builds reuse the `.build` cache.
+The first build can take a while because dependencies are compiled locally. Later builds skip the redundant configure step and reuse the `.build` cache. Set `FADIX_BUILD_JOBS=1` before building for maximum responsiveness, or raise it on a faster PC.
 
 To produce the portable Windows release executables, run:
 
@@ -82,8 +93,8 @@ To produce the portable Windows release executables, run:
 The release artifacts are written to:
 
 ```text
-artifacts\FadixEngine-0.9.134-Windows-x64.exe
-artifacts\FadixPlayer-0.9.134-Windows-x64.exe
+artifacts\FadixEngine-0.9.136-Windows-x64.exe
+artifacts\FadixPlayer-0.9.136-Windows-x64.exe
 ```
 
 ### Manual CMake build

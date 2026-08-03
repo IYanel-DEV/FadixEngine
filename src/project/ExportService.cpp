@@ -84,6 +84,12 @@ void AddMessage(
     return relative.generic_string();
 }
 
+[[nodiscard]] bool IsFileName(const std::filesystem::path& path)
+{
+    return !path.empty() && !path.is_absolute() && !path.has_root_name() &&
+           path.parent_path().empty() && path.filename() == path && path != "." && path != "..";
+}
+
 [[nodiscard]] Result<void> CopyRelativeFile(
     const std::filesystem::path& projectRoot,
     const std::filesystem::path& stageRoot,
@@ -131,13 +137,12 @@ void AddMessage(
 }
 
 // Copies every regular file under projectRoot/<folder> into the staging tree,
-// preserving relative layout. The player's AssetDatabase/ScriptDatabase scan the
-// whole staged root, so shipping the content folders wholesale is what makes an
-// export bootable without the editor.
+// preserving relative layout. This deliberately keeps dynamic Scene.load and
+// Prefab.spawn paths working; static dependency pruning cannot see those strings.
 [[nodiscard]] Result<void> StageContentFolder(
     const std::filesystem::path& projectRoot,
     const std::filesystem::path& stageRoot,
-    const char* folder,
+    const std::filesystem::path& folder,
     std::set<std::string>& staged,
     ExportResult& result)
 {
@@ -223,6 +228,11 @@ ExportResult ExportProject(const ExportOptions& options, const ExportProgressFn&
         AddMessage(result, ExportSeverity::Error, "Executable name is empty");
         return result;
     }
+    if (!IsFileName(std::filesystem::path{options.ExecutableName}))
+    {
+        AddMessage(result, ExportSeverity::Error, "Executable name must be a file name, not a path");
+        return result;
+    }
     if (options.Width < 320 || options.Height < 240)
     {
         AddMessage(result, ExportSeverity::Error, "Resolution too small (min 320x240)");
@@ -247,10 +257,9 @@ ExportResult ExportProject(const ExportOptions& options, const ExportProgressFn&
         return result;
     }
     ProjectMetadata project = std::move(opened).Value();
-    const std::string bootScene = options.BootScene.empty()
+    std::string bootScene = options.BootScene.empty()
         ? (project.DefaultScene.empty() ? "Scenes/Main.scene" : project.DefaultScene)
         : options.BootScene;
-    project.DefaultScene = bootScene;
 
     const std::filesystem::path bootAbsolute = project.RootPath / bootScene;
     if (!std::filesystem::is_regular_file(bootAbsolute, error) || error)
@@ -261,6 +270,14 @@ ExportResult ExportProject(const ExportOptions& options, const ExportProgressFn&
             "Boot scene missing: " + bootAbsolute.string());
         return result;
     }
+    const std::filesystem::path bootRelative = Relativize(project.RootPath, bootAbsolute);
+    if (bootRelative.empty())
+    {
+        AddMessage(result, ExportSeverity::Error, "Boot scene must be inside the project folder");
+        return result;
+    }
+    bootScene = bootRelative.generic_string();
+    project.DefaultScene = bootScene;
 
     if (options.SaveAll)
     {
@@ -326,7 +343,14 @@ ExportResult ExportProject(const ExportOptions& options, const ExportProgressFn&
         CopyRelativeFile(project.RootPath, result.StagedRoot, bootMeta, stagedKeys, result));
 
     Progress(onProgress, 0.6F, "Stage content");
-    for (const char* folder : {"Scenes", "Assets", "Scripts", "Audio", "UI"})
+    for (const std::filesystem::path& folder : {
+             std::filesystem::path{"Scenes"},
+             std::filesystem::path{"Assets"},
+             std::filesystem::path{"Scripts"},
+             std::filesystem::path{"Audio"},
+             std::filesystem::path{"UI"},
+             std::filesystem::path{"Prefabs"},
+             std::filesystem::path{".fadix/imported"}})
     {
         if (const Result<void> staged =
                 StageContentFolder(project.RootPath, result.StagedRoot, folder, stagedKeys, result);
@@ -366,9 +390,9 @@ ExportResult ExportProject(const ExportOptions& options, const ExportProgressFn&
         result,
         ExportSeverity::Info,
         "Export staged to " + result.StagedRoot.string());
-    // ponytail: ships the whole Scenes/Assets/Scripts/Audio/UI trees (Cache/Saved
-    // excluded) so the player boots without the editor. Bootable but unpruned; add a
-    // dependency walk to drop unreferenced assets when export size matters.
+    // ponytail: ships all runtime content (Cache/Saved excluded) because scripts can
+    // load scenes and prefabs by dynamic string. Add explicit export roots before
+    // pruning if package size becomes a measured problem.
     Progress(onProgress, 1.0F, "Done");
     result.Ok = true;
     return result;

@@ -46,11 +46,13 @@ public:
     void SetNativeLoader(NativeScriptLoader* loader) { m_NativeLoader = loader; }
     void BindAudio(AudioEngine* engine);
 
-    // Install the gameplay world callbacks (Prefab.spawn / Scene.load) exposed to
-    // scripts. Kept across VM resets. Leave unset for smoke targets.
+    // Install the gameplay world callbacks exposed to scripts. Kept across VM
+    // resets. Leave unset callbacks for smoke targets.
     void SetGameCallbacks(
         std::function<std::optional<entt::entity>(const std::string&, float, float, float)> spawnPrefab,
-        std::function<void(const std::string&)> loadScene);
+        std::function<void(const std::string&)> loadScene,
+        std::function<bool(const std::string&)> writeSave = {},
+        std::function<bool(const std::string&)> loadSave = {});
 
     // Compile + instantiate every enabled script and fire OnStart.
     void Start(entt::registry& registry, const SourceResolver& resolver);

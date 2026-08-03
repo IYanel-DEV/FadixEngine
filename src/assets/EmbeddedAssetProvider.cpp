@@ -76,6 +76,7 @@ namespace
 
 [[nodiscard]] std::filesystem::path MaterializeAssets()
 {
+    // Embedded does not mean imaginary: shader and template loaders still need real files.
     const std::filesystem::path root = CacheRoot();
     for (const embedded::Asset& asset : embedded::Assets)
     {

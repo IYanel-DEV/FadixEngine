@@ -82,6 +82,7 @@ Result<void> SceneSerializer::SavePath(const std::filesystem::path& path, const 
         }
     }
 
+    // Write beside the destination, then replace it. Half a scene is just a support ticket.
     const std::filesystem::path temporary = path.string() + ".tmp";
     std::ofstream output{temporary, std::ios::trunc};
     if (!output)
@@ -128,6 +129,7 @@ Result<void> SceneSerializer::LoadPath(const std::filesystem::path& path, IWorld
         return Result<void>::Error("Scene has an invalid format version: " + path.string());
     }
 
+    // Parse into a spare world first; a bad file should not take the current scene with it.
     World staging{false};
     std::string line;
     std::getline(input, line);

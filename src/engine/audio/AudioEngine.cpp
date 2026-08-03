@@ -76,6 +76,7 @@ bool AudioEngine::Initialize()
         MIX_Quit();
         return false;
     }
+    // A fixed voice pool keeps allocation predictable; the 33rd explosion can wait its turn.
     m_Impl->Tracks.resize(32);
     for (Impl::TrackSlot& slot : m_Impl->Tracks)
     {

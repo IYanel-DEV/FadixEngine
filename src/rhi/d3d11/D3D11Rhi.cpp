@@ -669,6 +669,7 @@ D3D11Device::D3D11Device(void* sdlWindow) : m_Impl(std::make_unique<Impl>())
     }
     if (FAILED(result))
     {
+        // WARP is slow, but slow pixels beat no editor on an old or driverless PC.
         m_Impl->Device.Reset();
         m_Impl->Context.Reset();
         result = D3D11CreateDevice(

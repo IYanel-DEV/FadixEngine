@@ -1,6 +1,7 @@
 #include "editor/scene/EntityTextIO.hpp"
 
 #include "engine/animation/AnimatorControllerIO.hpp"
+#include "engine/animation/AnimationGraphIO.hpp"
 #include "engine/scene/IWorld.hpp"
 #include "runtime/Components.hpp"
 
@@ -41,6 +42,47 @@ bool ReadAnimatorController(std::istream& row, AnimatorController& controller)
 {
     return ReadAnimatorControllerData(row, controller);
 }
+
+std::string HexEncode(const std::string_view value)
+{
+    constexpr char digits[] = "0123456789abcdef";
+    std::string encoded;
+    encoded.reserve(value.size() * 2);
+    for (const unsigned char byte : value)
+    {
+        encoded.push_back(digits[byte >> 4]);
+        encoded.push_back(digits[byte & 0x0F]);
+    }
+    return encoded;
+}
+
+std::optional<std::string> HexDecode(const std::string_view value)
+{
+    if ((value.size() % 2) != 0)
+    {
+        return std::nullopt;
+    }
+    const auto nibble = [](const char character) -> int {
+        if (character >= '0' && character <= '9') return character - '0';
+        if (character >= 'a' && character <= 'f') return character - 'a' + 10;
+        if (character >= 'A' && character <= 'F') return character - 'A' + 10;
+        return -1;
+    };
+    std::string decoded;
+    decoded.reserve(value.size() / 2);
+    for (std::size_t i = 0; i < value.size(); i += 2)
+    {
+        const int high = nibble(value[i]);
+        const int low = nibble(value[i + 1]);
+        if (high < 0 || low < 0)
+        {
+            return std::nullopt;
+        }
+        decoded.push_back(static_cast<char>((high << 4) | low));
+    }
+    return decoded;
+}
+
 }
 
 Result<void> AtomicReplaceFile(
@@ -390,6 +432,12 @@ void WriteEntityLine(
         out << "AN " << std::quoted(animator->ClipName) << ' ' << animator->Speed << ' '
             << animator->Loop << ' ' << false << ' ';
         WriteAnimatorController(out, "SC", animator->Controller);
+        if (animator->Graph)
+        {
+            std::ostringstream graph;
+            WriteAnimationGraph(graph, *animator->Graph);
+            out << "AG " << HexEncode(graph.str()) << ' ';
+        }
     }
     if (const TransformAnimatorComponent* anim =
             registry.try_get<TransformAnimatorComponent>(entity))
@@ -901,6 +949,23 @@ Result<void> ParseEntityLine(std::string_view line, IWorld& world)
             {
                 animator->Controller = std::move(controller);
                 animator->ClearControllerRuntime();
+            }
+        }
+        else if (marker == "AG")
+        {
+            std::string encoded;
+            row >> encoded;
+            const std::optional<std::string> decoded = HexDecode(encoded);
+            auto graph = std::make_unique<AnimationGraph>();
+            AnimGraphNodeRegistry::RegisterBuiltins();
+            std::istringstream graphInput{decoded.value_or(std::string{})};
+            if (decoded && ReadAnimationGraph(graphInput, *graph))
+            {
+                if (auto* animator = registry.try_get<AnimatorComponent>(entity))
+                {
+                    animator->Graph = std::move(graph);
+                    animator->RuntimeParameters = animator->Graph->Parameters;
+                }
             }
         }
         else if (marker == "TA" || marker == "TL" || marker == "T2")
