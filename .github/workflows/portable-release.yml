@@ -64,14 +64,14 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path artifacts -Force | Out-Null
-          Copy-Item bin/Release/fadix_editor.exe artifacts/FadixEngine-0.9.130-Windows-x64.exe
-          Copy-Item bin/Release/fadix_player.exe artifacts/FadixPlayer-0.9.130-Windows-x64.exe
+          Copy-Item bin/Release/fadix_editor.exe artifacts/FadixEngine-0.9.136-Windows-x64.exe
+          Copy-Item bin/Release/fadix_player.exe artifacts/FadixPlayer-0.9.136-Windows-x64.exe
           Get-FileHash artifacts/*.exe -Algorithm SHA256 | Format-Table -AutoSize
 
       - name: Upload portable executables
         uses: actions/upload-artifact@v4
         with:
-          name: FadixEngine-0.9.130-Windows-x64
+          name: FadixEngine-0.9.136-Windows-x64
           path: artifacts/*.exe
           if-no-files-found: error
           retention-days: 14
