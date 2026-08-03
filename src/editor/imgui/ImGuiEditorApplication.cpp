@@ -1605,6 +1605,32 @@ void ImGuiEditorApplication::HandleShortcuts(const SDL_Event& event)
     }
 }
 
+void ImGuiEditorApplication::SleepUntilNextFrame(const float targetFps)
+{
+    if (targetFps <= 0.0F)
+    {
+        return; // unlimited
+    }
+    const auto frameDuration =
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<float>{1.0F / targetFps});
+    const auto now = std::chrono::steady_clock::now();
+    if (m_FrameDeadline <= now)
+    {
+        m_FrameDeadline = now + frameDuration;
+        return;
+    }
+    const auto remaining = m_FrameDeadline - now;
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(remaining).count();
+    if (ms > 1)
+    {
+        SDL_Delay(static_cast<Uint32>(ms - 1));
+    }
+    // Spin for the last sub-millisecond to stay accurate.
+    while (std::chrono::steady_clock::now() < m_FrameDeadline) {} // ponytail: busy-spin <1ms, upgrade to POSIX nanosleep/WaitableTimer if sub-ms CPU burn matters
+    m_FrameDeadline += frameDuration;
+}
+
 bool ImGuiEditorApplication::ProcessEvents()
 {
     SDL_Event event;
@@ -1819,9 +1845,10 @@ int ImGuiEditorApplication::Run()
     auto previous = std::chrono::steady_clock::now();
     while (m_Running && ProcessEvents())
     {
-        if ((SDL_GetWindowFlags(m_Window) & SDL_WINDOW_MINIMIZED) != 0)
+        const SDL_WindowFlags windowFlags = SDL_GetWindowFlags(m_Window);
+        if ((windowFlags & SDL_WINDOW_MINIMIZED) != 0)
         {
-            SDL_Delay(10);
+            SleepUntilNextFrame(m_FpsMinimized);
             continue;
         }
         const auto now = std::chrono::steady_clock::now();
@@ -1851,6 +1878,10 @@ int ImGuiEditorApplication::Run()
                 m_GameUi->Render();
                 gpuRender->EndFrame();
             });
+        {
+            const bool hasFocus = (windowFlags & SDL_WINDOW_INPUT_FOCUS) != 0;
+            SleepUntilNextFrame(hasFocus ? m_FpsForeground : m_FpsUnfocused);
+        }
     }
 
     Shutdown();

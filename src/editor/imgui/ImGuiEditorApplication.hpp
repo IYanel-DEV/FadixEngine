@@ -24,6 +24,7 @@
 #include "editor/scene/SceneEditor.hpp"
 #include "editor/scripting/ScriptEditorController.hpp"
 
+#include <chrono>
 #include <filesystem>
 #include <array>
 #include <cstddef>
@@ -135,5 +136,13 @@ private:
     std::size_t m_ProfilerSamples{0};
     bool m_ProfilerPaused{false};
     bool m_Running{true};
+
+    // Performance throttle (populated from PerformancePreferences in Task 3)
+    float m_FpsForeground{60.0F};   // 0 = unlimited
+    float m_FpsUnfocused{30.0F};
+    float m_FpsMinimized{5.0F};
+    std::chrono::steady_clock::time_point m_FrameDeadline{};
+
+    void SleepUntilNextFrame(float targetFps);
 };
 }
