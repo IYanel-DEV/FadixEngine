@@ -5,6 +5,7 @@
 #include "engine/app/ModuleRegistration.hpp"
 #include "engine/scene/IWorld.hpp"
 #include "engine/scene/SceneDocument.hpp"
+#include "project/SaveGameService.hpp"
 #include "runtime/Components.hpp"
 
 #include <entt/entity/registry.hpp>
@@ -22,6 +23,8 @@ PlaySession::PlaySession(const float fixedDeltaSeconds)
     : m_FixedDeltaSeconds(std::max(fixedDeltaSeconds, 0.0001F))
 {
 }
+
+PlaySession::~PlaySession() = default;
 
 bool PlaySession::Start(const IWorld& authoredWorld, std::unique_ptr<IPhysicsWorld> physics)
 {
@@ -58,15 +61,95 @@ void PlaySession::SetScriptContext(
 
 void PlaySession::SetGameServices(
     std::function<std::unique_ptr<IPhysicsWorld>()> createPhysics,
-    std::function<std::filesystem::path(const std::string&)> resolvePath)
+    std::function<std::filesystem::path(const std::string&)> resolvePath,
+    std::filesystem::path saveDirectory)
 {
     m_CreatePhysics = std::move(createPhysics);
     m_ResolvePath = std::move(resolvePath);
+    m_SaveGames = std::make_unique<SaveGameService>(std::move(saveDirectory));
     m_Scripts.SetGameCallbacks(
         [this](const std::string& path, float x, float y, float z) {
             return SpawnPrefab(path, x, y, z);
         },
-        [this](const std::string& path) { m_PendingSceneLoad = path; });
+        [this](const std::string& path) { m_PendingSceneLoad = path; },
+        [this](const std::string& slot) { return RequestSave(slot); },
+        [this](const std::string& slot) { return RequestLoad(slot); });
+}
+
+bool PlaySession::RequestSave(const std::string& slot)
+{
+    if (!m_SaveGames || !SaveGameService::IsValidSlot(slot))
+    {
+        return false;
+    }
+    m_PendingSave = slot;
+    return true;
+}
+
+bool PlaySession::RequestLoad(const std::string& slot)
+{
+    if (!m_SaveGames || !SaveGameService::IsValidSlot(slot))
+    {
+        return false;
+    }
+    m_PendingSaveLoad = slot;
+    return true;
+}
+
+void PlaySession::PerformSave()
+{
+    const std::string slot = std::move(m_PendingSave);
+    m_PendingSave.clear();
+    if (!m_SaveGames || !m_RuntimeWorld)
+    {
+        return;
+    }
+    const Result<std::filesystem::path> saved = m_SaveGames->Save(slot, *m_RuntimeWorld);
+    if (m_Logger)
+    {
+        m_Logger(saved ? "Saved game to slot '" + slot + "'"
+                       : "Save.write('" + slot + "'): " + saved.ErrorMessage(),
+            saved ? "info" : "error");
+    }
+}
+
+void PlaySession::PerformSaveLoad()
+{
+    const std::string slot = std::move(m_PendingSaveLoad);
+    m_PendingSaveLoad.clear();
+    if (!m_SaveGames || !m_RuntimeWorld || !m_CreatePhysics)
+    {
+        return;
+    }
+    std::unique_ptr<IWorld> next = sceneplay::CreateEditWorld();
+    if (const Result<void> loaded = m_SaveGames->Load(slot, *next); !loaded)
+    {
+        if (m_Logger)
+        {
+            m_Logger("Save.load('" + slot + "'): " + loaded.ErrorMessage(), "error");
+        }
+        return;
+    }
+    std::unique_ptr<IPhysicsWorld> physics = m_CreatePhysics();
+    if (!physics)
+    {
+        if (m_Logger)
+        {
+            m_Logger("Save.load('" + slot + "'): physics world unavailable", "error");
+        }
+        return;
+    }
+    m_Scripts.Stop(m_RuntimeWorld->Registry());
+    m_RuntimeWorld = std::move(next);
+    m_Physics = std::move(physics);
+    m_Scripts.Start(m_RuntimeWorld->Registry(), m_ScriptResolver);
+    m_Physics->SyncFromWorld(*m_RuntimeWorld);
+    m_PendingSceneLoad.clear();
+    m_Accumulator = 0.0F;
+    if (m_Logger)
+    {
+        m_Logger("Loaded game from slot '" + slot + "'", "info");
+    }
 }
 
 std::optional<entt::entity> PlaySession::SpawnPrefab(
@@ -210,6 +293,9 @@ void PlaySession::Stop() noexcept
     m_Physics.reset();
     m_RuntimeWorld.reset();
     m_Accumulator = 0.0F;
+    m_PendingSceneLoad.clear();
+    m_PendingSave.clear();
+    m_PendingSaveLoad.clear();
     m_State = PlayState::Stopped;
 }
 
@@ -258,6 +344,15 @@ void PlaySession::Tick()
         // Push gameplay transforms into physics before stepping. Syncing in the
         // opposite order erases scripted movement on every dynamic body.
         m_Scripts.Update(m_RuntimeWorld->Registry(), m_FixedDeltaSeconds);
+        if (!m_PendingSave.empty())
+        {
+            PerformSave();
+        }
+        if (!m_PendingSaveLoad.empty())
+        {
+            PerformSaveLoad();
+            return;
+        }
         // A script may have requested a level transition; swap worlds before
         // stepping physics we are about to discard.
         if (!m_PendingSceneLoad.empty())

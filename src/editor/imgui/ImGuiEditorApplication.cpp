@@ -531,11 +531,20 @@ void ImGuiEditorApplication::WireAssetBrowser()
     // Gameplay world API: Prefab.spawn / Scene.load need a physics factory and a
     // project-relative path resolver. Both read live state so they follow the
     // active project and collision meshes.
+    std::filesystem::path saveDirectory =
+        m_Session.ActiveProject().RootPath / "Saved" / "Saves";
+    const std::string saveId = m_Session.ActiveProject().Id.ToString();
+    if (char* pref = SDL_GetPrefPath("FadixEngine", saveId.c_str()); pref != nullptr)
+    {
+        saveDirectory = std::filesystem::path{pref} / "Saves";
+        SDL_free(pref);
+    }
     m_Session.Play().SetGameServices(
         [this]() { return sceneplay::CreatePhysicsWorldAdapter(m_GltfMeshes.get()); },
         [this](const std::string& relative) {
             return m_Session.ActiveProject().RootPath / relative;
-        });
+        },
+        std::move(saveDirectory));
 
     if (m_Device)
     {
@@ -939,6 +948,94 @@ void ImGuiEditorApplication::DrawGraphicsWindow()
     ImGui::End();
 }
 
+void ImGuiEditorApplication::DrawProfilerWindow()
+{
+    if (!m_Ui.ShowProfiler)
+    {
+        return;
+    }
+
+    const std::optional<RenderDiagnostics> diagnostics =
+        m_Viewports.FocusedViewportDiagnostics();
+    if (!m_ProfilerPaused)
+    {
+        m_FrameTimeHistory[m_ProfilerCursor] = m_FrameDelta * 1000.0F;
+        m_RenderTimeHistory[m_ProfilerCursor] = diagnostics ? diagnostics->CpuRenderMs : 0.0F;
+        m_GpuTimeHistory[m_ProfilerCursor] =
+            diagnostics && diagnostics->GpuRenderMs >= 0.0F ? diagnostics->GpuRenderMs : 0.0F;
+        m_ProfilerCursor = (m_ProfilerCursor + 1) % m_FrameTimeHistory.size();
+        m_ProfilerSamples = std::min(m_ProfilerSamples + 1, m_FrameTimeHistory.size());
+    }
+
+    ImGui::SetNextWindowSize(ImVec2{470.0F, 410.0F}, ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Profiler", &m_Ui.ShowProfiler))
+    {
+        ImGui::End();
+        return;
+    }
+
+    if (ImGui::Button(m_ProfilerPaused ? "Resume" : "Pause"))
+    {
+        m_ProfilerPaused = !m_ProfilerPaused;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Clear"))
+    {
+        m_FrameTimeHistory.fill(0.0F);
+        m_RenderTimeHistory.fill(0.0F);
+        m_GpuTimeHistory.fill(0.0F);
+        m_ProfilerCursor = 0;
+        m_ProfilerSamples = 0;
+    }
+
+    float averageFrameMs = 0.0F;
+    for (std::size_t i = 0; i < m_ProfilerSamples; ++i)
+    {
+        averageFrameMs += m_FrameTimeHistory[i];
+    }
+    if (m_ProfilerSamples > 0)
+    {
+        averageFrameMs /= static_cast<float>(m_ProfilerSamples);
+    }
+    const float fps = averageFrameMs > 0.0F ? 1000.0F / averageFrameMs : 0.0F;
+    ImGui::Text("Frame %.2f ms   Average %.2f ms   %.1f FPS",
+        m_FrameDelta * 1000.0F, averageFrameMs, fps);
+    ImGui::PlotLines("CPU frame", m_FrameTimeHistory.data(),
+        static_cast<int>(m_FrameTimeHistory.size()), static_cast<int>(m_ProfilerCursor), nullptr,
+        0.0F, 33.33F, ImVec2{-1.0F, 70.0F});
+
+    if (diagnostics)
+    {
+        ImGui::Text("CPU render %.2f ms", diagnostics->CpuRenderMs);
+        ImGui::PlotLines("CPU render", m_RenderTimeHistory.data(),
+            static_cast<int>(m_RenderTimeHistory.size()), static_cast<int>(m_ProfilerCursor),
+            nullptr, 0.0F, 33.33F, ImVec2{-1.0F, 70.0F});
+        if (diagnostics->GpuRenderMs >= 0.0F)
+        {
+            ImGui::Text("GPU render %.2f ms", diagnostics->GpuRenderMs);
+            ImGui::PlotLines("GPU render", m_GpuTimeHistory.data(),
+                static_cast<int>(m_GpuTimeHistory.size()), static_cast<int>(m_ProfilerCursor),
+                nullptr, 0.0F, 33.33F, ImVec2{-1.0F, 70.0F});
+        }
+        else
+        {
+            ImGui::TextDisabled("GPU timing unavailable (SDL GPU has no timestamp queries)");
+        }
+        ImGui::Separator();
+        ImGui::Text("Draw calls %d   Visible meshes %d   Post passes %d",
+            diagnostics->DrawCalls, diagnostics->VisibleMeshes, diagnostics->PostPasses);
+        ImGui::Text("Lights %d/%d point   %d/%d spot   Shadow passes %d",
+            diagnostics->ActivePointLights, diagnostics->TotalPointLights,
+            diagnostics->ActiveSpotLights, diagnostics->TotalSpotLights,
+            diagnostics->ShadowPasses);
+    }
+    else
+    {
+        ImGui::TextDisabled("Focus Scene or Game View for renderer measurements");
+    }
+    ImGui::End();
+}
+
 void ImGuiEditorApplication::SaveGraphicsSettings()
 {
     const std::filesystem::path& root = m_Session.activeProject.RootPath;
@@ -1043,6 +1140,14 @@ void ImGuiEditorApplication::UpdateFrame(const float deltaSeconds)
     }
     SyncGameCameraFromWorld();
     m_ContentBrowser.Poll();
+    if (m_ScriptEditor)
+    {
+        m_ScriptEditor->TickValidation();
+        m_Ui.CompilationActive = m_ScriptEditor->IsCompiling();
+        m_Ui.CompilationText = m_Ui.CompilationActive
+            ? "Compiling " + std::string{m_ScriptEditor->CompilingScript()}
+            : std::string{};
+    }
 }
 
 bool ImGuiEditorApplication::SaveScenePath(const std::filesystem::path& path)
@@ -1360,19 +1465,26 @@ void ImGuiEditorApplication::ProcessCommands()
     if (m_Ui.RequestPlay)
     {
         m_Ui.RequestPlay = false;
-        // Play draws the Game view at its preset (default High); entering play does not lower quality.
-        if (m_Session.SetPlayMode(EditorPlayMode::Play))
+        if (m_ScriptEditor && m_ScriptEditor->IsCompiling())
         {
-            m_Viewports.ResetTemporalHistory();
-            if (m_ScriptEditor)
+            m_Ui.StatusText = "Finish compiling before Play";
+        }
+        else
+        {
+            // Play draws the Game view at its preset (default High); entering play does not lower quality.
+            if (m_Session.SetPlayMode(EditorPlayMode::Play))
             {
-                m_ScriptEditor->SuspendNative(true);
+                m_Viewports.ResetTemporalHistory();
+                if (m_ScriptEditor)
+                {
+                    m_ScriptEditor->SuspendNative(true);
+                }
+                if (m_GameUi)
+                {
+                    m_GameUi->SetActive(true);
+                }
+                m_Ui.StatusText = "Play";
             }
-            if (m_GameUi)
-            {
-                m_GameUi->SetActive(true);
-            }
-            m_Ui.StatusText = "Play";
         }
     }
     if (m_Ui.RequestPause)
@@ -1585,6 +1697,7 @@ void ImGuiEditorApplication::DrawUi()
             &m_ExportPanel);
         m_Shell.DrawModals(m_Session, m_Ui, m_Theme);
         DrawGraphicsWindow();
+        DrawProfilerWindow();
     }
     else
     {
@@ -1603,7 +1716,7 @@ int ImGuiEditorApplication::Run()
         SDL_SetHint(SDL_HINT_GPU_DRIVER, "direct3d12");
     }
 #endif
-    if (!SDL_Init(SDL_INIT_VIDEO))
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
     {
         throw std::runtime_error(std::string{"SDL_Init failed: "} + SDL_GetError());
     }

@@ -1334,6 +1334,7 @@ std::unique_ptr<rhi::Device> CreateDeviceFromWindow(void* sdlWindow)
         (SDL_GetGPUShaderFormats(nativeDevice) & SDL_GPU_SHADERFORMAT_DXIL) == 0;
     if (legacyD3D12 && !forceModern)
     {
+        // "D3D12" on the box does not guarantee modern shaders. Marketing got a vote.
         SDL_Log("[Fadix] D3D12 GPU exposes DXBC only; switching to Direct3D 11");
         SDL_DestroyGPUDevice(nativeDevice);
         return rhi::d3d11::CreateDeviceFromWindow(sdlWindow);

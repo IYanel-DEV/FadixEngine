@@ -10,7 +10,7 @@
 #include <windows.h>
 #endif
 
-// Separated so __try/__except in main() has no C++ objects with dtors in scope.
+// SEH and C++ destructors are not friends. Keep the crash fence in main and objects in here.
 static int RunApplication()
 {
     std::clog << std::unitbuf;

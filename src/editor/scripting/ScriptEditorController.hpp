@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -139,6 +140,9 @@ public:
 
     void SetValidationDebounceMs(int ms);
     void FlushPendingValidation();
+    void TickValidation();
+    [[nodiscard]] bool IsCompiling() const noexcept;
+    [[nodiscard]] std::string_view CompilingScript() const noexcept;
 
     [[nodiscard]] bool SaveSession() const;
     [[nodiscard]] bool LoadSession();
@@ -209,6 +213,7 @@ private:
     void UpdateStatusBar();
     void SetHeader();
     void ValidateActive();
+    void StartAsyncValidation();
     void ScheduleValidation();
     void MaybeRunScheduledValidation();
     void ApplyValidationResult(FxsOpenDocument& doc, const ScriptValidationResult& result);
@@ -242,6 +247,15 @@ private:
     int m_ValidationDebounceMs{400};
     bool m_ValidationPending{false};
     std::chrono::steady_clock::time_point m_ValidationDue{};
+    struct AsyncValidationResult
+    {
+        std::string ScriptName;
+        std::uint64_t Generation{};
+        ScriptValidationResult Validation;
+    };
+    std::future<AsyncValidationResult> m_ValidationJob;
+    std::string m_CompilingScript;
+    std::uint64_t m_ValidationGeneration{};
     std::optional<std::size_t> m_PendingCloseIndex;
     std::optional<std::size_t> m_ExternalIndex;
     std::string m_CompareDisk;

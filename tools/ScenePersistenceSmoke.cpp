@@ -1,4 +1,6 @@
 #include "editor/scene/SceneSerializer.hpp"
+#include "project/SaveGameService.hpp"
+#include "engine/animation/AnimGraphNodes.hpp"
 #include "runtime/Components.hpp"
 #include "runtime/World.hpp"
 
@@ -119,6 +121,17 @@ int main()
     animator.ActiveState = "Run";
     animator.BlendFromClipName = "Idle";
     animator.BlendDuration = 0.4F;
+    animator.Graph = std::make_unique<AnimationGraph>();
+    animator.Graph->Name = "Character Graph";
+    animator.Graph->Parameters.push_back(
+        {"Move Speed", AnimGraphParameter::Type::Float, 0.5F});
+    auto graphClip = std::make_unique<ClipNode>();
+    graphClip->ClipName = "Run Forward";
+    animator.Graph->Nodes.push_back(std::move(graphClip));
+    auto graphOutput = std::make_unique<OutputNode>();
+    graphOutput->Child = 0;
+    animator.Graph->Nodes.push_back(std::move(graphOutput));
+    animator.Graph->OutputNodeIndex = 1;
     source.Registry().emplace<AnimatorComponent>(entity, animator);
 
     TransformAnimatorComponent transformAnimator;
@@ -165,8 +178,10 @@ int main()
         : nullptr;
     Check(runtimeAnimator != nullptr && !runtimeAnimator->Playing &&
             Near(runtimeAnimator->CurrentTime, 0.0F) && runtimeAnimator->BlendFromClipName.empty() &&
-            runtimeAnimator->ActiveState.empty(),
-        "Runtime clone waits for code to start animation");
+            runtimeAnimator->ActiveState.empty() && runtimeAnimator->Graph != nullptr &&
+            runtimeAnimator->Graph->Name == "Character Graph" &&
+            runtimeAnimator->Graph->Nodes.size() == 2,
+        "Runtime clone keeps the animation graph and waits for code to start");
     const TransformAnimatorComponent* runtimeTransformAnimator = runtimeEntity
         ? runtimeClone->Registry().try_get<TransformAnimatorComponent>(*runtimeEntity)
         : nullptr;
@@ -228,6 +243,13 @@ int main()
                 loadedAnimator->Controller.EntryState == "Run" &&
                 loadedAnimator->Controller.States.size() == 1,
             "Animator controller survives reload without autoplay");
+        Check(loadedAnimator != nullptr && loadedAnimator->Graph != nullptr &&
+                loadedAnimator->Graph->Name == "Character Graph" &&
+                loadedAnimator->Graph->Parameters.size() == 1 &&
+                loadedAnimator->Graph->Parameters[0].Name == "Move Speed" &&
+                loadedAnimator->Graph->Nodes.size() == 2 &&
+                loadedAnimator->Graph->OutputNodeIndex == 1,
+            "Animation graph survives scene reload");
 
         const auto* loadedTransformAnimator =
             registry.try_get<TransformAnimatorComponent>(*loadedEntity);
@@ -299,7 +321,27 @@ int main()
     Check(display.has_value() && *display == "Lobby Scene",
         "PeekDisplayName returns the renamed scene root display name");
 
+    const std::filesystem::path saveRoot =
+        std::filesystem::current_path() / ".build" / "save-game-smoke";
     std::error_code cleanup;
+    std::filesystem::remove_all(saveRoot, cleanup);
+    SaveGameService saves{saveRoot};
+    const Result<std::filesystem::path> savedGame = saves.Save("slot-1", source);
+    Check(savedGame.IsOk() && std::filesystem::is_regular_file(savedGame.Value()),
+        savedGame ? "Runtime save slot is written" : savedGame.ErrorMessage());
+    Check(!saves.Save("../escape", source), "Unsafe save slot is rejected");
+    World restored{false};
+    const Result<void> restoredGame = saves.Load("slot-1", restored);
+    const auto restoredEntity = restored.Find(entityId);
+    const TransformComponent* restoredTransform = restoredEntity
+        ? restored.Registry().try_get<TransformComponent>(*restoredEntity)
+        : nullptr;
+    Check(restoredGame.IsOk() && restoredTransform != nullptr &&
+            restoredTransform->Position == glm::vec3(1.0F, 2.0F, 3.0F),
+        restoredGame ? "Runtime save slot restores the world" : restoredGame.ErrorMessage());
+    Check(!saves.Load("missing", restored), "Missing save slot reports an error");
+
     std::filesystem::remove(path, cleanup);
+    std::filesystem::remove_all(saveRoot, cleanup);
     return failures == 0 ? 0 : 1;
 }

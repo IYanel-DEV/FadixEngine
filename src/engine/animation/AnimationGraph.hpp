@@ -32,6 +32,7 @@ struct AnimGraphContext
     const GltfMeshAsset* MeshAsset{nullptr};
     std::span<AnimGraphParameter> Parameters;
     std::unordered_map<std::string, SkeletonPose> SavedPoses;
+    std::vector<int> EvaluationStack;
     AnimationGraph* Graph{nullptr};  // back-ptr so child-index lookups work
 
     [[nodiscard]] float GetFloat(std::string_view name) const noexcept
@@ -68,6 +69,8 @@ struct AnimGraphNode
     [[nodiscard]] virtual std::string_view TypeName() const = 0;
     virtual void Serialize(std::ostream& out) const = 0;
     virtual void Deserialize(std::istream& in) = 0;
+    virtual void ResetRuntime() noexcept {}
+    virtual void SetRuntimeTime(float /*seconds*/) noexcept {}
 };
 
 struct AnimationGraph
@@ -86,7 +89,11 @@ struct AnimationGraph
             return {};
         }
         ctx.Graph = this;
-        return Nodes[static_cast<std::size_t>(OutputNodeIndex)]->Evaluate(ctx);
+        ctx.EvaluationStack.clear();
+        ctx.EvaluationStack.push_back(OutputNodeIndex);
+        SkeletonPose result = Nodes[static_cast<std::size_t>(OutputNodeIndex)]->Evaluate(ctx);
+        ctx.EvaluationStack.clear();
+        return result;
     }
 
     // Clear trigger parameters after each Evaluate() call.
@@ -96,5 +103,20 @@ struct AnimationGraph
             if (p.ParamType == AnimGraphParameter::Type::Trigger)
                 p.BoolValue = false;
     }
+
+    void ResetRuntime() noexcept
+    {
+        for (const std::unique_ptr<AnimGraphNode>& node : Nodes)
+            if (node) node->ResetRuntime();
+    }
+
+    void SetRuntimeTime(const float seconds) noexcept
+    {
+        for (const std::unique_ptr<AnimGraphNode>& node : Nodes)
+            if (node) node->SetRuntimeTime(seconds);
+    }
 };
+
+[[nodiscard]] std::unique_ptr<AnimationGraph> CloneAnimationGraph(
+    const AnimationGraph& source);
 }  // namespace fadix

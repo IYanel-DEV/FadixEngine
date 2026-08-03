@@ -54,6 +54,7 @@ TileAssignment AssignLightsToTiles(
                 }
                 else
                 {
+                    // One crowded tile is enough; do not let a disco ball grow an unbounded list.
                     ++result.OverflowCount;
                 }
             }

@@ -70,6 +70,7 @@ std::vector<std::byte> CompileShader(
     std::size_t compileSize = source.size();
     if (std::strcmp(target, "vs_5_0") == 0 || std::strcmp(target, "ps_5_0") == 0)
     {
+        // DXBC knows register(t0), not register(t0, space0). Same HLSL, different decade.
         compatibleSource.assign(reinterpret_cast<const char*>(source.data()), source.size());
         std::size_t position = 0;
         while ((position = compatibleSource.find("register(", position)) != std::string::npos)

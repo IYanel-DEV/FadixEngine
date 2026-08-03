@@ -340,6 +340,7 @@ void AssetResourceCache::CreateFallbacks()
 
 void AssetResourceCache::WarnOnce(const AssetHandle& handle, const std::string& message)
 {
+    // A missing asset is noisy enough without reporting it again every frame.
     if (m_WarnedHandles.insert(handle).second)
     {
         std::cerr << "[Fadix] " << message << " (" << handle.ToString() << ")\n";

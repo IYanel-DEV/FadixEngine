@@ -255,18 +255,25 @@ int main()
         fadix::AnimGraphNodeRegistry::RegisterBuiltins();
 
         fadix::AnimationGraph graph;
-        graph.Name = "TestGraph";
-        graph.Parameters.push_back({"Speed", fadix::AnimGraphParameter::Type::Float, 2.5F});
+        graph.Name = "Test Graph";
+        graph.Parameters.push_back({"Move Speed", fadix::AnimGraphParameter::Type::Float, 2.5F});
 
-        auto clip = std::make_unique<fadix::ClipNode>();
-        clip->ClipName = "Run"; clip->Speed = 1.5F; clip->Loop = false;
-        clip->EditorPosition = {100.0F, 200.0F};
-        graph.Nodes.push_back(std::move(clip));
+        auto clipNode = std::make_unique<fadix::ClipNode>();
+        clipNode->ClipName = "Run Forward"; clipNode->Speed = 1.5F; clipNode->Loop = false;
+        clipNode->EditorPosition = {100.0F, 200.0F};
+        graph.Nodes.push_back(std::move(clipNode));
 
         auto out = std::make_unique<fadix::OutputNode>();
         out->Child = 0; out->EditorPosition = {300.0F, 200.0F};
         graph.Nodes.push_back(std::move(out));
         graph.OutputNodeIndex = 1;
+
+        auto stateMachine = std::make_unique<fadix::StateMachineNode>();
+        stateMachine->Controller.Name = "Locomotion Controller";
+        stateMachine->Controller.EntryState = "Run State";
+        stateMachine->Controller.States.push_back({"Run State", "Run Forward"});
+        stateMachine->StateChildIndices["Run State"] = 0;
+        graph.Nodes.push_back(std::move(stateMachine));
 
         std::ostringstream oss;
         fadix::WriteAnimationGraph(oss, graph);
@@ -275,16 +282,36 @@ int main()
         fadix::AnimationGraph loaded;
         std::istringstream iss{serialized};
         assert(fadix::ReadAnimationGraph(iss, loaded) && "ReadAnimationGraph failed");
-        assert(loaded.Name == "TestGraph" && "graph name mismatch");
+        assert(loaded.Name == "Test Graph" && "graph name mismatch");
         assert(loaded.Parameters.size() == 1 && "param count mismatch");
         assert(std::abs(loaded.Parameters[0].FloatValue - 2.5F) < 1.0e-5F && "param value mismatch");
-        assert(loaded.Nodes.size() == 2 && "node count mismatch");
+        assert(loaded.Nodes.size() == 3 && "node count mismatch");
         assert(loaded.Nodes[0]->TypeName() == std::string_view{"ClipNode"} && "node type mismatch");
         const auto* loadedClip = static_cast<fadix::ClipNode*>(loaded.Nodes[0].get());
-        assert(loadedClip->ClipName == "Run" && "clip name mismatch");
+        assert(loadedClip->ClipName == "Run Forward" && "clip name mismatch");
         assert(std::abs(loadedClip->Speed - 1.5F) < 1.0e-5F && "speed mismatch");
         assert(!loadedClip->Loop && "loop mismatch");
+        const auto* loadedStateMachine =
+            static_cast<fadix::StateMachineNode*>(loaded.Nodes[2].get());
+        assert(loadedStateMachine->Controller.Name == "Locomotion Controller" &&
+            loadedStateMachine->Controller.EntryState == "Run State" &&
+            loadedStateMachine->StateChildIndices.at("Run State") == 0 &&
+            "state machine graph data mismatch");
         assert(loaded.OutputNodeIndex == 1 && "output index mismatch");
+
+        static_cast<fadix::OutputNode*>(loaded.Nodes[1].get())->Child = 1;
+        fadix::AnimGraphContext cycleContext;
+        const fadix::SkeletonPose cyclePose = loaded.Evaluate(cycleContext);
+        assert(cyclePose.Skeleton.Joints.empty() && "graph cycle should fail safely");
+
+        const std::string legacyStateMachine =
+            "graph \"Legacy Graph\"\nparams 0\nnodes 1\n"
+            "node StateMachineNode 0 0\nactiveState \"\"\nstateChildren 0\n"
+            "endnode\noutput 0\n";
+        fadix::AnimationGraph legacyGraph;
+        std::istringstream legacyInput{legacyStateMachine};
+        assert(fadix::ReadAnimationGraph(legacyInput, legacyGraph) &&
+            legacyGraph.Nodes.size() == 1 && "legacy state-machine graph should still load");
         std::cout << "PASS AnimGraph serialization round-trip\n";
     }
 
@@ -296,6 +323,28 @@ int main()
         ac.Controller.EntryState = "Idle";
         assert(ac.Controller.EntryState == "Idle" && "legacy controller broken");
         std::cout << "PASS AnimGraph legacy path unaffected when Graph==null\n";
+    }
+
+    // Opening FDX Animation creates an isolated preview by cloning the world.
+    // Keep the graph and its per-node runtime state independent in that clone.
+    {
+        fadix::AnimatorComponent sourceAnimator;
+        sourceAnimator.Graph = std::make_unique<fadix::AnimationGraph>();
+        sourceAnimator.Graph->Name = "Preview Graph";
+        auto clipNode = std::make_unique<fadix::ClipNode>();
+        clipNode->ClipName = "Idle";
+        sourceAnimator.Graph->Nodes.push_back(std::move(clipNode));
+        auto outputNode = std::make_unique<fadix::OutputNode>();
+        outputNode->Child = 0;
+        sourceAnimator.Graph->Nodes.push_back(std::move(outputNode));
+        sourceAnimator.Graph->OutputNodeIndex = 1;
+
+        const fadix::AnimatorComponent previewAnimator = sourceAnimator;
+        Check(previewAnimator.Graph != nullptr,
+            "FDX preview clone preserves the animation graph");
+        Check(previewAnimator.Graph.get() != sourceAnimator.Graph.get() &&
+                previewAnimator.Graph->Nodes.size() == sourceAnimator.Graph->Nodes.size(),
+            "FDX preview graph has independent node storage");
     }
 
     std::printf(g_fail == 0 ? "ALL PASS\n" : "%d CHECK(S) FAILED\n", g_fail);

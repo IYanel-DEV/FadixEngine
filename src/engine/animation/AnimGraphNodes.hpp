@@ -3,13 +3,16 @@
 #include "engine/animation/AnimationGraph.hpp"
 #include "engine/animation/AnimationClip.hpp"
 #include "engine/animation/AnimationPlayer.hpp"
+#include "engine/animation/AnimatorControllerIO.hpp"
 
 #include <algorithm>
 #include <istream>
+#include <iomanip>
 #include <memory>
 #include <ostream>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 // AnimatorController + runtime helpers are in AnimationRuntime.hpp.
@@ -33,9 +36,15 @@ struct GltfMeshAsset;
 {
     if (childIndex < 0 || childIndex >= static_cast<int>(ctx.Graph->Nodes.size()))
         return {};
+    if (std::find(ctx.EvaluationStack.begin(), ctx.EvaluationStack.end(), childIndex) !=
+        ctx.EvaluationStack.end())
+        return {};
     auto& node = ctx.Graph->Nodes[static_cast<std::size_t>(childIndex)];
     if (!node) return {};
-    return node->Evaluate(ctx);
+    ctx.EvaluationStack.push_back(childIndex);
+    SkeletonPose pose = node->Evaluate(ctx);
+    ctx.EvaluationStack.pop_back();
+    return pose;
 }
 
 // ---------------------------------------------------------------------------
@@ -74,9 +83,14 @@ struct ClipNode : AnimGraphNode
     SkeletonPose Evaluate(AnimGraphContext& ctx) override;
 
     std::string_view TypeName() const override { return "ClipNode"; }
+    void ResetRuntime() noexcept override { CurrentTime = 0.0F; }
+    void SetRuntimeTime(const float seconds) noexcept override
+    {
+        CurrentTime = std::max(seconds, 0.0F);
+    }
     void Serialize(std::ostream& out) const override
     {
-        out << "clip " << ClipName << '\n'
+        out << "clip " << std::quoted(ClipName) << '\n'
             << "speed " << Speed << '\n'
             << "loop " << (Loop ? 1 : 0) << '\n'
             << "mirror " << (Mirror ? 1 : 0) << '\n';
@@ -84,7 +98,7 @@ struct ClipNode : AnimGraphNode
     void Deserialize(std::istream& in) override
     {
         std::string key; int b;
-        in >> key >> ClipName;
+        in >> key >> std::quoted(ClipName);
         in >> key >> Speed;
         in >> key >> b; Loop = b != 0;
         in >> key >> b; Mirror = b != 0;
@@ -108,7 +122,7 @@ struct BlendByFloatNode : AnimGraphNode
     std::string_view TypeName() const override { return "BlendByFloatNode"; }
     void Serialize(std::ostream& out) const override
     {
-        out << "param " << ParameterName << '\n'
+        out << "param " << std::quoted(ParameterName) << '\n'
             << "entries " << Entries.size() << '\n';
         for (const Entry& e : Entries)
             out << e.Threshold << ' ' << e.ChildIndex << '\n';
@@ -116,7 +130,7 @@ struct BlendByFloatNode : AnimGraphNode
     void Deserialize(std::istream& in) override
     {
         std::string key; std::size_t n;
-        in >> key >> ParameterName;
+        in >> key >> std::quoted(ParameterName);
         in >> key >> n;
         Entries.resize(n);
         for (Entry& e : Entries) in >> e.Threshold >> e.ChildIndex;
@@ -157,9 +171,14 @@ struct BlendByConditionNode : AnimGraphNode
     }
 
     std::string_view TypeName() const override { return "BlendByConditionNode"; }
+    void ResetRuntime() noexcept override
+    {
+        BlendElapsed = 0.0F;
+        ActiveValue = false;
+    }
     void Serialize(std::ostream& out) const override
     {
-        out << "param " << ParameterName << '\n'
+        out << "param " << std::quoted(ParameterName) << '\n'
             << "true " << TrueChild << '\n'
             << "false " << FalseChild << '\n'
             << "duration " << BlendDuration << '\n';
@@ -167,7 +186,7 @@ struct BlendByConditionNode : AnimGraphNode
     void Deserialize(std::istream& in) override
     {
         std::string key;
-        in >> key >> ParameterName;
+        in >> key >> std::quoted(ParameterName);
         in >> key >> TrueChild;
         in >> key >> FalseChild;
         in >> key >> BlendDuration;
@@ -232,7 +251,7 @@ struct LayeredBlendNode : AnimGraphNode
         out << "base " << BaseChild << '\n'
             << "layer " << LayerChild << '\n'
             << "weight " << Weight << '\n'
-            << "weightParam " << WeightParameter << '\n'
+            << "weightParam " << std::quoted(WeightParameter) << '\n'
             << "bones " << BoneMask.size() << '\n';
         for (int b : BoneMask) out << b << ' ';
         out << '\n';
@@ -243,7 +262,7 @@ struct LayeredBlendNode : AnimGraphNode
         in >> key >> BaseChild;
         in >> key >> LayerChild;
         in >> key >> Weight;
-        in >> key >> WeightParameter;
+        in >> key >> std::quoted(WeightParameter);
         in >> key >> n;
         BoneMask.resize(n);
         for (int& b : BoneMask) in >> b;
@@ -277,7 +296,7 @@ struct AdditiveNode : AnimGraphNode
         out << "base " << BaseChild << '\n'
             << "additive " << AdditiveChild << '\n'
             << "weight " << Weight << '\n'
-            << "weightParam " << WeightParameter << '\n';
+            << "weightParam " << std::quoted(WeightParameter) << '\n';
     }
     void Deserialize(std::istream& in) override
     {
@@ -285,7 +304,7 @@ struct AdditiveNode : AnimGraphNode
         in >> key >> BaseChild;
         in >> key >> AdditiveChild;
         in >> key >> Weight;
-        in >> key >> WeightParameter;
+        in >> key >> std::quoted(WeightParameter);
     }
 };
 
@@ -307,11 +326,11 @@ struct SavedPoseNode : AnimGraphNode
     std::string_view TypeName() const override { return "SavedPoseNode"; }
     void Serialize(std::ostream& out) const override
     {
-        out << "key " << PoseKey << '\n' << "child " << Child << '\n';
+        out << "key " << std::quoted(PoseKey) << '\n' << "child " << Child << '\n';
     }
     void Deserialize(std::istream& in) override
     {
-        std::string k; in >> k >> PoseKey >> k >> Child;
+        std::string k; in >> k >> std::quoted(PoseKey) >> k >> Child;
     }
 };
 
@@ -329,8 +348,15 @@ struct UseSavedPoseNode : AnimGraphNode
     }
 
     std::string_view TypeName() const override { return "UseSavedPoseNode"; }
-    void Serialize(std::ostream& out) const override { out << "key " << PoseKey << '\n'; }
-    void Deserialize(std::istream& in) override { std::string k; in >> k >> PoseKey; }
+    void Serialize(std::ostream& out) const override
+    {
+        out << "key " << std::quoted(PoseKey) << '\n';
+    }
+    void Deserialize(std::istream& in) override
+    {
+        std::string k;
+        in >> k >> std::quoted(PoseKey);
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -352,6 +378,18 @@ struct StateMachineNode : AnimGraphNode
     SkeletonPose Evaluate(AnimGraphContext& ctx) override;
 
     std::string_view TypeName() const override { return "StateMachineNode"; }
+    void ResetRuntime() noexcept override
+    {
+        ActiveState.clear();
+        StateTime = 0.0F;
+        CrossfadeFrom.clear();
+        CrossfadeElapsed = 0.0F;
+        CrossfadeDuration = 0.0F;
+    }
+    void SetRuntimeTime(const float seconds) noexcept override
+    {
+        StateTime = std::max(seconds, 0.0F);
+    }
     void Serialize(std::ostream& out) const override;
     void Deserialize(std::istream& in) override;
 };
@@ -534,23 +572,38 @@ inline SkeletonPose StateMachineNode::Evaluate(AnimGraphContext& ctx)
 
 inline void StateMachineNode::Serialize(std::ostream& out) const
 {
-    out << "activeState " << ActiveState << '\n';
+    out << "activeState " << std::quoted(ActiveState) << '\n';
     out << "stateChildren " << StateChildIndices.size() << '\n';
-    for (const auto& [name, idx] : StateChildIndices)
-        out << name << ' ' << idx << '\n';
-    // Controller serialized via AnimatorControllerIO separately
+    std::vector<std::pair<std::string, int>> sortedChildren{
+        StateChildIndices.begin(), StateChildIndices.end()};
+    std::sort(sortedChildren.begin(), sortedChildren.end());
+    for (const auto& [name, idx] : sortedChildren)
+        out << std::quoted(name) << ' ' << idx << '\n';
+    out << "controller ";
+    WriteAnimatorControllerData(out, Controller);
+    out << '\n';
 }
 
 inline void StateMachineNode::Deserialize(std::istream& in)
 {
     std::string key; std::size_t n;
-    in >> key >> ActiveState;
+    in >> key >> std::quoted(ActiveState);
     in >> key >> n;
     for (std::size_t i = 0; i < n; ++i)
     {
         std::string name; int idx;
-        in >> name >> idx;
+        in >> std::quoted(name) >> idx;
         StateChildIndices[name] = idx;
+    }
+    const std::streampos controllerPosition = in.tellg();
+    if (in >> key && key == "controller")
+    {
+        static_cast<void>(ReadAnimatorControllerData(in, Controller));
+    }
+    else
+    {
+        in.clear();
+        in.seekg(controllerPosition);
     }
 }
 }  // namespace fadix

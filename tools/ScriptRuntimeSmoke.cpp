@@ -69,6 +69,8 @@ const char* SpawnerSource()
 const char* LoaderSource()
 {
     return "function OnUpdate(entity, dt)\n"
+           "  if not Save.write(\"slot-1\") then error(\"save callback unavailable\") end\n"
+           "  if not Save.load(\"slot-1\") then error(\"load callback unavailable\") end\n"
            "  Scene.load(\"Scenes/Level2.scene\")\n"
            "end\n";
 }
@@ -127,6 +129,8 @@ int main()
     // at the requested position; load records the requested scene path.
     std::string spawnPath;
     std::string loadedScene;
+    std::string savedSlot;
+    std::string loadedSlot;
     entt::entity spawnedEntity = entt::null;
     runner.SetGameCallbacks(
         [&](const std::string& path, float x, float y, float z) -> std::optional<entt::entity> {
@@ -138,7 +142,15 @@ int main()
             spawnedEntity = created;
             return created;
         },
-        [&](const std::string& path) { loadedScene = path; });
+        [&](const std::string& path) { loadedScene = path; },
+        [&](const std::string& slot) {
+            savedSlot = slot;
+            return true;
+        },
+        [&](const std::string& slot) {
+            loadedSlot = slot;
+            return true;
+        });
 
     const auto resolver =
         [](const std::string& name) -> std::optional<fadix::ScriptRunner::ResolvedScript> {
@@ -192,6 +204,8 @@ int main()
         "OnAnimationEvent received name/payload and consumed the runtime queue");
     Check(!registry.valid(doomed), "entity:destroy() removed the doomed entity");
     Check(loadedScene == "Scenes/Level2.scene", "Scene.load requested the level transition");
+    Check(savedSlot == "slot-1" && loadedSlot == "slot-1",
+        "Save.write and Save.load reached the runtime callbacks");
 
     runner.Update(registry, 0.5F);
     Check(std::fabs(registry.get<fadix::TransformComponent>(mover).Position.x - 2.0F) < 1e-4F,

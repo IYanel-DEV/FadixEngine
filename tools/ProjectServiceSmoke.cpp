@@ -26,6 +26,7 @@ namespace
 
 int main()
 {
+    // Start clean: a smoke test should inherit engine bugs, not yesterday's files.
     const auto root = std::filesystem::temp_directory_path() / "fadix_project_smoke";
     std::error_code error;
     std::filesystem::remove_all(root, error);

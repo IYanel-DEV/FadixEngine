@@ -54,8 +54,8 @@ struct LauncherUpdate
 };
 
 constexpr std::array<LauncherUpdate, 2> News{{
-    {"CURRENT RELEASE", "Fadix 0.9.135 is available",
-        "Improves compatibility for Windows systems without AVX support."},
+    {"CURRENT RELEASE", "Fadix 0.9.136 is available",
+        "Adds animation graphs, stronger scripting workflows and low-spec build defaults."},
     {"EDITOR UPDATE", "Build worlds with less friction",
         "New collision tools, character physics, improved lighting and the advanced FXS Editor."},
 }};
@@ -935,6 +935,8 @@ void ProjectManagerPanel::StartReleaseRefresh()
                     continue;
                 }
                 const std::string& name = asset.at("name").AsString();
+                // Releases also contain players and checksums. This picker only invites
+                // executables it can actually launch.
                 if (!name.starts_with("FadixEngine-") || !name.ends_with("Windows-x64.exe") ||
                     name.find("Player") != std::string::npos)
                 {
@@ -965,6 +967,8 @@ void ProjectManagerPanel::StartReleaseRefresh()
 
 void ProjectManagerPanel::PollVersionTasks()
 {
+    // Poll, do not wait: freezing the UI to display a loading spinner would be
+    // impressively unhelpful.
     using namespace std::chrono_literals;
     if (m_ReleaseFetch.valid() && m_ReleaseFetch.wait_for(0ms) == std::future_status::ready)
     {

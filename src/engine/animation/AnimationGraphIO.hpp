@@ -6,6 +6,7 @@
 #include <glm/vec2.hpp>
 
 #include <istream>
+#include <iomanip>
 #include <ostream>
 #include <string>
 
@@ -24,11 +25,11 @@ namespace fadix
 
 inline void WriteAnimationGraph(std::ostream& out, const AnimationGraph& graph)
 {
-    out << "graph " << graph.Name << '\n';
+    out << "graph " << std::quoted(graph.Name) << '\n';
     out << "params " << graph.Parameters.size() << '\n';
     for (const AnimGraphParameter& p : graph.Parameters)
     {
-        out << "param " << p.Name << ' '
+        out << "param " << std::quoted(p.Name) << ' '
             << static_cast<int>(p.ParamType) << ' '
             << p.FloatValue << ' '
             << (p.BoolValue ? 1 : 0) << ' '
@@ -49,7 +50,7 @@ inline void WriteAnimationGraph(std::ostream& out, const AnimationGraph& graph)
 {
     std::string token;
     if (!(in >> token) || token != "graph") return false;
-    if (!(in >> graph.Name)) return false;
+    if (!(in >> std::quoted(graph.Name))) return false;
 
     std::size_t paramCount = 0;
     if (!(in >> token) || token != "params") return false;
@@ -58,7 +59,7 @@ inline void WriteAnimationGraph(std::ostream& out, const AnimationGraph& graph)
     for (AnimGraphParameter& p : graph.Parameters)
     {
         int typeInt = 0, boolInt = 0;
-        in >> token >> p.Name >> typeInt >> p.FloatValue >> boolInt >> p.IntValue;
+        in >> token >> std::quoted(p.Name) >> typeInt >> p.FloatValue >> boolInt >> p.IntValue;
         p.ParamType = static_cast<AnimGraphParameter::Type>(typeInt);
         p.BoolValue = boolInt != 0;
     }
@@ -77,7 +78,7 @@ inline void WriteAnimationGraph(std::ostream& out, const AnimationGraph& graph)
         if (!nodePtr) return false;
         nodePtr->EditorPosition = {ex, ey};
         nodePtr->Deserialize(in);
-        in >> token; // consume "endnode"
+        if (!in || !(in >> token) || token != "endnode") return false;
     }
     if (!(in >> token) || token != "output") return false;
     in >> graph.OutputNodeIndex;

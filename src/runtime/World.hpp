@@ -25,6 +25,7 @@ public:
 
 private:
     entt::registry m_Registry;
+    // UUID lookups happen everywhere in the editor; linear scans would age badly by frame two.
     std::unordered_map<Uuid, entt::entity> m_Entities;
 };
 

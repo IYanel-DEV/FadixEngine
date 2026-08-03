@@ -185,6 +185,7 @@ bool NativeScriptLoader::Compile(
 
 void NativeScriptLoader::Unload(Loaded& loaded)
 {
+    // Destroy the instance before its DLL. Reversing this is a speedrun to undefined behavior.
     delete loaded.Instance;
     loaded.Instance = nullptr;
 #ifdef _WIN32

@@ -36,6 +36,10 @@ ScriptEditorController::ScriptEditorController()
 
 ScriptEditorController::~ScriptEditorController()
 {
+    if (m_ValidationJob.valid())
+    {
+        m_ValidationJob.wait();
+    }
     for (auto& doc : m_Docs)
     {
         DestroyDocument(doc);
@@ -487,7 +491,9 @@ void ScriptEditorController::SaveSelected()
     CommitActiveToAsset();
     if (WriteDocumentToDisk(*doc))
     {
-        ValidateActive();
+        ScheduleValidation();
+        m_ValidationDue = std::chrono::steady_clock::now();
+        MaybeRunScheduledValidation();
     }
     SetHeader();
     UpdateStatusBar();
@@ -1107,15 +1113,41 @@ void ScriptEditorController::SetValidationDebounceMs(const int ms)
 }
 
 void ScriptEditorController::ScheduleValidation()
-    {
+{
+    ++m_ValidationGeneration;
     m_ValidationPending = true;
     m_ValidationDue = std::chrono::steady_clock::now()
         + std::chrono::milliseconds(m_ValidationDebounceMs);
-    }
+}
 
 void ScriptEditorController::MaybeRunScheduledValidation()
+{
+    TickValidation();
+}
+
+void ScriptEditorController::TickValidation()
+{
+    if (m_ValidationJob.valid()
+        && m_ValidationJob.wait_for(std::chrono::seconds{0}) == std::future_status::ready)
     {
+        AsyncValidationResult completed = m_ValidationJob.get();
+        m_CompilingScript.clear();
+        if (completed.Generation == m_ValidationGeneration)
+        {
+            const int index = FindOpenIndex(completed.ScriptName);
+            if (index >= 0)
+            {
+                ApplyValidationResult(
+                    m_Docs[static_cast<std::size_t>(index)], completed.Validation);
+            }
+        }
+    }
+
     if (!m_ValidationPending || std::chrono::steady_clock::now() < m_ValidationDue)
+    {
+        return;
+    }
+    if (m_ValidationJob.valid())
     {
         return;
     }
@@ -1125,7 +1157,63 @@ void ScriptEditorController::MaybeRunScheduledValidation()
 void ScriptEditorController::FlushPendingValidation()
 {
     m_ValidationPending = false;
+    if (const auto* doc = ActiveDoc(); doc != nullptr && doc->Language == ScriptLanguage::Cpp)
+    {
+        StartAsyncValidation();
+        return;
+    }
     ValidateActive();
+}
+
+void ScriptEditorController::StartAsyncValidation()
+{
+    auto* doc = ActiveDoc();
+    if (doc == nullptr || !m_Validator || m_Database == nullptr || m_ValidationJob.valid())
+    {
+        return;
+    }
+    CommitActiveToAsset();
+    const auto asset = m_Database->Get(doc->Name);
+    if (!asset)
+    {
+        return;
+    }
+    ScriptAsset script = asset->get();
+    const std::string scriptName = doc->Name;
+    m_CompilingScript = doc->Path.filename().string();
+    const std::uint64_t generation = m_ValidationGeneration;
+    Validator validator = m_Validator;
+    m_ValidationJob = std::async(std::launch::async,
+        [validator = std::move(validator), script = std::move(script), scriptName, generation]() mutable {
+            ScriptValidationResult result = validator(script);
+            if (!result.Success)
+            {
+                const auto parsed = ParseLuaCompileError(result.Message);
+                if (parsed.Ok)
+                {
+                    if (!parsed.Message.empty())
+                    {
+                        result.Message = parsed.Message;
+                    }
+                    if (parsed.HasLocation)
+                    {
+                        result.Line = parsed.Line;
+                        result.Column = parsed.Column;
+                    }
+                }
+            }
+            return AsyncValidationResult{scriptName, generation, std::move(result)};
+        });
+}
+
+bool ScriptEditorController::IsCompiling() const noexcept
+{
+    return m_ValidationJob.valid();
+}
+
+std::string_view ScriptEditorController::CompilingScript() const noexcept
+{
+    return m_CompilingScript;
 }
 
 void ScriptEditorController::ValidateActive()

@@ -35,6 +35,7 @@ void EditorCameraInput::BeginCapture(const SDL_WindowID windowId) noexcept
     {
         SDL_Log("Camera capture: SDL_SetWindowMouseGrab(on) failed: %s", SDL_GetError());
     }
+    // SDL may send one synthetic delta here. Ignore it unless camera teleporting becomes a feature.
     m_SkipNextMotion = true;
 }
 

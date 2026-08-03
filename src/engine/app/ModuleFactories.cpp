@@ -23,6 +23,7 @@ std::unique_ptr<IWorld> CreateEditWorld()
 std::unique_ptr<IPhysicsWorld> CreatePhysicsWorldAdapter(
     ICollisionMeshProvider* meshes)
 {
+    // Optional means optional: the editor should still boot when physics stayed home.
 #ifdef FADIX_ENABLE_PHYSICS
     return CreatePhysicsWorld(meshes);
 #else

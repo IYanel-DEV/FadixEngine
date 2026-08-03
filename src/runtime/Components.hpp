@@ -613,8 +613,7 @@ struct AnimatorComponent
     std::unique_ptr<AnimationGraph> Graph;
     std::vector<AnimGraphParameter> RuntimeParameters; // per-instance, synced from Graph::Parameters on init
 
-    // Graph is a unique_ptr so we define copy/move explicitly.
-    // Copying leaves Graph null (runtime-only asset; not cloned with the entity).
+    // Graph is a unique_ptr because node playback state is per entity.
     AnimatorComponent() = default;
     AnimatorComponent(const AnimatorComponent& o)
         : Controller(o.Controller), ActiveState(o.ActiveState), ClipName(o.ClipName)
@@ -623,7 +622,8 @@ struct AnimatorComponent
         , BlendFromClipName(o.BlendFromClipName), BlendFromTime(o.BlendFromTime)
         , BlendDuration(o.BlendDuration), BlendElapsed(o.BlendElapsed)
         , EmitStartEvents(o.EmitStartEvents), PendingEvents(o.PendingEvents)
-        , Graph(nullptr), RuntimeParameters(o.RuntimeParameters)
+        , Graph(o.Graph ? CloneAnimationGraph(*o.Graph) : nullptr)
+        , RuntimeParameters(o.RuntimeParameters)
     {}
     AnimatorComponent& operator=(const AnimatorComponent& o)
     {
@@ -635,7 +635,8 @@ struct AnimatorComponent
             BlendFromClipName = o.BlendFromClipName; BlendFromTime = o.BlendFromTime;
             BlendDuration = o.BlendDuration; BlendElapsed = o.BlendElapsed;
             EmitStartEvents = o.EmitStartEvents; PendingEvents = o.PendingEvents;
-            Graph = nullptr; RuntimeParameters = o.RuntimeParameters;
+            Graph = o.Graph ? CloneAnimationGraph(*o.Graph) : nullptr;
+            RuntimeParameters = o.RuntimeParameters;
         }
         return *this;
     }

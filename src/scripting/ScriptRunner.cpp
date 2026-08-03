@@ -33,10 +33,14 @@ void ScriptRunner::BindAudio(AudioEngine* engine)
 
 void ScriptRunner::SetGameCallbacks(
     std::function<std::optional<entt::entity>(const std::string&, float, float, float)> spawnPrefab,
-    std::function<void(const std::string&)> loadScene)
+    std::function<void(const std::string&)> loadScene,
+    std::function<bool(const std::string&)> writeSave,
+    std::function<bool(const std::string&)> loadSave)
 {
     m_WorldApi.SpawnPrefab = std::move(spawnPrefab);
     m_WorldApi.LoadScene = std::move(loadScene);
+    m_WorldApi.WriteSave = std::move(writeSave);
+    m_WorldApi.LoadSave = std::move(loadSave);
 }
 
 void ScriptRunner::Start(entt::registry& registry, const SourceResolver& resolver)

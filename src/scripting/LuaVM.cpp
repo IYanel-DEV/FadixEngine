@@ -7,7 +7,7 @@
 #include "runtime/Components.hpp"
 #include "scripting/FxsApiNames.hpp"
 
-#include <SDL3/SDL_keyboard.h>
+#include <SDL3/SDL.h>
 #include <sol/sol.hpp>
 
 #include <entt/entity/registry.hpp>
@@ -130,6 +130,25 @@ struct LuaEntity
         if (reg == nullptr)
         {
             return false;
+        }
+        if (auto* animator = reg->try_get<AnimatorComponent>(e);
+            animator != nullptr && animator->Graph &&
+            animator->Graph->OutputNodeIndex >= 0 &&
+            animator->Graph->OutputNodeIndex < static_cast<int>(animator->Graph->Nodes.size()))
+        {
+            animator->Graph->ResetRuntime();
+            animator->RuntimeParameters = animator->Graph->Parameters;
+            animator->Playing = true;
+            animator->Paused = false;
+            animator->ClearBlend();
+            animator->ClearEventState();
+            if (auto* transform = reg->try_get<TransformAnimatorComponent>(e))
+            {
+                transform->Playing = false;
+                transform->Paused = false;
+                transform->ClearControllerRuntime();
+            }
+            return true;
         }
         if (auto* animator = reg->try_get<TransformAnimatorComponent>(e);
             animator != nullptr && !animator->Controller.States.empty())
@@ -260,6 +279,10 @@ struct LuaEntity
             }
             animator->CurrentTime = 0.0F;
             animator->ClearControllerRuntime();
+            if (animator->Graph)
+            {
+                animator->Graph->ResetRuntime();
+            }
             animator->Paused = false;
             animator->Playing = true;
             ClearAnimationBlend(*animator);
@@ -428,6 +451,10 @@ struct LuaEntity
             ClearAnimationBlend(*animator);
             animator->ClearEventState();
             animator->ClearControllerRuntime();
+            if (animator->Graph)
+            {
+                animator->Graph->ResetRuntime();
+            }
         }
         if (auto* animator = reg ? reg->try_get<TransformAnimatorComponent>(e) : nullptr)
         {
@@ -447,6 +474,10 @@ struct LuaEntity
         if (auto* animator = reg ? reg->try_get<AnimatorComponent>(e) : nullptr)
         {
             animator->CurrentTime = time;
+            if (animator->Graph)
+            {
+                animator->Graph->SetRuntimeTime(time);
+            }
             found = true;
         }
         if (auto* animator = reg ? reg->try_get<TransformAnimatorComponent>(e) : nullptr)
@@ -563,6 +594,209 @@ bool InputIsDown(std::string key)
     }
     return state[scancode];
 }
+
+class InputActions
+{
+public:
+    ~InputActions() { CloseGamepad(); }
+
+    bool Bind(const std::string& action, const std::string& text)
+    {
+        const std::optional<Binding> binding = ParseBinding(text);
+        const std::string key = ActionKey(action);
+        if (key.empty() || !binding)
+        {
+            return false;
+        }
+        m_Actions[key] = {*binding};
+        return true;
+    }
+
+    bool AddBinding(const std::string& action, const std::string& text)
+    {
+        const std::optional<Binding> binding = ParseBinding(text);
+        const std::string key = ActionKey(action);
+        if (key.empty() || !binding)
+        {
+            return false;
+        }
+        std::vector<Binding>& bindings = m_Actions[key];
+        if (std::find(bindings.begin(), bindings.end(), *binding) == bindings.end())
+        {
+            bindings.push_back(*binding);
+        }
+        return true;
+    }
+
+    bool Clear(const std::string& action) { return m_Actions.erase(ActionKey(action)) != 0; }
+
+    void Reset()
+    {
+        m_Actions.clear();
+        CloseGamepad();
+    }
+
+    [[nodiscard]] bool IsDown(const std::string& action)
+    {
+        const auto found = m_Actions.find(ActionKey(action));
+        if (found == m_Actions.end())
+        {
+            return false;
+        }
+        return std::any_of(found->second.begin(), found->second.end(),
+            [this](const Binding& binding) { return BindingIsDown(binding); });
+    }
+
+private:
+    enum class Kind
+    {
+        Keyboard,
+        Mouse,
+        Gamepad
+    };
+
+    struct Binding
+    {
+        Kind Type{Kind::Keyboard};
+        int Code{};
+        bool operator==(const Binding&) const = default;
+    };
+
+    static std::string Lower(std::string text)
+    {
+        std::transform(text.begin(), text.end(), text.begin(),
+            [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return text;
+    }
+
+    static std::string ActionKey(const std::string& action) { return Lower(action); }
+
+    static std::string Compact(std::string text)
+    {
+        text = Lower(std::move(text));
+        std::erase_if(text, [](const char c) { return c == ' ' || c == '_' || c == '-'; });
+        return text;
+    }
+
+    static std::optional<Binding> ParseBinding(const std::string& text)
+    {
+        if (text.empty())
+        {
+            return std::nullopt;
+        }
+        const std::size_t separator = text.find(':');
+        const std::string prefix = separator == std::string::npos
+            ? "key"
+            : Lower(text.substr(0, separator));
+        const std::string value = separator == std::string::npos
+            ? text
+            : text.substr(separator + 1);
+        if (value.empty())
+        {
+            return std::nullopt;
+        }
+        if (prefix == "key" || prefix == "keyboard")
+        {
+            const SDL_Scancode code = SDL_GetScancodeFromName(value.c_str());
+            return code == SDL_SCANCODE_UNKNOWN
+                ? std::nullopt
+                : std::optional{Binding{Kind::Keyboard, static_cast<int>(code)}};
+        }
+        const std::string token = Compact(value);
+        if (prefix == "mouse")
+        {
+            int button = 0;
+            if (token == "left") button = SDL_BUTTON_LEFT;
+            else if (token == "middle") button = SDL_BUTTON_MIDDLE;
+            else if (token == "right") button = SDL_BUTTON_RIGHT;
+            else if (token == "x1") button = SDL_BUTTON_X1;
+            else if (token == "x2") button = SDL_BUTTON_X2;
+            return button == 0
+                ? std::nullopt
+                : std::optional{Binding{Kind::Mouse, button}};
+        }
+        if (prefix == "gamepad" || prefix == "pad")
+        {
+            SDL_GamepadButton button = SDL_GAMEPAD_BUTTON_INVALID;
+            if (token == "a" || token == "south") button = SDL_GAMEPAD_BUTTON_SOUTH;
+            else if (token == "b" || token == "east") button = SDL_GAMEPAD_BUTTON_EAST;
+            else if (token == "x" || token == "west") button = SDL_GAMEPAD_BUTTON_WEST;
+            else if (token == "y" || token == "north") button = SDL_GAMEPAD_BUTTON_NORTH;
+            else if (token == "back") button = SDL_GAMEPAD_BUTTON_BACK;
+            else if (token == "guide") button = SDL_GAMEPAD_BUTTON_GUIDE;
+            else if (token == "start") button = SDL_GAMEPAD_BUTTON_START;
+            else if (token == "leftstick") button = SDL_GAMEPAD_BUTTON_LEFT_STICK;
+            else if (token == "rightstick") button = SDL_GAMEPAD_BUTTON_RIGHT_STICK;
+            else if (token == "lb" || token == "leftshoulder")
+                button = SDL_GAMEPAD_BUTTON_LEFT_SHOULDER;
+            else if (token == "rb" || token == "rightshoulder")
+                button = SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER;
+            else if (token == "dpadup") button = SDL_GAMEPAD_BUTTON_DPAD_UP;
+            else if (token == "dpaddown") button = SDL_GAMEPAD_BUTTON_DPAD_DOWN;
+            else if (token == "dpadleft") button = SDL_GAMEPAD_BUTTON_DPAD_LEFT;
+            else if (token == "dpadright") button = SDL_GAMEPAD_BUTTON_DPAD_RIGHT;
+            return button == SDL_GAMEPAD_BUTTON_INVALID
+                ? std::nullopt
+                : std::optional{Binding{Kind::Gamepad, static_cast<int>(button)}};
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] bool BindingIsDown(const Binding& binding)
+    {
+        if (binding.Type == Kind::Keyboard)
+        {
+            if ((SDL_WasInit(SDL_INIT_VIDEO) & SDL_INIT_VIDEO) == 0)
+            {
+                return false;
+            }
+            int count = 0;
+            const bool* state = SDL_GetKeyboardState(&count);
+            return state != nullptr && binding.Code >= 0 && binding.Code < count &&
+                   state[binding.Code];
+        }
+        if (binding.Type == Kind::Mouse)
+        {
+            return (SDL_WasInit(SDL_INIT_VIDEO) & SDL_INIT_VIDEO) != 0 &&
+                   (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_MASK(binding.Code)) != 0;
+        }
+        SDL_Gamepad* gamepad = Gamepad();
+        return gamepad != nullptr && SDL_GetGamepadButton(
+            gamepad, static_cast<SDL_GamepadButton>(binding.Code));
+    }
+
+    [[nodiscard]] SDL_Gamepad* Gamepad()
+    {
+        if (m_Gamepad != nullptr && !SDL_GamepadConnected(m_Gamepad))
+        {
+            CloseGamepad();
+        }
+        if (m_Gamepad != nullptr || (SDL_WasInit(SDL_INIT_GAMEPAD) & SDL_INIT_GAMEPAD) == 0)
+        {
+            return m_Gamepad;
+        }
+        int count = 0;
+        SDL_JoystickID* gamepads = SDL_GetGamepads(&count);
+        if (gamepads != nullptr && count > 0)
+        {
+            m_Gamepad = SDL_OpenGamepad(gamepads[0]);
+        }
+        SDL_free(gamepads);
+        return m_Gamepad;
+    }
+
+    void CloseGamepad()
+    {
+        if (m_Gamepad != nullptr)
+        {
+            SDL_CloseGamepad(m_Gamepad);
+            m_Gamepad = nullptr;
+        }
+    }
+
+    std::unordered_map<std::string, std::vector<Binding>> m_Actions;
+    SDL_Gamepad* m_Gamepad{};
+};
 }
 
 class LuaVMImpl
@@ -572,6 +806,7 @@ public:
 
     void Setup()
     {
+        m_InputActions.Reset();
         m_Lua = sol::state{};
         m_Lua.open_libraries(
             sol::lib::base, sol::lib::math, sol::lib::string, sol::lib::table, sol::lib::os);
@@ -628,6 +863,17 @@ public:
 
         sol::table input = m_Lua.create_table();
         input[fxs::kInputIsDown] = &InputIsDown;
+        input[fxs::kInputAction] =
+            [this](const std::string& action) { return m_InputActions.IsDown(action); };
+        input[fxs::kInputBind] = [this](const std::string& action, const std::string& binding) {
+            return m_InputActions.Bind(action, binding);
+        };
+        input[fxs::kInputAddBinding] =
+            [this](const std::string& action, const std::string& binding) {
+                return m_InputActions.AddBinding(action, binding);
+            };
+        input[fxs::kInputClear] =
+            [this](const std::string& action) { return m_InputActions.Clear(action); };
         m_Lua[fxs::kInput] = input;
 
         BindAudioTable();
@@ -640,7 +886,7 @@ public:
         BindGameTables();
     }
 
-    // World.find / Prefab.spawn / Scene.load. Bound once per Lua state; the
+    // Gameplay globals are rebound once per Lua state; the
     // closures read m_WorldApi live, so refreshing the context needs no rebind.
     void BindGameTables()
     {
@@ -692,6 +938,17 @@ public:
             }
         };
         m_Lua[fxs::kScene] = scene;
+
+        sol::table save = m_Lua.create_table();
+        save[fxs::kSaveWrite] = [this](const std::string& slot) {
+            return m_WorldApi != nullptr && m_WorldApi->WriteSave &&
+                   m_WorldApi->WriteSave(slot);
+        };
+        save[fxs::kSaveLoad] = [this](const std::string& slot) {
+            return m_WorldApi != nullptr && m_WorldApi->LoadSave &&
+                   m_WorldApi->LoadSave(slot);
+        };
+        m_Lua[fxs::kSave] = save;
     }
 
     void BindAudio(AudioEngine* engine)
@@ -849,6 +1106,7 @@ private:
     AudioEngine* m_AudioEngine{nullptr};
     ScriptWorldApi* m_WorldApi{nullptr};
     std::unordered_map<std::string, std::string> m_Sources;
+    InputActions m_InputActions;
     std::vector<std::optional<sol::environment>> m_Instances;
     std::string m_LastError;
     bool m_HasError{false};

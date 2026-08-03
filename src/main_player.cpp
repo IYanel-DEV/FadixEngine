@@ -81,6 +81,7 @@ namespace
             options.ProjectFile = beside;
         }
     }
+    // Command-line flags win; the exported manifest supplies defaults. Surprises belong in gameplay.
     const auto manifest = exeDir / "export.manifest.json";
     if (std::filesystem::exists(manifest))
     {

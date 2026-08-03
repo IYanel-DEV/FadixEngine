@@ -25,6 +25,8 @@
 #include "editor/scripting/ScriptEditorController.hpp"
 
 #include <filesystem>
+#include <array>
+#include <cstddef>
 #include <memory>
 #include <optional>
 
@@ -80,6 +82,7 @@ private:
     void SaveGraphicsSettings();
     void ApplyGraphicsPreferences();
     void DrawGraphicsWindow();
+    void DrawProfilerWindow();
     void CommandNewScene();
     void CommandOpenScene();
     void CommandSaveScene();
@@ -125,6 +128,12 @@ private:
     std::optional<std::filesystem::path> m_PendingSceneAsset;
     float m_AppliedDpiScale{1.0F};
     float m_FrameDelta{0.0F};
+    std::array<float, 180> m_FrameTimeHistory{};
+    std::array<float, 180> m_RenderTimeHistory{};
+    std::array<float, 180> m_GpuTimeHistory{};
+    std::size_t m_ProfilerCursor{0};
+    std::size_t m_ProfilerSamples{0};
+    bool m_ProfilerPaused{false};
     bool m_Running{true};
 };
 }

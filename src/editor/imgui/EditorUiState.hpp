@@ -118,5 +118,11 @@ struct EditorUiState
 
     std::string IniPath;
     std::string DefaultIniPath;
+
+    // Keep new shell-only state at the end so cached panel objects retain the
+    // offsets of the long-lived workspace fields above.
+    bool ShowProfiler{false};
+    bool CompilationActive{false};
+    std::string CompilationText;
 };
 }
