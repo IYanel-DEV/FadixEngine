@@ -572,7 +572,12 @@ void AssetDatabase::PollImports()
             ++iterator;
         }
     }
-    PollHotReimports();
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= m_NextHotReimportCheck)
+    {
+        m_NextHotReimportCheck = now + std::chrono::seconds{1};
+        PollHotReimports();
+    }
 }
 
 std::span<const AssetMetadata> AssetDatabase::List() const noexcept

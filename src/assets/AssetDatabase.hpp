@@ -3,6 +3,7 @@
 #include "engine/assets/IAssetDatabase.hpp"
 #include "engine/assets/MaterialAsset.hpp"
 
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -81,6 +82,7 @@ private:
     std::vector<AssetImportStatus> m_Statuses;
     std::unordered_map<AssetHandle, std::filesystem::file_time_type> m_SourceTimestamps;
     std::mutex m_StateMutex;
+    std::chrono::steady_clock::time_point m_NextHotReimportCheck{};
 };
 
 [[nodiscard]] std::unique_ptr<IAssetDatabase> CreateAssetDatabase(
