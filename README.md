@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.9.136-2584d8">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.9.138-2584d8">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-0078d4">
   <img alt="Language" src="https://img.shields.io/badge/C%2B%2B-20-00599c">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-green"></a>
@@ -22,15 +22,32 @@
 
 Fadix combines a dockable Dear ImGui editor with an SDL GPU renderer, scene editing, scripting, asset management, audio, and 2D/3D physics. Projects are stored outside the engine checkout and begin from an Empty 2D or Empty 3D template.
 
-Current release: **0.9.136**
+Current release: **0.9.138**
 
 ## Download
 
-Windows users can download `FadixEngine-0.9.136-Windows-x64.exe` from the
+Windows users can download `FadixEngine-0.9.138-Windows-x64.exe` from the
 [latest GitHub release](https://github.com/IYanel-DEV/FadixEngine/releases/latest).
 It is a portable editor: no source checkout, compiler, build step, or separate
 engine asset folder is required. Fadix unpacks its embedded runtime resources
 into the user's local application cache when it starts.
+
+## What's new in 0.9.138
+
+**Performance and Low-Spec PC Update**
+
+- **Frame-rate throttling** — editor now sleeps between frames to respect configurable FPS
+  limits: 60 FPS foreground, 30 FPS unfocused, and 5 FPS minimized (Balanced preset defaults).
+- **Performance presets** — Low Spec (45/15/5 FPS), Balanced (60/30/5 FPS), and Full Quality
+  (unlimited/60/15 FPS) presets accessible via View > Performance.
+- **Settings persistence** — performance preferences saved to `Saved/Editor/performance.json`
+  per project and restored on next open.
+- **Asset polling debounce** — texture hot-reimport checks reduced from once per frame to once
+  per second, eliminating a large source of idle filesystem I/O on projects with many textures.
+- **Diagnostics** — the Performance window shows live FPS, frame time, focus state, and import
+  queue depth.
+- **Build system** — `build.bat` already uses 2-job low-priority builds and reuses the CMake
+  cache; artifact filenames updated to 0.9.138.
 
 ## What's new in 0.9.136
 
@@ -93,8 +110,8 @@ To produce the portable Windows release executables, run:
 The release artifacts are written to:
 
 ```text
-artifacts\FadixEngine-0.9.136-Windows-x64.exe
-artifacts\FadixPlayer-0.9.136-Windows-x64.exe
+artifacts\FadixEngine-0.9.138-Windows-x64.exe
+artifacts\FadixPlayer-0.9.138-Windows-x64.exe
 ```
 
 ### Manual CMake build
