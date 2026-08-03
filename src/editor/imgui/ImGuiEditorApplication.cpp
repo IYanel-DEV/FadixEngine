@@ -1136,6 +1136,7 @@ void ImGuiEditorApplication::ApplyPerformancePreferences()
     m_FpsForeground = m_PerfPrefs.FpsForeground;
     m_FpsUnfocused = m_PerfPrefs.FpsUnfocused;
     m_FpsMinimized = m_PerfPrefs.FpsMinimized;
+    SavePerformanceSettings();
 }
 
 void ImGuiEditorApplication::DrawPerformanceWindow()
@@ -1233,7 +1234,6 @@ void ImGuiEditorApplication::DrawPerformanceWindow()
     if (changed)
     {
         ApplyPerformancePreferences();
-        SavePerformanceSettings();
     }
 
     ImGui::End();

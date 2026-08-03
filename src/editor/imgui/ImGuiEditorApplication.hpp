@@ -143,7 +143,7 @@ private:
     bool m_ProfilerPaused{false};
     bool m_Running{true};
 
-    // Performance throttle (populated from PerformancePreferences in Task 3)
+    // Throttle limits; set by ApplyPerformancePreferences()
     float m_FpsForeground{60.0F};   // 0 = unlimited
     float m_FpsUnfocused{30.0F};
     float m_FpsMinimized{5.0F};
