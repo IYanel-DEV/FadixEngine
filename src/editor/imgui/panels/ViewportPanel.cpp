@@ -972,6 +972,10 @@ void ViewportPanel::DrawSceneToolbar(
     {
         camera.SetProjectionMode(
             is2D ? ViewportProjectionMode::Perspective : ViewportProjectionMode::Ortho2D);
+        if (m_ProjectionModeChanged)
+        {
+            m_ProjectionModeChanged();
+        }
     }
     if (is2D)
     {
@@ -1194,6 +1198,7 @@ void ViewportPanel::Draw(
     SDL_Window* window)
 {
     static_cast<void>(document);
+    static_cast<void>(history);
     const float dpi =
         window != nullptr ? std::max(SDL_GetWindowDisplayScale(window), 0.01F) : 1.0F;
 

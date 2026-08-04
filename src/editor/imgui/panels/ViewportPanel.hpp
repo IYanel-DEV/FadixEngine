@@ -127,6 +127,12 @@ public:
         m_QualityChanged = std::move(handler);
     }
 
+    /// Invoked when the user toggles 2D/3D viewport mode (for persistence).
+    void SetProjectionModeChangedHandler(std::function<void()> handler)
+    {
+        m_ProjectionModeChanged = std::move(handler);
+    }
+
     /// Independent per-view quality presets. Scene View defaults to Low, Game
     /// View to High; Play does not change either (Game already renders High).
     void SetGraphicsPreferences(const GraphicsPreferences& prefs);
@@ -204,6 +210,7 @@ private:
     std::function<void(const AssetDragPayload&, const glm::vec3&)> m_MeshDropHandler;
     std::function<void(const AssetDragPayload&, const glm::vec2&)> m_Sprite2DDropHandler;
     std::function<void()> m_QualityChanged;
+    std::function<void()> m_ProjectionModeChanged;
     GraphicsPreferences m_GraphicsPrefs{GraphicsPreferences::Defaults()};
     TilemapPanel* m_TilemapPanel{nullptr};
 };

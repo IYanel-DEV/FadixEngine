@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/camera/EditorMode.hpp"
 #include "engine/render/RenderQuality.hpp"
 
 #include <string>
@@ -18,6 +19,7 @@ struct GraphicsPreferences
     int ShadowResolutionCap{0};   // 0 = follow quality
     int SpotShadowBudgetCap{0};   // 0 = follow quality
     int PointShadowBudgetCap{0};  // 0 = follow quality
+    ViewportProjectionMode ProjectionMode{ViewportProjectionMode::Perspective};
 
     [[nodiscard]] static GraphicsPreferences Defaults() noexcept;
     void ResetToDefaults() noexcept { *this = Defaults(); }
