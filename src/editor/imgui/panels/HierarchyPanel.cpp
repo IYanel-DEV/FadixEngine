@@ -13,9 +13,12 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace fadix::editor
@@ -227,6 +230,141 @@ bool HierarchyPanel::DuplicateMulti(SceneEditor& scene, EditorUiState& ui)
     return true;
 }
 
+void HierarchyPanel::DrawCreateItems(SceneEditor& scene, EditorUiState& ui, const Uuid& parent)
+{
+    // Every preset is one undoable AddEntityCommand carrying its components, so
+    // Undo removes the whole entity (and its parenting) in a single step. Never
+    // mutate the registry after the command is pushed.
+    auto spawn = [&](const char* name, auto&& setup) {
+        auto command = std::make_unique<AddEntityCommand>(scene.World(), name, parent);
+        const Uuid created = command->EntityId();
+        setup(*command);
+        scene.History().Push(std::move(command));
+        SelectOnly(scene, created, true);
+        ui.StatusText = std::string{"Created "} + name;
+        ImGui::CloseCurrentPopup();
+    };
+
+    if (ImGui::MenuItem("Empty"))
+    {
+        spawn("Entity", [](AddEntityCommand&) {});
+    }
+    if (ImGui::BeginMenu("2D"))
+    {
+        if (ImGui::MenuItem("Sprite 2D"))
+        {
+            spawn("Sprite 2D", [](AddEntityCommand& c) {
+                c.SetSprite2D(Sprite2DComponent{}); // opaque white tint by default
+            });
+        }
+        if (ImGui::MenuItem("Animated Sprite 2D"))
+        {
+            spawn("Animated Sprite 2D", [](AddEntityCommand& c) {
+                c.SetSprite2D(Sprite2DComponent{});
+                c.SetSpriteFrameAnimator(SpriteFrameAnimatorComponent{});
+            });
+        }
+        if (ImGui::MenuItem("Tile Map 2D"))
+        {
+            spawn("Tile Map 2D",
+                [](AddEntityCommand& c) { c.SetTileMap(MakeDefaultTileMap()); });
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Camera 2D"))
+        {
+            spawn("Camera 2D", [](AddEntityCommand& c) {
+                CameraComponent cam;
+                cam.Orthographic = true;
+                cam.OrthoSize = 5.0F;
+                c.SetCamera(cam);
+            });
+        }
+        ImGui::Separator();
+        const auto makeBody = [](Body2DType type, bool sensor) {
+            return [type, sensor](AddEntityCommand& c) {
+                RigidBody2DComponent rb;
+                rb.Type = type;
+                c.SetRigidBody2D(rb);
+                Collider2DComponent col;
+                col.Sensor = sensor;
+                c.SetCollider2D(col);
+            };
+        };
+        if (ImGui::MenuItem("Static Body 2D"))
+        {
+            spawn("Static Body 2D", makeBody(Body2DType::Static, false));
+        }
+        if (ImGui::MenuItem("Kinematic Body 2D"))
+        {
+            spawn("Kinematic Body 2D", makeBody(Body2DType::Kinematic, false));
+        }
+        if (ImGui::MenuItem("Dynamic Body 2D"))
+        {
+            spawn("Dynamic Body 2D", makeBody(Body2DType::Dynamic, false));
+        }
+        if (ImGui::MenuItem("Area 2D"))
+        {
+            spawn("Area 2D", makeBody(Body2DType::Static, true));
+        }
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("Mesh"))
+    {
+        const auto mesh = [](MeshKind kind) {
+            return [kind](AddEntityCommand& c) {
+                MeshComponent m;
+                m.Kind = kind;
+                c.SetMesh(std::move(m));
+            };
+        };
+        if (ImGui::MenuItem("Cube")) { spawn("Cube", mesh(MeshKind::Cube)); }
+        if (ImGui::MenuItem("Sphere")) { spawn("Sphere", mesh(MeshKind::Sphere)); }
+        if (ImGui::MenuItem("Plane")) { spawn("Plane", mesh(MeshKind::Plane)); }
+        if (ImGui::MenuItem("Cylinder")) { spawn("Cylinder", mesh(MeshKind::Cylinder)); }
+        if (ImGui::MenuItem("Capsule")) { spawn("Capsule", mesh(MeshKind::Capsule)); }
+        ImGui::EndMenu();
+    }
+    if (ImGui::MenuItem("Camera"))
+    {
+        spawn("Camera", [](AddEntityCommand& c) { c.SetCamera(CameraComponent{}); });
+    }
+    if (ImGui::BeginMenu("Light"))
+    {
+        if (ImGui::MenuItem("Sun"))
+        {
+            spawn("Sun Light",
+                [](AddEntityCommand& c) { c.SetDirectionalLight(MakeSunLight()); });
+        }
+        if (ImGui::MenuItem("Moon"))
+        {
+            spawn("Moon Light",
+                [](AddEntityCommand& c) { c.SetDirectionalLight(MakeMoonLight()); });
+        }
+        if (ImGui::MenuItem("Directional"))
+        {
+            spawn("Directional Light", [](AddEntityCommand& c) {
+                c.SetDirectionalLight(DirectionalLightComponent{});
+            });
+        }
+        if (ImGui::MenuItem("Point"))
+        {
+            spawn("Point Light",
+                [](AddEntityCommand& c) { c.SetPointLight(PointLightComponent{}); });
+        }
+        if (ImGui::MenuItem("Spot"))
+        {
+            spawn("Spot Light",
+                [](AddEntityCommand& c) { c.SetSpotLight(SpotLightComponent{}); });
+        }
+        ImGui::EndMenu();
+    }
+    if (ImGui::MenuItem("Environment"))
+    {
+        spawn("Environment",
+            [](AddEntityCommand& c) { c.SetEnvironment(EnvironmentComponent{}); });
+    }
+}
+
 void HierarchyPanel::DrawToolbar(SceneEditor& scene, EditorUiState& ui)
 {
     if (ImGui::Button(FADIX_ICON_PLUS " Create"))
@@ -235,112 +373,7 @@ void HierarchyPanel::DrawToolbar(SceneEditor& scene, EditorUiState& ui)
     }
     if (ImGui::BeginPopup("##hier_create"))
     {
-        auto spawn = [&](const char* name, auto&& setup) {
-            const Uuid parent = scene.SceneRootId().value_or(Uuid{});
-            auto command = std::make_unique<AddEntityCommand>(scene.World(), name, parent);
-            const Uuid created = command->EntityId();
-            setup(*command);
-            scene.History().Push(std::move(command));
-            SelectOnly(scene, created, true);
-            ui.StatusText = std::string{"Created "} + name;
-            ImGui::CloseCurrentPopup();
-        };
-        if (ImGui::MenuItem("Empty"))
-        {
-            if (const auto id = scene.CreateEntity("Entity"))
-            {
-                SelectOnly(scene, *id, true);
-                ui.StatusText = "Created entity";
-            }
-        }
-        if (ImGui::BeginMenu("Mesh"))
-        {
-            if (ImGui::MenuItem("Cube"))
-            {
-                spawn("Cube", [](AddEntityCommand& c) {
-                    MeshComponent m;
-                    m.Kind = MeshKind::Cube;
-                    c.SetMesh(std::move(m));
-                });
-            }
-            if (ImGui::MenuItem("Sphere"))
-            {
-                spawn("Sphere", [](AddEntityCommand& c) {
-                    MeshComponent m;
-                    m.Kind = MeshKind::Sphere;
-                    c.SetMesh(std::move(m));
-                });
-            }
-            if (ImGui::MenuItem("Plane"))
-            {
-                spawn("Plane", [](AddEntityCommand& c) {
-                    MeshComponent m;
-                    m.Kind = MeshKind::Plane;
-                    c.SetMesh(std::move(m));
-                });
-            }
-            if (ImGui::MenuItem("Cylinder"))
-            {
-                spawn("Cylinder", [](AddEntityCommand& c) {
-                    MeshComponent m;
-                    m.Kind = MeshKind::Cylinder;
-                    c.SetMesh(std::move(m));
-                });
-            }
-            if (ImGui::MenuItem("Capsule"))
-            {
-                spawn("Capsule", [](AddEntityCommand& c) {
-                    MeshComponent m;
-                    m.Kind = MeshKind::Capsule;
-                    c.SetMesh(std::move(m));
-                });
-            }
-            ImGui::EndMenu();
-        }
-        if (ImGui::MenuItem("Camera"))
-        {
-            spawn("Camera", [](AddEntityCommand& c) { c.SetCamera(CameraComponent{}); });
-        }
-        if (ImGui::BeginMenu("Light"))
-        {
-            if (ImGui::MenuItem("Sun"))
-            {
-                spawn("Sun Light", [](AddEntityCommand& c) {
-                    c.SetDirectionalLight(MakeSunLight());
-                });
-            }
-            if (ImGui::MenuItem("Moon"))
-            {
-                spawn("Moon Light", [](AddEntityCommand& c) {
-                    c.SetDirectionalLight(MakeMoonLight());
-                });
-            }
-            if (ImGui::MenuItem("Directional"))
-            {
-                spawn("Directional Light", [](AddEntityCommand& c) {
-                    c.SetDirectionalLight(DirectionalLightComponent{});
-                });
-            }
-            if (ImGui::MenuItem("Point"))
-            {
-                spawn("Point Light", [](AddEntityCommand& c) {
-                    c.SetPointLight(PointLightComponent{});
-                });
-            }
-            if (ImGui::MenuItem("Spot"))
-            {
-                spawn("Spot Light", [](AddEntityCommand& c) {
-                    c.SetSpotLight(SpotLightComponent{});
-                });
-            }
-            ImGui::EndMenu();
-        }
-        if (ImGui::MenuItem("Environment"))
-        {
-            spawn("Environment", [](AddEntityCommand& c) {
-                c.SetEnvironment(EnvironmentComponent{});
-            });
-        }
+        DrawCreateItems(scene, ui, scene.SceneRootId().value_or(Uuid{}));
         ImGui::EndPopup();
     }
     ImGui::SameLine();
@@ -400,12 +433,21 @@ void HierarchyPanel::DrawContextMenu(SceneEditor& scene, const Uuid& id, EditorU
             }
         }
     }
+    if (ImGui::MenuItem("Duplicate"))
+    {
+        if (!IsMultiSelected(id))
+        {
+            SelectOnly(scene, id, false);
+        }
+        DuplicateMulti(scene, ui);
+    }
     if (ImGui::MenuItem("Copy UUID"))
     {
         const std::string uuid = id.ToString();
         ImGui::SetClipboardText(uuid.c_str());
         ui.StatusText = "Copied entity UUID";
     }
+    ImGui::Separator();
     std::optional<Uuid> parent;
     if (const auto entity = scene.World().Find(id))
     {
@@ -417,27 +459,16 @@ void HierarchyPanel::DrawContextMenu(SceneEditor& scene, const Uuid& id, EditorU
             parent = relationship->Parent;
         }
     }
+    if (ImGui::BeginMenu("Create Child"))
+    {
+        // Child is parented to this entity as part of the single AddEntityCommand.
+        DrawCreateItems(scene, ui, id);
+        ImGui::EndMenu();
+    }
     if (ImGui::MenuItem("Select Parent", nullptr, false, parent.has_value()))
     {
         SelectOnly(scene, *parent, true);
         ui.StatusText = "Selected parent entity";
-    }
-    if (ImGui::MenuItem("Duplicate"))
-    {
-        if (!IsMultiSelected(id))
-        {
-            SelectOnly(scene, id, false);
-        }
-        DuplicateMulti(scene, ui);
-    }
-    if (ImGui::MenuItem("Create Child"))
-    {
-        if (const auto child = scene.CreateEntity("Entity"))
-        {
-            scene.Reparent(*child, id);
-            SelectOnly(scene, *child, true);
-            ui.StatusText = "Created child entity";
-        }
     }
     if (ImGui::MenuItem("Select Children"))
     {
@@ -456,6 +487,7 @@ void HierarchyPanel::DrawContextMenu(SceneEditor& scene, const Uuid& id, EditorU
             ui.StatusText = "Selected " + std::to_string(m_Multi.size()) + " children";
         }
     }
+    ImGui::Separator();
     const bool canDelete = !scene.IsSceneRoot(id);
     if (canDelete && ImGui::MenuItem(m_Multi.size() > 1 ? "Delete Selected" : "Delete"))
     {
@@ -527,71 +559,100 @@ void HierarchyPanel::DrawTree(SceneEditor& scene, EditorUiState& ui)
         ImGui::TextDisabled("Ctrl+click multi · Shift+click range · Del delete · F2 rename");
     }
 
+    // Build parent -> children (in DFS order) so the flat BuildHierarchy() list
+    // renders as a real collapsible tree. Keyed by Uuid string for a stable hash.
+    std::unordered_set<std::string> visibleIds;
     for (const auto& node : visible)
     {
-        ImGui::PushID(node.Id.ToString().c_str());
-        const int indentLevels = node.IsRoot ? 0 : std::max(node.Depth, 1);
-        std::string label(static_cast<std::size_t>(indentLevels) * 4, ' ');
-        label += HierarchyGlyph(node.Icon);
-        label += ' ';
-        label += node.Name;
-        label += ComponentBadges(scene, node.Id);
-
-        const bool selected = IsMultiSelected(node.Id);
-        bool visibleInEditor = true;
-        if (const auto entity = scene.World().Find(node.Id))
+        visibleIds.insert(node.Id.ToString());
+    }
+    std::unordered_map<std::string, std::vector<const SceneEditor::HierarchyNode*>> childrenByParent;
+    std::vector<const SceneEditor::HierarchyNode*> roots;
+    for (const auto& node : visible)
+    {
+        const bool parented = !node.IsRoot && node.Parent.IsValid() &&
+            visibleIds.count(node.Parent.ToString()) > 0;
+        if (parented)
         {
-            if (const auto* visibility =
-                    scene.World().Registry().try_get<VisibilityComponent>(*entity))
-            {
-                visibleInEditor = visibility->VisibleInEditor;
-            }
-        }
-        if (!visibleInEditor)
-        {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-        }
-        if (ImGui::SmallButton(FADIX_ICON_EYE "##visibility"))
-        {
-            if (scene.ToggleEditorVisibility(node.Id))
-            {
-                ui.StatusText = visibleInEditor ? "Hidden in editor" : "Shown in editor";
-            }
-        }
-        if (!visibleInEditor)
-        {
-            ImGui::PopStyleColor();
-        }
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip(visibleInEditor ? "Hide in Scene View" : "Show in Scene View");
-        }
-        ImGui::SameLine(0.0F, 4.0F);
-        if (m_RenameTarget && *m_RenameTarget == node.Id)
-        {
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + static_cast<float>(indentLevels) * 16.0F);
-            ImGui::SetNextItemWidth(-1.0F);
-            if (ImGui::InputText(
-                    "##rename",
-                    m_RenameBuf,
-                    sizeof(m_RenameBuf),
-                    ImGuiInputTextFlags_EnterReturnsTrue |
-                        ImGuiInputTextFlags_AutoSelectAll))
-            {
-                scene.SetSelection(node.Id, false);
-                scene.RenameSelection(m_RenameBuf);
-                m_RenameTarget.reset();
-                ui.StatusText = "Renamed entity";
-            }
-            if (ImGui::IsKeyPressed(ImGuiKey_Escape))
-            {
-                m_RenameTarget.reset();
-            }
+            childrenByParent[node.Parent.ToString()].push_back(&node);
         }
         else
         {
-            const ImGuiSelectableFlags flags = ImGuiSelectableFlags_AllowDoubleClick;
-            if (ImGui::Selectable(label.c_str(), selected, flags))
+            roots.push_back(&node);
+        }
+    }
+
+    // Per-row renderer, recursive so children get true tree indentation.
+    std::function<void(const SceneEditor::HierarchyNode&)> renderNode =
+        [&](const SceneEditor::HierarchyNode& node) {
+            ImGui::PushID(node.Id.ToString().c_str());
+            const auto childIt = childrenByParent.find(node.Id.ToString());
+            const bool hasChildren =
+                childIt != childrenByParent.end() && !childIt->second.empty();
+
+            bool visibleInEditor = true;
+            if (const auto entity = scene.World().Find(node.Id))
+            {
+                if (const auto* visibility =
+                        scene.World().Registry().try_get<VisibilityComponent>(*entity))
+                {
+                    visibleInEditor = visibility->VisibleInEditor;
+                }
+            }
+
+            // Inline rename replaces the row label while active.
+            if (m_RenameTarget && *m_RenameTarget == node.Id)
+            {
+                ImGui::SetNextItemWidth(-1.0F);
+                if (ImGui::InputText("##rename", m_RenameBuf, sizeof(m_RenameBuf),
+                        ImGuiInputTextFlags_EnterReturnsTrue |
+                            ImGuiInputTextFlags_AutoSelectAll))
+                {
+                    scene.SetSelection(node.Id, false);
+                    scene.RenameSelection(m_RenameBuf);
+                    m_RenameTarget.reset();
+                    ui.StatusText = "Renamed entity";
+                }
+                if (ImGui::IsKeyPressed(ImGuiKey_Escape))
+                {
+                    m_RenameTarget.reset();
+                }
+                ImGui::PopID();
+                return;
+            }
+
+            std::string label = HierarchyGlyph(node.Icon);
+            label += ' ';
+            label += node.Name;
+            label += ComponentBadges(scene, node.Id);
+
+            ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
+                ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
+            if (IsMultiSelected(node.Id))
+            {
+                flags |= ImGuiTreeNodeFlags_Selected;
+            }
+            if (!hasChildren)
+            {
+                flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+            }
+            if (node.IsRoot)
+            {
+                ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+            }
+            if (!visibleInEditor)
+            {
+                ImGui::PushStyleColor(
+                    ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            }
+            const bool open = ImGui::TreeNodeEx("##node", flags, "%s", label.c_str());
+            if (!visibleInEditor)
+            {
+                ImGui::PopStyleColor();
+            }
+
+            // Left click on the label (not the arrow — OpenOnArrow) selects.
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
             {
                 const ImGuiIO& io = ImGui::GetIO();
                 if (io.KeyShift)
@@ -606,6 +667,11 @@ void HierarchyPanel::DrawTree(SceneEditor& scene, EditorUiState& ui)
                 {
                     SelectOnly(scene, node.Id, true);
                 }
+            }
+            // Right click targets the entity (select it if not already selected).
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Right) && !IsMultiSelected(node.Id))
+            {
+                SelectOnly(scene, node.Id, false);
             }
             if (node.IsRoot && ImGui::IsItemHovered())
             {
@@ -631,8 +697,7 @@ void HierarchyPanel::DrawTree(SceneEditor& scene, EditorUiState& ui)
             }
             if (ImGui::BeginDragDropTarget())
             {
-                if (const ImGuiPayload* payload =
-                        ImGui::AcceptDragDropPayload("FADIX_ENTITY"))
+                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("FADIX_ENTITY"))
                 {
                     const char* text = static_cast<const char*>(payload->Data);
                     if (const auto src = Uuid::Parse(text ? text : ""))
@@ -660,9 +725,61 @@ void HierarchyPanel::DrawTree(SceneEditor& scene, EditorUiState& ui)
                 ImGui::EndDragDropTarget();
             }
             DrawContextMenu(scene, node.Id, ui);
-        }
 
-        ImGui::PopID();
+            // Visibility toggle, right-aligned on the row.
+            const float eyeW = ImGui::GetFrameHeight();
+            ImGui::SameLine(ImGui::GetContentRegionMax().x - eyeW);
+            if (!visibleInEditor)
+            {
+                ImGui::PushStyleColor(
+                    ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            }
+            if (ImGui::SmallButton(FADIX_ICON_EYE "##visibility"))
+            {
+                if (scene.ToggleEditorVisibility(node.Id))
+                {
+                    ui.StatusText = visibleInEditor ? "Hidden in editor" : "Shown in editor";
+                }
+            }
+            if (!visibleInEditor)
+            {
+                ImGui::PopStyleColor();
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip(visibleInEditor ? "Hide in Scene View" : "Show in Scene View");
+            }
+
+            if (open && hasChildren)
+            {
+                for (const SceneEditor::HierarchyNode* child : childIt->second)
+                {
+                    renderNode(*child);
+                }
+            }
+            if (open && hasChildren)
+            {
+                ImGui::TreePop();
+            }
+            ImGui::PopID();
+        };
+
+    for (const SceneEditor::HierarchyNode* root : roots)
+    {
+        renderNode(*root);
+    }
+
+    // Right-click empty space -> root-level Create menu. NoOpenOverItems keeps it
+    // from firing on top of an entity row (those use the per-item context menu).
+    if (ImGui::BeginPopupContextWindow("##hier_blank_ctx",
+            ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
+    {
+        if (ImGui::BeginMenu("Create"))
+        {
+            DrawCreateItems(scene, ui, scene.SceneRootId().value_or(Uuid{}));
+            ImGui::EndMenu();
+        }
+        ImGui::EndPopup();
     }
 
     if (!m_RenameTarget && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&

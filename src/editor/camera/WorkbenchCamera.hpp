@@ -21,6 +21,9 @@ public:
 
     void Fly(glm::vec3 localDirection, float deltaSeconds, bool fast);
     void Look(glm::vec2 delta);
+    /// Orbit the camera so it looks along the given world-space forward direction
+    /// (pivot and orbit distance preserved). Used by the viewport orientation widget.
+    void SetLookDirection(glm::vec3 forward) noexcept;
     void SetViewportSize(glm::vec2 size) noexcept;
     void SetPerspective(float verticalFieldOfViewDegrees, float nearPlane, float farPlane) noexcept;
     void SetFlySpeed(float unitsPerSecond) noexcept;

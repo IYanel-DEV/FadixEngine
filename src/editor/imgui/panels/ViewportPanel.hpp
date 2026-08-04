@@ -133,6 +133,16 @@ public:
         m_ProjectionModeChanged = std::move(handler);
     }
 
+    /// Invoked when a floating overlay (transform rail / orientation gizmo) is
+    /// shown or hidden, so the shell can persist the new visibility state.
+    void SetWidgetVisibilityChangedHandler(std::function<void()> handler)
+    {
+        m_WidgetVisibilityChanged = std::move(handler);
+    }
+
+    [[nodiscard]] bool TransformRailVisible() const noexcept { return m_TransformRailVisible; }
+    [[nodiscard]] bool OrientationGizmoVisible() const noexcept { return m_OrientationGizmoVisible; }
+
     /// Independent per-view quality presets. Scene View defaults to Low, Game
     /// View to High; Play does not change either (Game already renders High).
     void SetGraphicsPreferences(const GraphicsPreferences& prefs);
@@ -169,6 +179,14 @@ private:
     void DrawQualityCombo(View& view, const char* id);
     void DrawSceneToolbar(
         EditorUiState& ui, CameraModule& camera, GizmoSystem& gizmo, EditorPlayMode playMode);
+    /// Small rounded translucent edge tab with an ImDrawList chevron (dir:
+    /// 0='<',1='>',2='v'). Feeds m_OverlayHovered; returns true when clicked.
+    [[nodiscard]] bool EdgeTab(const char* id, ImVec2 pos, ImVec2 size, int dir, const char* tip);
+    /// Floating in-viewport tool rail (Select/Move/Rotate/Scale), left edge.
+    void DrawTransformRail(const View& view);
+    /// Interactive XYZ orientation widget, top-right corner. Reacts to and drives
+    /// the edit camera orientation (3D perspective only).
+    void DrawOrientationGizmo(const View& view, CameraModule& camera);
     void DrawViewImage(View& view, const char* emptyMessage, bool showTexture);
     void MeasureView(View& view, float dpiScale);
     void EnsureSize(View& view);
@@ -211,6 +229,12 @@ private:
     std::function<void(const AssetDragPayload&, const glm::vec2&)> m_Sprite2DDropHandler;
     std::function<void()> m_QualityChanged;
     std::function<void()> m_ProjectionModeChanged;
+    std::function<void()> m_WidgetVisibilityChanged;
+    bool m_TransformRailVisible{true};
+    bool m_OrientationGizmoVisible{true};
+    // True when the cursor is over a floating overlay control this frame, so
+    // SDL-level gizmo/pick handling ignores that click (set during Draw).
+    bool m_OverlayHovered{false};
     GraphicsPreferences m_GraphicsPrefs{GraphicsPreferences::Defaults()};
     TilemapPanel* m_TilemapPanel{nullptr};
 };

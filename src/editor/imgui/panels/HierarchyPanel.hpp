@@ -18,6 +18,10 @@ private:
     void DrawToolbar(SceneEditor& scene, EditorUiState& ui);
     void DrawTree(SceneEditor& scene, EditorUiState& ui);
     void DrawContextMenu(SceneEditor& scene, const Uuid& id, EditorUiState& ui);
+    // Shared Empty/2D/Mesh/Camera/Light/Environment creation items. When parent
+    // is valid the new entity is created as its child in one undoable action;
+    // pass the scene root for root-level creation.
+    void DrawCreateItems(SceneEditor& scene, EditorUiState& ui, const Uuid& parent);
 
     void SyncMultiFromPrimary(SceneEditor& scene);
     [[nodiscard]] bool IsMultiSelected(const Uuid& id) const;

@@ -121,6 +121,9 @@ public:
     void SetBox2DBody(Box2DBodyComponent component);
     void SetSprite2D(Sprite2DComponent component);
     void SetTileMap(TileMapComponent component);
+    void SetRigidBody2D(RigidBody2DComponent component);
+    void SetCollider2D(Collider2DComponent component);
+    void SetSpriteFrameAnimator(SpriteFrameAnimatorComponent component);
 
 private:
     IWorld& m_World;

@@ -513,6 +513,15 @@ struct Sprite2DComponent
     bool PixelSnap{false};
 };
 
+// Shared Scene/Game render policy: a Sprite2D only produces real renderable
+// content when it has a texture assigned. Textureless sprites render nothing in
+// Game View (no white-quad fallback); Scene View draws an editor-only placeholder
+// instead. Single source of truth for the renderer and the 2D smoke test.
+[[nodiscard]] inline bool Sprite2DHasRenderableTexture(const Sprite2DComponent& sprite) noexcept
+{
+    return sprite.Texture.IsValid();
+}
+
 // ============ Native 2D: Physics ============
 
 enum class Body2DType : std::uint8_t

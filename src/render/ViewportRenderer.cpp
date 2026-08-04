@@ -1919,14 +1919,19 @@ private:
                 glm::scale(glm::mat4{1.0F}, {sx, sy, 1.0F}) *
                 glm::translate(glm::mat4{1.0F}, pivotOffset);
 
-            rhi::Texture* tex = nullptr;
-            if (sprite.Texture.IsValid())
+            // Unity-like: a Sprite2D with no assigned texture renders nothing
+            // (no white-quad fallback). Scene View shows an editor-only
+            // placeholder overlay instead (ViewportPanel::Draw2DSpritePlaceholders).
+            if (!Sprite2DHasRenderableTexture(sprite))
             {
-                tex = m_Cache->GetTexture(sprite.Texture, false);
+                continue;
             }
+            rhi::Texture* tex = m_Cache->GetTexture(sprite.Texture, false);
             if (tex == nullptr)
             {
-                tex = m_Cache->GetWhiteTexture();
+                // Handle assigned but not yet resident — skip this frame rather
+                // than flashing a white quad; it renders once the load completes.
+                continue;
             }
 
             TextureImportSettings samplerSettings;

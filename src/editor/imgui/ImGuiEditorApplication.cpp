@@ -710,6 +710,7 @@ void ImGuiEditorApplication::EnterWorkbench(const ProjectMetadata& project)
         m_Viewports.SetGltfMeshCache(m_GltfMeshes.get());
         m_Viewports.SetQualityChangedHandler([this]() { SaveGraphicsSettings(); });
         m_Viewports.SetProjectionModeChangedHandler([this]() { SaveGraphicsSettings(); });
+        m_Viewports.SetWidgetVisibilityChangedHandler([this]() { SaveGraphicsSettings(); });
         const bool hasGraphicsFile = std::filesystem::exists(
             project.RootPath / "Saved" / "Editor" / "graphics.json");
         LoadGraphicsSettings(project.RootPath);
@@ -1090,6 +1091,8 @@ void ImGuiEditorApplication::SaveGraphicsSettings()
     m_GraphicsPrefs.SceneQuality = m_Viewports.SceneQuality();
     m_GraphicsPrefs.GameQuality = m_Viewports.GameQuality();
     m_GraphicsPrefs.ProjectionMode = m_Camera.ProjectionMode();
+    m_GraphicsPrefs.TransformRailVisible = m_Viewports.TransformRailVisible();
+    m_GraphicsPrefs.OrientationGizmoVisible = m_Viewports.OrientationGizmoVisible();
     const std::string json = editor::StringifyGraphicsPreferences(m_GraphicsPrefs);
 
     const std::filesystem::path path = folder / "graphics.json";

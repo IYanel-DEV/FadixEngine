@@ -136,6 +136,16 @@ bool ParseGraphicsPreferences(const std::string_view json, GraphicsPreferences& 
         prefs.ProjectionMode = (tok == "2d") ? ViewportProjectionMode::Ortho2D
                                              : ViewportProjectionMode::Perspective;
     }
+    if (object.Contains("transformRailVisible") &&
+        object.at("transformRailVisible").GetType() == project_json::Value::Type::Bool)
+    {
+        prefs.TransformRailVisible = object.at("transformRailVisible").AsBool();
+    }
+    if (object.Contains("orientationGizmoVisible") &&
+        object.at("orientationGizmoVisible").GetType() == project_json::Value::Type::Bool)
+    {
+        prefs.OrientationGizmoVisible = object.at("orientationGizmoVisible").AsBool();
+    }
 
     out = prefs;
     return true;
@@ -155,6 +165,9 @@ std::string StringifyGraphicsPreferences(const GraphicsPreferences& prefs)
     document["pointShadowBudgetCap"] = project_json::Value::MakeNumber(prefs.PointShadowBudgetCap);
     document["viewportProjection"] = project_json::Value::MakeString(
         prefs.ProjectionMode == ViewportProjectionMode::Ortho2D ? "2d" : "3d");
+    document["transformRailVisible"] = project_json::Value::MakeBool(prefs.TransformRailVisible);
+    document["orientationGizmoVisible"] =
+        project_json::Value::MakeBool(prefs.OrientationGizmoVisible);
     return project_json::Stringify(document);
 }
 }

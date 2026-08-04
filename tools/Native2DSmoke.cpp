@@ -799,6 +799,71 @@ void TestTileMapDuplication()
         "original TileData modified");
 }
 
+void TestSprite2DDefaultsAndPolicy()
+{
+    using namespace fadix;
+    std::cout << "[2d-smoke] Sprite2D defaults + missing-texture render policy\n";
+
+    // New Sprite2D must default to a fully opaque white tint.
+    const Sprite2DComponent spr;
+    Check(std::abs(spr.Tint.r - 1.0F) < 0.001F, "default tint R = 1");
+    Check(std::abs(spr.Tint.g - 1.0F) < 0.001F, "default tint G = 1");
+    Check(std::abs(spr.Tint.b - 1.0F) < 0.001F, "default tint B = 1");
+    Check(std::abs(spr.Tint.a - 1.0F) < 0.001F, "default tint A = 1 (opaque)");
+
+    // Shared Scene/Game policy: a textureless sprite is not renderable content
+    // (no white-quad fallback); assigning a texture makes it renderable.
+    Check(!Sprite2DHasRenderableTexture(spr), "textureless Sprite2D is not renderable");
+    Sprite2DComponent textured = spr;
+    textured.Texture = Uuid::Generate();
+    Check(Sprite2DHasRenderableTexture(textured), "textured Sprite2D is renderable");
+}
+
+void Test2DPresetComponents()
+{
+    using namespace fadix;
+    std::cout << "[2d-smoke] Create > 2D preset component combinations\n";
+
+    // Sprite 2D preset: opaque white Sprite2D only.
+    const Sprite2DComponent sprite;
+    Check(std::abs(sprite.Tint.a - 1.0F) < 0.001F, "Sprite 2D preset opaque white");
+
+    // Animated Sprite 2D preset: Sprite2D + SpriteFrameAnimator.
+    const SpriteFrameAnimatorComponent animator;
+    Check(animator.Clips.empty(), "Animated Sprite 2D animator default empty clips");
+    Check(!animator.Playing, "Animated Sprite 2D animator not playing by default");
+
+    // Camera 2D preset: orthographic with a sensible ortho size.
+    CameraComponent cam;
+    cam.Orthographic = true;
+    cam.OrthoSize = 5.0F;
+    Check(cam.Orthographic, "Camera 2D preset is orthographic");
+    Check(std::abs(cam.OrthoSize - 5.0F) < 0.001F, "Camera 2D preset ortho size");
+    Check(!CameraComponent{}.Orthographic, "default CameraComponent is perspective");
+
+    // Physics body presets carry the right body type + a matching collider.
+    const auto makeBody = [](Body2DType type, bool sensor) {
+        RigidBody2DComponent rb;
+        rb.Type = type;
+        Collider2DComponent col;
+        col.Sensor = sensor;
+        return std::pair<RigidBody2DComponent, Collider2DComponent>{rb, col};
+    };
+    const auto staticBody = makeBody(Body2DType::Static, false);
+    Check(staticBody.first.Type == Body2DType::Static, "Static Body 2D type");
+    Check(!staticBody.second.Sensor, "Static Body 2D collider is solid");
+    const auto kinematicBody = makeBody(Body2DType::Kinematic, false);
+    Check(kinematicBody.first.Type == Body2DType::Kinematic, "Kinematic Body 2D type");
+    const auto dynamicBody = makeBody(Body2DType::Dynamic, false);
+    Check(dynamicBody.first.Type == Body2DType::Dynamic, "Dynamic Body 2D type");
+
+    // Area 2D preset: static body + sensor collider.
+    const auto area = makeBody(Body2DType::Static, true);
+    Check(area.first.Type == Body2DType::Static, "Area 2D uses a static body");
+    Check(area.second.Sensor, "Area 2D collider has Sensor enabled");
+    Check(area.second.Shape == Collider2DShape::Box, "Area 2D collider default Box shape");
+}
+
 } // namespace
 
 int main()
@@ -820,6 +885,8 @@ int main()
     TestTileMapSaveLoadAfterPaint();
     TestEmpty2DTemplateContents();
     TestTileMapDuplication();
+    TestSprite2DDefaultsAndPolicy();
+    Test2DPresetComponents();
     if (g_Failures == 0)
     {
         std::cout << "all checks passed\n";

@@ -15,6 +15,7 @@
 #include <SDL3/SDL_gpu.h>
 
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
 #include <array>
@@ -146,12 +147,17 @@ void SyncPreviewComponent(const entt::registry& source, const entt::entity sourc
     return {imgMin.x + screen.x, imgMin.y + screen.y};
 }
 
+// Subtle adaptive 2D grid. Line density is chosen from the current zoom so that
+// spacing stays visually stable: as you zoom out the finest tier fades away, and
+// as you zoom in a new finer subdivision fades in. Two tiers are drawn (minor +
+// major = minor*10), with axis lines in restrained X/Y colors on top.
 void Draw2DGrid(
     ImDrawList* drawList,
     const Ortho2DCamera& cam,
     const ImVec2 imgMin,
     const ImVec2 imgSize)
 {
+    static_cast<void>(imgSize); // caller already clips to the image rect
     const glm::vec2 viewSize = cam.ViewportSize();
     if (viewSize.x < 1.0F || viewSize.y < 1.0F)
     {
@@ -159,67 +165,56 @@ void Draw2DGrid(
     }
     const float hh = cam.OrthoHalfHeight();
     const float hw = hh * (viewSize.x / viewSize.y);
+    const float pxPerUnit = viewSize.y / std::max(2.0F * hh, 1.0e-6F);
 
-    // Pick a grid step that looks reasonable for the current zoom
-    const float log10 = std::log10(hh);
-    const float step = std::pow(10.0F, std::ceil(log10) - 1.0F);
-    const float minorStep = step * 0.1F;
+    // Minor step = smallest power of ten whose on-screen spacing is >= ~8px.
+    // Zooming in shrinks the step (adds subdivisions); zooming out grows it.
+    constexpr float kMinMinorPx = 8.0F;
+    const float minorStep =
+        std::pow(10.0F, std::ceil(std::log10(kMinMinorPx / std::max(pxPerUnit, 1.0e-6F))));
+    const float majorStep = minorStep * 10.0F;
 
     const glm::vec2 wMin = cam.Position() - glm::vec2{hw, hh};
     const glm::vec2 wMax = cam.Position() + glm::vec2{hw, hh};
 
-    // Draw minor grid (only when zoomed enough)
-    if (minorStep * viewSize.y / (2.0F * hh) > 8.0F)
-    {
-        const ImU32 minorCol = IM_COL32(60, 60, 80, 200);
-        float startX = std::floor(wMin.x / minorStep) * minorStep;
-        for (float x = startX; x <= wMax.x + minorStep; x += minorStep)
+    // Alpha ramps with on-screen spacing so dense lines fade out and freshly
+    // added subdivisions fade in smoothly rather than popping.
+    const auto tierAlpha = [](const float spacingPx, const float fadeLo, const float fadeHi) {
+        return std::clamp((spacingPx - fadeLo) / std::max(fadeHi - fadeLo, 1.0e-3F), 0.0F, 1.0F);
+    };
+    const auto drawTier = [&](const float step, const ImU32 baseColor, const float alpha) {
+        if (alpha <= 0.02F)
         {
-            const ImVec2 top = WorldToImGui({x, wMax.y}, cam, imgMin);
-            const ImVec2 bot = WorldToImGui({x, wMin.y}, cam, imgMin);
-            drawList->AddLine(top, bot, minorCol, 0.5F);
+            return;
         }
-        float startY = std::floor(wMin.y / minorStep) * minorStep;
-        for (float y = startY; y <= wMax.y + minorStep; y += minorStep)
+        const int a = static_cast<int>(alpha * static_cast<float>((baseColor >> IM_COL32_A_SHIFT) & 0xFFU));
+        const ImU32 col = (baseColor & ~(0xFFU << IM_COL32_A_SHIFT)) |
+            (static_cast<ImU32>(a) << IM_COL32_A_SHIFT);
+        for (float x = std::floor(wMin.x / step) * step; x <= wMax.x + step; x += step)
         {
-            const ImVec2 left = WorldToImGui({wMin.x, y}, cam, imgMin);
-            const ImVec2 right = WorldToImGui({wMax.x, y}, cam, imgMin);
-            drawList->AddLine(left, right, minorCol, 0.5F);
+            drawList->AddLine(WorldToImGui({x, wMax.y}, cam, imgMin),
+                WorldToImGui({x, wMin.y}, cam, imgMin), col, 1.0F);
         }
-    }
+        for (float y = std::floor(wMin.y / step) * step; y <= wMax.y + step; y += step)
+        {
+            drawList->AddLine(WorldToImGui({wMin.x, y}, cam, imgMin),
+                WorldToImGui({wMax.x, y}, cam, imgMin), col, 1.0F);
+        }
+    };
 
-    // Draw major grid
-    const ImU32 majorCol = IM_COL32(80, 80, 110, 220);
-    {
-        float startX = std::floor(wMin.x / step) * step;
-        for (float x = startX; x <= wMax.x + step; x += step)
-        {
-            const ImVec2 top = WorldToImGui({x, wMax.y}, cam, imgMin);
-            const ImVec2 bot = WorldToImGui({x, wMin.y}, cam, imgMin);
-            drawList->AddLine(top, bot, majorCol, 1.0F);
-        }
-        float startY = std::floor(wMin.y / step) * step;
-        for (float y = startY; y <= wMax.y + step; y += step)
-        {
-            const ImVec2 left = WorldToImGui({wMin.x, y}, cam, imgMin);
-            const ImVec2 right = WorldToImGui({wMax.x, y}, cam, imgMin);
-            drawList->AddLine(left, right, majorCol, 1.0F);
-        }
-    }
+    // Low-opacity minor lines fade out as they crowd together (zoom-out);
+    // slightly stronger major lines stay steady.
+    drawTier(minorStep, IM_COL32(150, 155, 175, 46),
+        tierAlpha(minorStep * pxPerUnit, kMinMinorPx, 22.0F));
+    drawTier(majorStep, IM_COL32(165, 170, 195, 110), 1.0F);
 
-    // Draw X and Y axes
-    {
-        const ImVec2 axisXLeft = WorldToImGui({wMin.x, 0.0F}, cam, imgMin);
-        const ImVec2 axisXRight = WorldToImGui({wMax.x, 0.0F}, cam, imgMin);
-        drawList->AddLine(axisXLeft, axisXRight, IM_COL32(200, 80, 80, 220), 1.5F);
-        const ImVec2 axisYTop = WorldToImGui({0.0F, wMax.y}, cam, imgMin);
-        const ImVec2 axisYBot = WorldToImGui({0.0F, wMin.y}, cam, imgMin);
-        drawList->AddLine(axisYTop, axisYBot, IM_COL32(80, 200, 80, 220), 1.5F);
-    }
-
-    // Clip to viewport
-    drawList->PushClipRect(imgMin, {imgMin.x + imgSize.x, imgMin.y + imgSize.y}, true);
-    drawList->PopClipRect();
+    // Restrained X (red) / Y (green) axes.
+    const ImVec2 axisXLeft = WorldToImGui({wMin.x, 0.0F}, cam, imgMin);
+    const ImVec2 axisXRight = WorldToImGui({wMax.x, 0.0F}, cam, imgMin);
+    drawList->AddLine(axisXLeft, axisXRight, IM_COL32(188, 96, 96, 190), 1.4F);
+    const ImVec2 axisYTop = WorldToImGui({0.0F, wMax.y}, cam, imgMin);
+    const ImVec2 axisYBot = WorldToImGui({0.0F, wMin.y}, cam, imgMin);
+    drawList->AddLine(axisYTop, axisYBot, IM_COL32(96, 176, 112, 190), 1.4F);
 }
 
 void Draw2DEntityOverlays(
@@ -338,6 +333,132 @@ void Draw2DEntityOverlays(
         }
     }
 }
+
+// Draws a crisp chevron from line primitives (no icon-font glyph dependency).
+// dir: 0 = left '<', 1 = right '>', 2 = down 'v'.
+void DrawChevron(ImDrawList* dl, const ImVec2 center, const float size, const int dir,
+    const ImU32 col, const float thickness = 1.7F)
+{
+    const float h = size * 0.5F;
+    const float w = h * 0.62F;
+    ImVec2 a{};
+    ImVec2 b{};
+    ImVec2 c{};
+    switch (dir)
+    {
+    case 0: // '<'
+        a = {center.x + w, center.y - h};
+        b = {center.x - w, center.y};
+        c = {center.x + w, center.y + h};
+        break;
+    case 1: // '>'
+        a = {center.x - w, center.y - h};
+        b = {center.x + w, center.y};
+        c = {center.x - w, center.y + h};
+        break;
+    default: // 'v'
+        a = {center.x - h, center.y - w};
+        b = {center.x, center.y + w};
+        c = {center.x + h, center.y - w};
+        break;
+    }
+    dl->AddLine(a, b, col, thickness);
+    dl->AddLine(b, c, col, thickness);
+}
+
+// Minimal "image" glyph (frame + sun + mountain) for the no-sprite placeholder.
+void DrawImageGlyph(ImDrawList* dl, const ImVec2 center, const float r, const ImU32 col)
+{
+    const ImVec2 tl{center.x - r, center.y - r * 0.8F};
+    const ImVec2 br{center.x + r, center.y + r * 0.8F};
+    dl->AddRect(tl, br, col, r * 0.18F, 0, 1.6F);
+    dl->AddCircleFilled({center.x - r * 0.4F, center.y - r * 0.35F}, r * 0.18F, col, 12);
+    const ImVec2 p0{tl.x + r * 0.12F, br.y - r * 0.12F};
+    const ImVec2 p1{center.x - r * 0.1F, center.y + r * 0.05F};
+    const ImVec2 p2{center.x + r * 0.15F, center.y + r * 0.35F};
+    const ImVec2 p3{br.x - r * 0.12F, br.y - r * 0.12F};
+    dl->AddLine(p0, p1, col, 1.6F);
+    dl->AddLine(p1, p2, col, 1.6F);
+    dl->AddLine(p2, p3, col, 1.6F);
+}
+
+// Editor-only Scene View placeholder for Sprite2D entities that have no texture.
+// The renderer draws nothing for them (no white quad), so this hatched card marks
+// where an empty sprite lives. Follows position, rotation, Size, pivot, and zoom.
+// Never drawn in Game View (only called from the Scene View 2D overlay block).
+void Draw2DSpritePlaceholders(
+    ImDrawList* drawList,
+    const Ortho2DCamera& cam,
+    const ImVec2 imgMin,
+    const IWorld& world,
+    const SceneEditor& scene)
+{
+    const std::optional<Uuid> selection = scene.Selection();
+    const entt::registry& reg = world.Registry();
+    for (const auto [entity, sprite] : reg.view<const Sprite2DComponent>().each())
+    {
+        if (Sprite2DHasRenderableTexture(sprite))
+        {
+            continue;
+        }
+        if (const auto* vis = reg.try_get<VisibilityComponent>(entity);
+            vis != nullptr && !vis->VisibleInEditor)
+        {
+            continue;
+        }
+
+        glm::vec3 position{0.0F};
+        glm::quat rotation{1.0F, 0.0F, 0.0F, 0.0F};
+        if (const auto* xform = reg.try_get<TransformComponent>(entity))
+        {
+            position = xform->Position;
+            rotation = xform->Rotation;
+        }
+        const float ox = 0.5F - sprite.Pivot.x;
+        const float oy = sprite.Pivot.y - 0.5F;
+        // World-space corners matching the renderer model: pos + R*(S*(v+pivot)).
+        const std::array<glm::vec2, 4> local{{{-0.5F, -0.5F}, {0.5F, -0.5F}, {0.5F, 0.5F},
+            {-0.5F, 0.5F}}};
+        std::array<ImVec2, 4> screen{};
+        for (std::size_t i = 0; i < 4; ++i)
+        {
+            const glm::vec3 l{(local[i].x + ox) * sprite.Size.x,
+                (local[i].y + oy) * sprite.Size.y, 0.0F};
+            const glm::vec3 wpos = position + rotation * l;
+            screen[i] = WorldToImGui({wpos.x, wpos.y}, cam, imgMin);
+        }
+
+        const bool selected = selection && world.Find(*selection) == entity;
+
+        // Hatched translucent card + outline.
+        drawList->AddQuadFilled(screen[0], screen[1], screen[2], screen[3],
+            IM_COL32(40, 44, 52, 120));
+        const ImU32 outline = selected ? IM_COL32(90, 160, 250, 255)
+                                       : IM_COL32(150, 158, 175, 180);
+        drawList->AddQuad(screen[0], screen[1], screen[2], screen[3], outline,
+            selected ? 2.2F : 1.4F);
+        // Two hatch strokes across the card for the "empty" read.
+        drawList->AddLine(screen[0], screen[2], IM_COL32(150, 158, 175, 70), 1.0F);
+        drawList->AddLine(screen[1], screen[3], IM_COL32(150, 158, 175, 70), 1.0F);
+
+        // Centered image glyph, sized to the on-screen card, when large enough.
+        const ImVec2 center{(screen[0].x + screen[2].x) * 0.5F,
+            (screen[0].y + screen[2].y) * 0.5F};
+        float diag = std::hypot(screen[2].x - screen[0].x, screen[2].y - screen[0].y);
+        const float glyphR = std::clamp(diag * 0.18F, 5.0F, 22.0F);
+        if (diag > 26.0F)
+        {
+            DrawImageGlyph(drawList, center, glyphR, IM_COL32(190, 198, 214, 210));
+        }
+        if (diag > 90.0F)
+        {
+            const char* label = "No Sprite";
+            const ImVec2 ts = ImGui::CalcTextSize(label);
+            drawList->AddText({center.x - ts.x * 0.5F, center.y + glyphR + 3.0F},
+                IM_COL32(190, 198, 214, 200), label);
+        }
+    }
+}
 }
 
 void ViewportPanel::Initialize(rhi::Device& device, IAssetDatabase& assets)
@@ -374,6 +495,8 @@ void ViewportPanel::SetGraphicsPreferences(const GraphicsPreferences& prefs)
     m_GraphicsPrefs = prefs;
     m_Scene.Preset = prefs.SceneQuality;
     m_Game.Preset = prefs.GameQuality;
+    m_TransformRailVisible = prefs.TransformRailVisible;
+    m_OrientationGizmoVisible = prefs.OrientationGizmoVisible;
     ApplyQuality(m_Scene);
     ApplyQuality(m_Game);
     if (m_Scene.Renderer)
@@ -780,30 +903,8 @@ void ViewportPanel::DrawSceneToolbar(
     const EditorPlayMode playMode)
 {
     static_cast<void>(gizmo);
-    auto tool = [&](const char* label, const char* tip, const int id) {
-        const bool active = m_GizmoTool == id;
-        if (active)
-        {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-        }
-        if (ImGui::SmallButton(label))
-        {
-            m_GizmoTool = id;
-        }
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip("%s", tip);
-        }
-        if (active)
-        {
-            ImGui::PopStyleColor();
-        }
-        ImGui::SameLine();
-    };
-    tool(FADIX_ICON_SELECT, "Select (Q)", 0);
-    tool(FADIX_ICON_MOVE, "Move (W)", 1);
-    tool(FADIX_ICON_ROTATE, "Rotate (E)", 2);
-    tool(FADIX_ICON_SCALE, "Scale (R)", 3);
+    // Select/Move/Rotate/Scale now live in the floating in-viewport transform rail
+    // (DrawTransformRail); the top toolbar keeps only space + play/quality controls.
     if (ImGui::SmallButton(m_GizmoLocalSpace ? FADIX_ICON_CUBE " Local" : FADIX_ICON_GLOBE " World"))
     {
         m_GizmoLocalSpace = !m_GizmoLocalSpace;
@@ -984,6 +1085,258 @@ void ViewportPanel::DrawSceneToolbar(
     if (ImGui::IsItemHovered())
     {
         ImGui::SetTooltip("Toggle 2D orthographic / 3D perspective viewport");
+    }
+}
+
+bool ViewportPanel::EdgeTab(
+    const char* id, const ImVec2 pos, const ImVec2 size, const int dir, const char* tip)
+{
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImGui::SetCursorScreenPos(pos);
+    ImGui::PushID(id);
+    const bool clicked = ImGui::InvisibleButton("##tab", size);
+    const bool hovered = ImGui::IsItemHovered();
+    m_OverlayHovered = m_OverlayHovered || hovered;
+    dl->AddRectFilled(pos, {pos.x + size.x, pos.y + size.y},
+        hovered ? IM_COL32(255, 255, 255, 34) : IM_COL32(255, 255, 255, 18), 4.0F);
+    DrawChevron(dl, {pos.x + size.x * 0.5F, pos.y + size.y * 0.5F},
+        std::min(size.x, size.y) * 0.6F, dir,
+        hovered ? IM_COL32(235, 238, 245, 255) : IM_COL32(190, 196, 208, 230));
+    if (hovered)
+    {
+        ImGui::SetTooltip("%s", tip);
+    }
+    ImGui::PopID();
+    return clicked;
+}
+
+void ViewportPanel::DrawTransformRail(const View& view)
+{
+    if (!view.Visible || view.ImageSize.x < 48.0F || view.ImageSize.y < 48.0F)
+    {
+        return;
+    }
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    static constexpr ImU32 kAccent = IM_COL32(58, 122, 226, 235); // restrained Fadix blue
+
+    if (!m_TransformRailVisible)
+    {
+        // Collapsed: slim restore tab on the left viewport edge.
+        if (EdgeTab("##RailRestore",
+                {view.ImageMin.x + 2.0F, view.ImageMin.y + view.ImageSize.y * 0.5F - 20.0F},
+                {14.0F, 40.0F}, 1, "Show transform tools"))
+        {
+            m_TransformRailVisible = true;
+            if (m_WidgetVisibilityChanged)
+            {
+                m_WidgetVisibilityChanged();
+            }
+        }
+        return;
+    }
+
+    struct Tool
+    {
+        const char* Icon;
+        const char* Tip;
+        int Id;
+    };
+    static constexpr std::array<Tool, 4> tools{{
+        {FADIX_ICON_SELECT, "Select (Q)", 0},
+        {FADIX_ICON_MOVE, "Move (W)", 1},
+        {FADIX_ICON_ROTATE, "Rotate (E)", 2},
+        {FADIX_ICON_SCALE, "Scale (R)", 3}}};
+
+    constexpr float btn = 30.0F;
+    constexpr float spacing = 6.0F;
+    const float h = static_cast<float>(tools.size()) * btn +
+        static_cast<float>(tools.size() - 1) * spacing;
+    const float x = view.ImageMin.x + 12.0F;
+    float y = view.ImageMin.y + view.ImageSize.y * 0.5F - h * 0.5F;
+
+    // No solid backing panel: each button is transparent until hovered/active.
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 7.0F);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0F);
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255, 255, 255, 30));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(255, 255, 255, 46));
+    for (const Tool& t : tools)
+    {
+        ImGui::SetCursorScreenPos({x, y});
+        ImGui::PushID(t.Id);
+        const bool active = m_GizmoTool == t.Id;
+        if (active)
+        {
+            // Soft rounded blue highlight behind the active tool.
+            dl->AddRectFilled({x, y}, {x + btn, y + btn}, kAccent, 7.0F);
+            ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
+        }
+        if (ImGui::Button(t.Icon, {btn, btn}))
+        {
+            m_GizmoTool = t.Id;
+        }
+        if (active)
+        {
+            ImGui::PopStyleColor();
+        }
+        const bool hovered = ImGui::IsItemHovered();
+        m_OverlayHovered = m_OverlayHovered || hovered;
+        if (hovered)
+        {
+            ImGui::SetTooltip("%s", t.Tip);
+        }
+        ImGui::PopID();
+        y += btn + spacing;
+    }
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar(2);
+
+    // Collapse chevron tab beneath the tools.
+    if (EdgeTab("##RailCollapse", {x + (btn - 20.0F) * 0.5F, y + 2.0F}, {20.0F, 16.0F}, 0,
+            "Hide transform tools"))
+    {
+        m_TransformRailVisible = false;
+        if (m_WidgetVisibilityChanged)
+        {
+            m_WidgetVisibilityChanged();
+        }
+    }
+}
+
+void ViewportPanel::DrawOrientationGizmo(const View& view, CameraModule& camera)
+{
+    if (!view.Visible || view.ImageSize.x < 90.0F || view.ImageSize.y < 90.0F)
+    {
+        return;
+    }
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    constexpr float margin = 12.0F;
+    constexpr float radius = 34.0F;
+
+    if (!m_OrientationGizmoVisible)
+    {
+        // Collapsed: slim restore tab on the right viewport edge.
+        if (EdgeTab("##OrientRestore",
+                {view.ImageMin.x + view.ImageSize.x - 16.0F, view.ImageMin.y + margin},
+                {14.0F, 40.0F}, 0, "Show orientation gizmo"))
+        {
+            m_OrientationGizmoVisible = true;
+            if (m_WidgetVisibilityChanged)
+            {
+                m_WidgetVisibilityChanged();
+            }
+        }
+        return;
+    }
+
+    const ImVec2 center{
+        view.ImageMin.x + view.ImageSize.x - margin - radius, view.ImageMin.y + margin + radius};
+    // Subtle translucent backing for readability against bright scenes.
+    dl->AddCircleFilled(center, radius + 9.0F, IM_COL32(24, 26, 32, 120), 40);
+
+    // Project the world axes through the camera's view rotation so the widget
+    // tracks the live camera orientation.
+    const glm::mat3 viewRot{camera.Camera().View()};
+    struct Ball
+    {
+        glm::vec3 Dir;
+        ImU32 Color;
+        char Letter;
+        bool Positive;
+    };
+    static constexpr ImU32 kRed = IM_COL32(206, 92, 92, 255);
+    static constexpr ImU32 kGreen = IM_COL32(116, 190, 128, 255);
+    static constexpr ImU32 kBlue = IM_COL32(100, 146, 220, 255);
+    const std::array<Ball, 6> balls{{
+        {{1.0F, 0.0F, 0.0F}, kRed, 'X', true},
+        {{0.0F, 1.0F, 0.0F}, kGreen, 'Y', true},
+        {{0.0F, 0.0F, 1.0F}, kBlue, 'Z', true},
+        {{-1.0F, 0.0F, 0.0F}, kRed, 'X', false},
+        {{0.0F, -1.0F, 0.0F}, kGreen, 'Y', false},
+        {{0.0F, 0.0F, -1.0F}, kBlue, 'Z', false}}};
+
+    struct Projected
+    {
+        ImVec2 Pos;
+        float Depth; // camera-space z: >0 toward viewer
+        int Index;
+    };
+    std::array<Projected, 6> order{};
+    for (int i = 0; i < 6; ++i)
+    {
+        const glm::vec3 v = viewRot * balls[static_cast<std::size_t>(i)].Dir;
+        order[static_cast<std::size_t>(i)] = {
+            {center.x + v.x * radius, center.y - v.y * radius}, v.z, i};
+    }
+    // Back-to-front so front-facing endpoints draw on top and win hover priority.
+    std::sort(order.begin(), order.end(),
+        [](const Projected& a, const Projected& b) { return a.Depth < b.Depth; });
+
+    for (const Projected& p : order)
+    {
+        const Ball& b = balls[static_cast<std::size_t>(p.Index)];
+        const float front = std::clamp((p.Depth + 1.0F) * 0.5F, 0.0F, 1.0F); // 0=rear 1=front
+        const auto withAlpha = [](const ImU32 base, const float a01) {
+            const ImU32 a = static_cast<ImU32>(std::clamp(a01, 0.0F, 1.0F) * 255.0F);
+            return (base & ~(0xFFU << IM_COL32_A_SHIFT)) | (a << IM_COL32_A_SHIFT);
+        };
+
+        // All six directions are clickable snap targets.
+        ImGui::SetCursorScreenPos({p.Pos.x - 9.0F, p.Pos.y - 9.0F});
+        ImGui::PushID(p.Index);
+        const bool clicked = ImGui::InvisibleButton("##axis", {18.0F, 18.0F});
+        const bool hovered = ImGui::IsItemHovered();
+        m_OverlayHovered = m_OverlayHovered || hovered;
+        ImGui::PopID();
+
+        if (b.Positive)
+        {
+            // Thin anti-aliased stem + filled endpoint with axis letter.
+            dl->AddLine(center, p.Pos, withAlpha(b.Color, 0.35F + 0.55F * front), 1.5F);
+            const float er = (hovered ? 10.0F : 8.5F) + 1.5F * front; // emphasize camera-facing
+            dl->AddCircleFilled(p.Pos, er, withAlpha(b.Color, 0.55F + 0.45F * front), 24);
+            if (hovered)
+            {
+                dl->AddCircle(p.Pos, er + 1.5F, IM_COL32(255, 255, 255, 220), 24, 1.5F);
+            }
+            const char label[2]{b.Letter, '\0'};
+            const ImVec2 ts = ImGui::CalcTextSize(label);
+            dl->AddText({p.Pos.x - ts.x * 0.5F, p.Pos.y - ts.y * 0.5F},
+                IM_COL32(20, 22, 26, 255), label);
+        }
+        else
+        {
+            // Smaller muted ring for the negative direction.
+            const float rr = hovered ? 6.5F : 5.0F;
+            dl->AddCircle(p.Pos, rr, withAlpha(b.Color, 0.3F + 0.4F * front), 20, 1.6F);
+            if (hovered)
+            {
+                dl->AddCircleFilled(p.Pos, rr - 1.0F, withAlpha(b.Color, 0.5F), 20);
+            }
+        }
+
+        if (hovered)
+        {
+            ImGui::SetTooltip("View from %c%c", b.Positive ? '+' : '-', b.Letter);
+        }
+        if (clicked)
+        {
+            // Snap so the camera looks toward the origin from the clicked axis
+            // (forward = -direction); pivot + orbit distance preserved.
+            camera.Camera().SetLookDirection(-b.Dir);
+            ResetTemporalHistory();
+        }
+    }
+
+    // Collapse chevron tab beneath the widget.
+    if (EdgeTab("##OrientCollapse", {center.x - 10.0F, center.y + radius + 6.0F}, {20.0F, 16.0F},
+            2, "Hide orientation gizmo"))
+    {
+        m_OrientationGizmoVisible = false;
+        if (m_WidgetVisibilityChanged)
+        {
+            m_WidgetVisibilityChanged();
+        }
     }
 }
 
@@ -1218,10 +1571,21 @@ void ViewportPanel::Draw(
             MeasureView(m_Scene, dpi);
             DrawViewImage(m_Scene, "Resize Scene View", true);
 
-            // Update 2D camera cursor position for zoom centering
+            m_OverlayHovered = false;
+
+            // Update 2D camera cursor position for zoom centering. The Ortho2D
+            // camera's viewport size is the LOGICAL image size, so feed the cursor
+            // in that same logical space (not render pixels) or zoom-to-cursor
+            // drifts by the DPI/resolution-scale factor and the sprite appears to
+            // slide instead of scaling in place.
             {
-                const glm::vec2 cursorPx = MouseInViewPixels(m_Scene);
-                camera.SetCursorViewportPos(cursorPx);
+                const ImVec2 mp = ImGui::GetIO().MousePos;
+                const glm::vec2 cursorLogical{
+                    (mp.x - m_Scene.ImageMin.x) / std::max(m_Scene.ImageSize.x, 1.0F) *
+                        m_Scene.LogicalW,
+                    (mp.y - m_Scene.ImageMin.y) / std::max(m_Scene.ImageSize.y, 1.0F) *
+                        m_Scene.LogicalH};
+                camera.SetCursorViewportPos(cursorLogical);
             }
 
             // 2D viewport overlays (grid, sprite bounds, colliders, tilemap grid)
@@ -1234,6 +1598,8 @@ void ViewportPanel::Draw(
                         m_Scene.ImageMin.y + m_Scene.ImageSize.y},
                     true);
                 Draw2DGrid(drawList, camera.Ortho2D(), m_Scene.ImageMin, m_Scene.ImageSize);
+                Draw2DSpritePlaceholders(
+                    drawList, camera.Ortho2D(), m_Scene.ImageMin, editWorld, scene);
                 Draw2DEntityOverlays(drawList, camera.Ortho2D(), m_Scene.ImageMin, editWorld, scene);
                 drawList->PopClipRect();
             }
@@ -1350,6 +1716,16 @@ void ViewportPanel::Draw(
             {
                 m_MeshPreview.reset();
             }
+
+            // Floating in-viewport overlays. Drawn after the drag-drop target so
+            // the scene image stays the drop target; their hover feeds
+            // m_OverlayHovered so overlay clicks don't also pick scene entities.
+            DrawTransformRail(m_Scene);
+            if (camera.ProjectionMode() == ViewportProjectionMode::Perspective)
+            {
+                DrawOrientationGizmo(m_Scene, camera);
+            }
+
             if (m_Scene.Hovered && m_PendingPick && m_Scene.Picking)
             {
                 if (const auto result = m_Scene.Picking->Poll())
@@ -1446,6 +1822,15 @@ void ViewportPanel::HandleEvent(
             m_TilemapPanel->HandleViewportMouseUp(scene, editWorld, history);
             return;
         }
+    }
+
+    // Ignore gizmo hover / picking while the cursor is over a floating overlay
+    // control (transform rail, orientation gizmo). Ongoing drags and button-up
+    // still fall through so a drag started on the scene finishes cleanly.
+    if (m_OverlayHovered && !m_GizmoDragging &&
+        (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_MOTION))
+    {
+        return;
     }
 
     if (event.type == SDL_EVENT_MOUSE_MOTION)

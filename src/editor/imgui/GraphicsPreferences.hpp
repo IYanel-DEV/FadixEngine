@@ -20,6 +20,9 @@ struct GraphicsPreferences
     int SpotShadowBudgetCap{0};   // 0 = follow quality
     int PointShadowBudgetCap{0};  // 0 = follow quality
     ViewportProjectionMode ProjectionMode{ViewportProjectionMode::Perspective};
+    // Scene View floating overlay visibility (independently persisted).
+    bool TransformRailVisible{true};
+    bool OrientationGizmoVisible{true};
 
     [[nodiscard]] static GraphicsPreferences Defaults() noexcept;
     void ResetToDefaults() noexcept { *this = Defaults(); }
