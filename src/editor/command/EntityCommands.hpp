@@ -119,6 +119,8 @@ public:
     void SetCamera(CameraComponent component);
     void SetJoltBody(JoltBodyComponent component);
     void SetBox2DBody(Box2DBodyComponent component);
+    void SetSprite2D(Sprite2DComponent component);
+    void SetTileMap(TileMapComponent component);
 
 private:
     IWorld& m_World;

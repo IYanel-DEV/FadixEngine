@@ -14,4 +14,10 @@ enum class ViewportCameraMode
     Edit,
     Game
 };
+
+enum class ViewportProjectionMode
+{
+    Perspective,
+    Ortho2D
+};
 }

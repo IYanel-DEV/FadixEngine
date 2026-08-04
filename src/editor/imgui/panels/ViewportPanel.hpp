@@ -2,6 +2,7 @@
 
 #include "editor/assets/AssetBrowserController.hpp"
 #include "editor/camera/CameraModule.hpp"
+#include "editor/camera/Ortho2DCamera.hpp"
 #include "editor/gizmo/GizmoSystem.hpp"
 #include "editor/imgui/EditorUiState.hpp"
 #include "editor/imgui/GraphicsPreferences.hpp"
@@ -41,6 +42,8 @@ class Device;
 
 namespace fadix::editor
 {
+class TilemapPanel;
+
 /// Independently dockable Scene View + Game View. Distinct ViewportRenderer targets.
 class ViewportPanel final
 {
@@ -108,6 +111,14 @@ public:
         std::function<void(const AssetDragPayload&, const glm::vec3&)> handler)
     {
         m_MeshDropHandler = std::move(handler);
+    }
+
+    void SetTilemapPanel(TilemapPanel* panel) noexcept { m_TilemapPanel = panel; }
+
+    void SetSprite2DDropHandler(
+        std::function<void(const AssetDragPayload&, const glm::vec2&)> handler)
+    {
+        m_Sprite2DDropHandler = std::move(handler);
     }
 
     /// Invoked whenever the user picks a new quality preset (for persistence).
@@ -191,7 +202,9 @@ private:
     std::optional<MeshPreviewVisual> m_MeshPreview;
     std::function<void(const AssetDragPayload&)> m_AssetDropHandler;
     std::function<void(const AssetDragPayload&, const glm::vec3&)> m_MeshDropHandler;
+    std::function<void(const AssetDragPayload&, const glm::vec2&)> m_Sprite2DDropHandler;
     std::function<void()> m_QualityChanged;
     GraphicsPreferences m_GraphicsPrefs{GraphicsPreferences::Defaults()};
+    TilemapPanel* m_TilemapPanel{nullptr};
 };
 }

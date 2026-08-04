@@ -14,6 +14,7 @@
 #include "editor/imgui/panels/MaterialEditorPanel.hpp"
 #include "editor/imgui/panels/OutputPanel.hpp"
 #include "editor/imgui/panels/ScriptEditorPanel.hpp"
+#include "editor/imgui/panels/TilemapPanel.hpp"
 #include "editor/imgui/panels/ViewportPanel.hpp"
 #include "editor/scene/SceneEditor.hpp"
 
@@ -85,5 +86,6 @@ private:
     HierarchyPanel m_Hierarchy;
     InspectorPanel m_Inspector;
     FdxAnimationPanel m_FdxAnim;
+    TilemapPanel m_Tilemap;
 };
 }

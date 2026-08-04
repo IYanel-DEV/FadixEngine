@@ -4,6 +4,7 @@
 #include "assets/EmbeddedAssetProvider.hpp"
 #include "assets/GltfMeshCache.hpp"
 #include "editor/camera/CameraSelection.hpp"
+#include "editor/command/EntityCommands.hpp"
 #include "editor/play/PlaySession.hpp"
 #include "editor/scene/PrefabSerializer.hpp"
 #include "editor/scene/SceneEditor.hpp"
@@ -645,6 +646,29 @@ void ImGuiEditorApplication::WireAssetBrowser()
     m_Viewports.SetMeshDropHandler(
         [createMeshEntity](const AssetDragPayload& payload, const glm::vec3& gridPosition) {
             createMeshEntity(payload.Handle, payload.SourcePath, gridPosition);
+        });
+    m_Viewports.SetSprite2DDropHandler(
+        [this](const AssetDragPayload& payload, const glm::vec2& worldPos) {
+            if (!m_SceneEditor)
+            {
+                return;
+            }
+            const std::string name = payload.SourcePath.stem().string();
+            auto cmd = std::make_unique<AddEntityCommand>(
+                m_Session.EditWorld(), name.empty() ? "Sprite" : name);
+            TransformComponent xform;
+            xform.Position = {worldPos.x, worldPos.y, 0.0F};
+            cmd->SetTransform(xform);
+            Sprite2DComponent spr;
+            spr.Texture = payload.Handle;
+            spr.Size = {1.0F, 1.0F};
+            spr.Pivot = {0.5F, 0.5F};
+            spr.PixelsPerUnit = 100.0F;
+            cmd->SetSprite2D(spr);
+            const Uuid newId = cmd->EntityId();
+            m_Session.History().Push(std::move(cmd));
+            m_SceneEditor->SetSelection(newId, true);
+            m_Ui.StatusText = "Created Sprite2D from " + payload.SourcePath.filename().string();
         });
     static_cast<void>(m_AssetBrowser->Refresh());
 }

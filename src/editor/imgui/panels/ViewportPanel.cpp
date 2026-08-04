@@ -4,6 +4,7 @@
 #include "editor/camera/CameraSelection.hpp"
 #include "editor/command/EntityCommands.hpp"
 #include "editor/imgui/EditorIcons.hpp"
+#include "editor/imgui/panels/TilemapPanel.hpp"
 #include "engine/scene/IWorld.hpp"
 #include "render/ViewportRendererFactory.hpp"
 #include "rhi/sdl/SdlRhi.hpp"
@@ -133,6 +134,208 @@ void SyncPreviewComponent(const entt::registry& source, const entt::entity sourc
     else
     {
         preview.remove<Component>(previewEntity);
+    }
+}
+
+[[nodiscard]] ImVec2 WorldToImGui(
+    const glm::vec2 worldPos,
+    const Ortho2DCamera& cam,
+    const ImVec2 imgMin)
+{
+    const glm::vec2 screen = cam.WorldToScreen(worldPos);
+    return {imgMin.x + screen.x, imgMin.y + screen.y};
+}
+
+void Draw2DGrid(
+    ImDrawList* drawList,
+    const Ortho2DCamera& cam,
+    const ImVec2 imgMin,
+    const ImVec2 imgSize)
+{
+    const glm::vec2 viewSize = cam.ViewportSize();
+    if (viewSize.x < 1.0F || viewSize.y < 1.0F)
+    {
+        return;
+    }
+    const float hh = cam.OrthoHalfHeight();
+    const float hw = hh * (viewSize.x / viewSize.y);
+
+    // Pick a grid step that looks reasonable for the current zoom
+    const float log10 = std::log10(hh);
+    const float step = std::pow(10.0F, std::ceil(log10) - 1.0F);
+    const float minorStep = step * 0.1F;
+
+    const glm::vec2 wMin = cam.Position() - glm::vec2{hw, hh};
+    const glm::vec2 wMax = cam.Position() + glm::vec2{hw, hh};
+
+    // Draw minor grid (only when zoomed enough)
+    if (minorStep * viewSize.y / (2.0F * hh) > 8.0F)
+    {
+        const ImU32 minorCol = IM_COL32(60, 60, 80, 200);
+        float startX = std::floor(wMin.x / minorStep) * minorStep;
+        for (float x = startX; x <= wMax.x + minorStep; x += minorStep)
+        {
+            const ImVec2 top = WorldToImGui({x, wMax.y}, cam, imgMin);
+            const ImVec2 bot = WorldToImGui({x, wMin.y}, cam, imgMin);
+            drawList->AddLine(top, bot, minorCol, 0.5F);
+        }
+        float startY = std::floor(wMin.y / minorStep) * minorStep;
+        for (float y = startY; y <= wMax.y + minorStep; y += minorStep)
+        {
+            const ImVec2 left = WorldToImGui({wMin.x, y}, cam, imgMin);
+            const ImVec2 right = WorldToImGui({wMax.x, y}, cam, imgMin);
+            drawList->AddLine(left, right, minorCol, 0.5F);
+        }
+    }
+
+    // Draw major grid
+    const ImU32 majorCol = IM_COL32(80, 80, 110, 220);
+    {
+        float startX = std::floor(wMin.x / step) * step;
+        for (float x = startX; x <= wMax.x + step; x += step)
+        {
+            const ImVec2 top = WorldToImGui({x, wMax.y}, cam, imgMin);
+            const ImVec2 bot = WorldToImGui({x, wMin.y}, cam, imgMin);
+            drawList->AddLine(top, bot, majorCol, 1.0F);
+        }
+        float startY = std::floor(wMin.y / step) * step;
+        for (float y = startY; y <= wMax.y + step; y += step)
+        {
+            const ImVec2 left = WorldToImGui({wMin.x, y}, cam, imgMin);
+            const ImVec2 right = WorldToImGui({wMax.x, y}, cam, imgMin);
+            drawList->AddLine(left, right, majorCol, 1.0F);
+        }
+    }
+
+    // Draw X and Y axes
+    {
+        const ImVec2 axisXLeft = WorldToImGui({wMin.x, 0.0F}, cam, imgMin);
+        const ImVec2 axisXRight = WorldToImGui({wMax.x, 0.0F}, cam, imgMin);
+        drawList->AddLine(axisXLeft, axisXRight, IM_COL32(200, 80, 80, 220), 1.5F);
+        const ImVec2 axisYTop = WorldToImGui({0.0F, wMax.y}, cam, imgMin);
+        const ImVec2 axisYBot = WorldToImGui({0.0F, wMin.y}, cam, imgMin);
+        drawList->AddLine(axisYTop, axisYBot, IM_COL32(80, 200, 80, 220), 1.5F);
+    }
+
+    // Clip to viewport
+    drawList->PushClipRect(imgMin, {imgMin.x + imgSize.x, imgMin.y + imgSize.y}, true);
+    drawList->PopClipRect();
+}
+
+void Draw2DEntityOverlays(
+    ImDrawList* drawList,
+    const Ortho2DCamera& cam,
+    const ImVec2 imgMin,
+    const IWorld& world,
+    const SceneEditor& scene)
+{
+    const auto sel = scene.Selection();
+    if (!sel)
+    {
+        return;
+    }
+    const auto entity = world.Find(*sel);
+    if (!entity)
+    {
+        return;
+    }
+    const entt::registry& reg = world.Registry();
+
+    // Get transform position
+    glm::vec2 origin{0.0F};
+    if (const TransformComponent* xform = reg.try_get<TransformComponent>(*entity))
+    {
+        origin = {xform->Position.x, xform->Position.y};
+    }
+
+    // Sprite2D bounds
+    if (const Sprite2DComponent* spr = reg.try_get<Sprite2DComponent>(*entity))
+    {
+        const float halfW = spr->Size.x * 0.5F;
+        const float halfH = spr->Size.y * 0.5F;
+        const float pivotOffX = (0.5F - spr->Pivot.x) * spr->Size.x;
+        const float pivotOffY = (0.5F - spr->Pivot.y) * spr->Size.y;
+        const float cx = origin.x + pivotOffX;
+        const float cy = origin.y + pivotOffY;
+        const ImVec2 tl = WorldToImGui({cx - halfW, cy + halfH}, cam, imgMin);
+        const ImVec2 tr = WorldToImGui({cx + halfW, cy + halfH}, cam, imgMin);
+        const ImVec2 br = WorldToImGui({cx + halfW, cy - halfH}, cam, imgMin);
+        const ImVec2 bl = WorldToImGui({cx - halfW, cy - halfH}, cam, imgMin);
+        drawList->AddQuad(tl, tr, br, bl, IM_COL32(255, 220, 0, 230), 1.5F);
+        // Pivot dot
+        const ImVec2 pivotScreen = WorldToImGui(origin, cam, imgMin);
+        drawList->AddCircleFilled(pivotScreen, 4.0F, IM_COL32(255, 100, 0, 255));
+    }
+
+    // Collider2D
+    if (const Collider2DComponent* col = reg.try_get<Collider2DComponent>(*entity))
+    {
+        const ImU32 colColor = col->Sensor
+            ? IM_COL32(0, 180, 255, 200)
+            : IM_COL32(0, 255, 120, 200);
+        const glm::vec2 colCenter = origin + col->Offset;
+        if (col->Shape == Collider2DShape::Box)
+        {
+            const float hw = col->Size.x;
+            const float hh = col->Size.y;
+            const ImVec2 tl = WorldToImGui({colCenter.x - hw, colCenter.y + hh}, cam, imgMin);
+            const ImVec2 tr = WorldToImGui({colCenter.x + hw, colCenter.y + hh}, cam, imgMin);
+            const ImVec2 br = WorldToImGui({colCenter.x + hw, colCenter.y - hh}, cam, imgMin);
+            const ImVec2 bl = WorldToImGui({colCenter.x - hw, colCenter.y - hh}, cam, imgMin);
+            drawList->AddQuad(tl, tr, br, bl, colColor, 1.5F);
+        }
+        else // Circle
+        {
+            const float radius = col->Size.x;
+            const glm::vec2 screenCenter = cam.WorldToScreen(colCenter);
+            const float screenRadius = radius * cam.ViewportSize().y / (2.0F * cam.OrthoHalfHeight());
+            drawList->AddCircle(
+                {imgMin.x + screenCenter.x, imgMin.y + screenCenter.y},
+                screenRadius, colColor, 32, 1.5F);
+        }
+    }
+
+    // TileMap grid overlay for selected tilemap
+    if (const TileMapComponent* tm = reg.try_get<TileMapComponent>(*entity))
+    {
+        const float tileWW = static_cast<float>(tm->TileWidth) /
+            std::max(tm->PixelsPerUnit, 0.001F);
+        const float tileWH = static_cast<float>(tm->TileHeight) /
+            std::max(tm->PixelsPerUnit, 0.001F);
+        const ImU32 gridCol = IM_COL32(120, 200, 255, 120);
+
+        // Map bounds
+        const float mapW = tileWW * static_cast<float>(tm->GridWidth);
+        const float mapH = tileWH * static_cast<float>(tm->GridHeight);
+        const ImVec2 mapTL = WorldToImGui(origin, cam, imgMin);
+        const ImVec2 mapBR = WorldToImGui(
+            {origin.x + mapW, origin.y - mapH}, cam, imgMin);
+        drawList->AddRect(mapTL, mapBR, IM_COL32(120, 200, 255, 200), 0.0F, 0, 2.0F);
+
+        // Individual tile lines (limit to avoid drawing thousands of lines)
+        constexpr int kMaxLines = 80;
+        if (tm->GridWidth <= kMaxLines)
+        {
+            for (int x = 0; x <= tm->GridWidth; ++x)
+            {
+                const ImVec2 top = WorldToImGui(
+                    {origin.x + x * tileWW, origin.y}, cam, imgMin);
+                const ImVec2 bot = WorldToImGui(
+                    {origin.x + x * tileWW, origin.y - mapH}, cam, imgMin);
+                drawList->AddLine(top, bot, gridCol, 0.5F);
+            }
+        }
+        if (tm->GridHeight <= kMaxLines)
+        {
+            for (int y = 0; y <= tm->GridHeight; ++y)
+            {
+                const ImVec2 left = WorldToImGui(
+                    {origin.x, origin.y - y * tileWH}, cam, imgMin);
+                const ImVec2 right = WorldToImGui(
+                    {origin.x + mapW, origin.y - y * tileWH}, cam, imgMin);
+                drawList->AddLine(left, right, gridCol, 0.5F);
+            }
+        }
     }
 }
 }
@@ -320,13 +523,15 @@ void ViewportPanel::RenderTargets(
     if (m_Scene.Visible && m_Scene.Renderer && m_Scene.PixelW > 0 && m_Scene.PixelH > 0)
     {
         EnsureSize(m_Scene);
+        const bool in2D = camera.ProjectionMode() == ViewportProjectionMode::Ortho2D;
         m_Scene.Renderer->SetEditorVisualsEnabled(!playing);
-        m_Scene.Renderer->SetGroundGridEnabled(!playing && m_ShowGroundGrid);
+        m_Scene.Renderer->SetGroundGridEnabled(!playing && m_ShowGroundGrid && !in2D);
         m_Scene.Renderer->SetCollisionVisualizationEnabled(!playing && m_ShowCollisionShapes);
         m_Scene.Renderer->SetViewportDebugView(m_DebugView);
         m_Scene.Renderer->SetSimDelta(deltaSeconds);
         camera.Camera().SetViewportSize({m_Scene.LogicalW, m_Scene.LogicalH});
-        m_Scene.Renderer->SetCamera(camera.Camera().View(), camera.Camera().Projection());
+        camera.Ortho2D().SetViewportSize({m_Scene.LogicalW, m_Scene.LogicalH});
+        camera.ApplyToViewport(*m_Scene.Renderer);
         m_Scene.Renderer->SetMeshPreview(!playing ? m_MeshPreview : std::nullopt);
         UpdateGizmoVisual(m_Scene, scene, gizmo, !playing);
         m_Scene.Renderer->DrawWorld(world);
@@ -680,21 +885,27 @@ void ViewportPanel::DrawSceneToolbar(
     ImGui::SameLine();
     DrawQualityCombo(m_Scene, "##SceneQuality");
     ImGui::SameLine();
-    if (m_ShowGroundGrid)
+    const bool is2DMode = camera.ProjectionMode() == ViewportProjectionMode::Ortho2D;
+    if (!is2DMode)
     {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-    }
-    if (ImGui::SmallButton(FADIX_ICON_GRID " Grid"))
-    {
-        m_ShowGroundGrid = !m_ShowGroundGrid;
-    }
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip("Show ground grid in Scene View");
-    }
-    if (m_ShowGroundGrid)
-    {
-        ImGui::PopStyleColor();
+        if (m_ShowGroundGrid)
+        {
+            ImGui::PushStyleColor(
+                ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        }
+        if (ImGui::SmallButton(FADIX_ICON_GRID " Grid"))
+        {
+            m_ShowGroundGrid = !m_ShowGroundGrid;
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Show ground grid in Scene View");
+        }
+        if (m_ShowGroundGrid)
+        {
+            ImGui::PopStyleColor();
+        }
+        ImGui::SameLine();
     }
     ImGui::SameLine();
     const bool collisionActive = ui.ShowCollisionShapes;
@@ -748,6 +959,27 @@ void ViewportPanel::DrawSceneToolbar(
     if (ImGui::IsItemHovered())
     {
         ImGui::SetTooltip("Reset the Scene View camera");
+    }
+    ImGui::SameLine();
+    ImGui::TextUnformatted("|");
+    ImGui::SameLine();
+    const bool is2D = camera.ProjectionMode() == ViewportProjectionMode::Ortho2D;
+    if (is2D)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+    }
+    if (ImGui::SmallButton("2D"))
+    {
+        camera.SetProjectionMode(
+            is2D ? ViewportProjectionMode::Perspective : ViewportProjectionMode::Ortho2D);
+    }
+    if (is2D)
+    {
+        ImGui::PopStyleColor();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Toggle 2D orthographic / 3D perspective viewport");
     }
 }
 
@@ -961,8 +1193,6 @@ void ViewportPanel::Draw(
     SceneDocument& document,
     SDL_Window* window)
 {
-    static_cast<void>(history);
-    static_cast<void>(editWorld);
     static_cast<void>(document);
     const float dpi =
         window != nullptr ? std::max(SDL_GetWindowDisplayScale(window), 0.01F) : 1.0F;
@@ -982,6 +1212,27 @@ void ViewportPanel::Draw(
             DrawSceneToolbar(ui, camera, gizmo, playMode);
             MeasureView(m_Scene, dpi);
             DrawViewImage(m_Scene, "Resize Scene View", true);
+
+            // Update 2D camera cursor position for zoom centering
+            {
+                const glm::vec2 cursorPx = MouseInViewPixels(m_Scene);
+                camera.SetCursorViewportPos(cursorPx);
+            }
+
+            // 2D viewport overlays (grid, sprite bounds, colliders, tilemap grid)
+            if (camera.ProjectionMode() == ViewportProjectionMode::Ortho2D &&
+                m_Scene.Visible && m_Scene.ImageSize.x > 0.0F)
+            {
+                ImDrawList* drawList = ImGui::GetWindowDrawList();
+                drawList->PushClipRect(m_Scene.ImageMin,
+                    {m_Scene.ImageMin.x + m_Scene.ImageSize.x,
+                        m_Scene.ImageMin.y + m_Scene.ImageSize.y},
+                    true);
+                Draw2DGrid(drawList, camera.Ortho2D(), m_Scene.ImageMin, m_Scene.ImageSize);
+                Draw2DEntityOverlays(drawList, camera.Ortho2D(), m_Scene.ImageMin, editWorld, scene);
+                drawList->PopClipRect();
+            }
+
             // Per-cascade depth preview (debug only, Scene View only). Each active
             // cascade's real depth texture is drawn as a small inset along the top,
             // cascade 0 leftmost, so their contents can be compared directly.
@@ -1015,7 +1266,18 @@ void ViewportPanel::Draw(
                     if (const auto asset = ParseAssetDragDropBlob(
                             payload->Data, static_cast<std::size_t>(payload->DataSize)))
                     {
-                        if (asset->AssetType == "Mesh")
+                        const bool in2DMode =
+                            camera.ProjectionMode() == ViewportProjectionMode::Ortho2D;
+                        if (asset->AssetType == "Texture" && in2DMode)
+                        {
+                            if (payload->IsDelivery() && m_Sprite2DDropHandler)
+                            {
+                                const glm::vec2 pixel = MouseInViewPixels(m_Scene);
+                                const glm::vec2 worldPos = camera.Ortho2D().ScreenToWorld(pixel);
+                                m_Sprite2DDropHandler(*asset, worldPos);
+                            }
+                        }
+                        else if (asset->AssetType == "Mesh" && !in2DMode)
                         {
                             const glm::vec2 pixel = MouseInViewPixels(m_Scene);
                             const GizmoRay ray = MouseRayFromCamera(
@@ -1154,6 +1416,32 @@ void ViewportPanel::HandleEvent(
             local,
             {static_cast<float>(m_Scene.PixelW), static_cast<float>(m_Scene.PixelH)});
     };
+
+    // 2D tilemap viewport painting (intercepts before gizmo when a paint tool is active)
+    if (camera.ProjectionMode() == ViewportProjectionMode::Ortho2D &&
+        m_TilemapPanel != nullptr && m_TilemapPanel->IsActive() &&
+        m_TilemapPanel->ActiveTool() != TilemapTool::Select)
+    {
+        const glm::vec2 worldPos2D = camera.Ortho2D().ScreenToWorld(local);
+        if (event.type == SDL_EVENT_MOUSE_MOTION)
+        {
+            m_TilemapPanel->HandleViewportMouseMove(worldPos2D, scene, editWorld);
+        }
+        else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+            event.button.button == SDL_BUTTON_LEFT)
+        {
+            if (m_TilemapPanel->HandleViewportMouseDown(worldPos2D, scene, editWorld))
+            {
+                return;
+            }
+        }
+        else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP &&
+            event.button.button == SDL_BUTTON_LEFT)
+        {
+            m_TilemapPanel->HandleViewportMouseUp(scene, editWorld, history);
+            return;
+        }
+    }
 
     if (event.type == SDL_EVENT_MOUSE_MOTION)
     {

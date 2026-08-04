@@ -49,6 +49,24 @@ into the user's local application cache when it starts.
 - **Build system** — `build.bat` already uses 2-job low-priority builds and reuses the CMake
   cache; artifact filenames updated to 0.9.138.
 
+## What's in development for 0.9.140
+
+**Native 2D Workflow**
+
+Version 0.9.140 continues building on the 2D foundation introduced in 0.9.139 (Sprite2D rendering, Box2D integration, tilemap, sprite animation). The following features landed on the `dev` branch and will ship with 0.9.140:
+
+- **Sprite animation runtime** — `SpriteFrameAnimator` ticks UV rect each frame based on elapsed time, advancing the frame index and looping clips automatically
+- **TileMap rendering** — `DrawTileMap2D` reuses the `sprite2d` pipeline; each cell samples the correct UV region from the tile sheet; sorting layer and order-in-layer apply
+- **Box2D sensor events** — `DrainContactEvents2D` pulls begin/end contacts from Box2D and fires `body_entered`/`body_exited` Lua callbacks; `GravityScale` and collision filters are applied to bodies on spawn
+- **Dedicated 2D viewport mode** — scene view toolbar toggle switches between perspective and orthographic XY mode; middle-mouse pan, cursor-centered scroll zoom, auto-scaling major/minor grid with colored X/Y axes, and 2D entity overlays (sprite bounds, collider outlines, tilemap grid)
+- **Image drag-and-drop** — dragging a PNG or texture from the Content Browser into the 2D viewport creates a Sprite2D entity at the cursor world position, named after the file, and registered as an undoable command
+- **Tilemap editor panel** — pencil, eraser, rectangle, rect-erase, flood fill, eyedropper, and select tools; numbered tile palette with zoom/pan; per-layer show/hide, add, remove, reorder; one brush stroke equals one undo action
+- **Collider and sprite visualization** — green/blue outlines for `Collider2DComponent` shapes, yellow bounds quads and orange pivot dots for `Sprite2DComponent`, blue tile cell grid and bounds rect for `TileMapComponent`
+- **Empty 2D template** — updated to include a primary orthographic camera and a placeholder Sprite2D entity with no missing assets or 3D mesh dependencies
+
+**Smoke coverage for 0.9.140:**
+`fadix_2d_smoke` now covers 73 checks: Sprite2D round-trip, RigidBody2D/Collider2D round-trip, SpriteFrameAnimator round-trip, TileMap round-trip and new fields, Box2D body legacy compat, sprite animation runtime tick, collision layer/mask, tile UV math, tile paint/erase/rect/fill/eyedropper, layer add/remove/reorder, Ortho2D camera math round-trip, grid snapping, tilemap save/load after painting, tilemap duplication, and Empty 2D template structure.
+
 ## What's new in 0.9.136
 
 - Animation graph authoring and runtime playback with blend, layer, state-machine, saved-pose, and output nodes

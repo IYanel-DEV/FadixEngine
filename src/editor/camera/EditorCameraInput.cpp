@@ -1,5 +1,6 @@
 #include "editor/camera/EditorCameraInput.hpp"
 
+#include "editor/camera/Ortho2DCamera.hpp"
 #include "editor/camera/WorkbenchCamera.hpp"
 
 #include <SDL3/SDL_error.h>
@@ -242,6 +243,28 @@ void EditorCameraInput::Update(WorkbenchCamera& camera, const float deltaSeconds
         camera.Fly(direction, deltaSeconds, KeyDown(Key::Fast));
     }
 
+    m_OrbitDelta = glm::vec2{0.0F};
+    m_PanDelta = glm::vec2{0.0F};
+    m_LookDelta = glm::vec2{0.0F};
+    m_SpeedWheelDelta = 0.0F;
+    m_DollyDelta = 0.0F;
+    m_FocusRequested = false;
+}
+
+void EditorCameraInput::UpdateOrtho2D(Ortho2DCamera& camera, const glm::vec2 cursorNdc)
+{
+    if (m_PanDelta != glm::vec2{0.0F})
+    {
+        camera.Pan(m_PanDelta);
+    }
+    if (m_DollyDelta != 0.0F)
+    {
+        camera.ZoomAt(m_DollyDelta, cursorNdc);
+    }
+    if (m_FocusRequested && m_FocusBounds.has_value())
+    {
+        camera.FocusBounds(*m_FocusBounds);
+    }
     m_OrbitDelta = glm::vec2{0.0F};
     m_PanDelta = glm::vec2{0.0F};
     m_LookDelta = glm::vec2{0.0F};

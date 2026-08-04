@@ -542,6 +542,11 @@ void EditorShell::DrawPanels(
         m_Hierarchy.Draw(*scene, ui);
         m_Inspector.Draw(*scene, ui);
         m_FdxAnim.Draw(*scene, ui, session.ActiveProject().RootPath, viewports);
+        m_Tilemap.Draw(*scene, ui, session.EditWorld(), session.History());
+    }
+    if (viewports != nullptr)
+    {
+        viewports->SetTilemapPanel(&m_Tilemap);
     }
     if (contentBrowser != nullptr)
     {

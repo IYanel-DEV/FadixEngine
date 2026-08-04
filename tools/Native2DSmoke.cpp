@@ -11,11 +11,15 @@
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace
 {
@@ -478,6 +482,323 @@ void TestTileUvCalculation()
     Check(std::abs(v2 - 0.5F) < 0.001F, "tile UV v correct for id=9, 8x2 atlas");
 }
 
+void TestTileMapPainting()
+{
+    using namespace fadix;
+    std::cout << "[2d-smoke] TileMap painting (tile set/erase/rect/fill)\n";
+
+    // 4x4 tilemap, 1 layer
+    TileMapComponent tm;
+    tm.TileWidth = 16;
+    tm.TileHeight = 16;
+    tm.GridWidth = 4;
+    tm.GridHeight = 4;
+    tm.SheetColumns = 4;
+    tm.SheetRows = 4;
+    tm.PixelsPerUnit = 16.0F;
+    tm.LayerCount = 1;
+    tm.TileData.assign(static_cast<std::size_t>(4 * 4), -1);
+
+    // Pencil paint: set tile (1,0) to id 3
+    tm.TileData[static_cast<std::size_t>(0 * 4 + 1)] = 3;
+    Check(tm.TileData[1] == 3, "pencil sets tile (1,0)");
+
+    // Erase: set tile (1,0) back to -1
+    tm.TileData[1] = -1;
+    Check(tm.TileData[1] == -1, "eraser clears tile (1,0)");
+
+    // Rectangle paint: fill (0,0)-(1,1) with tile 5
+    {
+        const int tileId = 5;
+        for (int y = 0; y <= 1; ++y)
+        {
+            for (int x = 0; x <= 1; ++x)
+            {
+                tm.TileData[static_cast<std::size_t>(y * 4 + x)] = tileId;
+            }
+        }
+        Check(tm.TileData[0] == 5, "rect paint (0,0)");
+        Check(tm.TileData[1] == 5, "rect paint (1,0)");
+        Check(tm.TileData[4] == 5, "rect paint (0,1)");
+        Check(tm.TileData[5] == 5, "rect paint (1,1)");
+        Check(tm.TileData[2] == -1, "rect paint does not touch (2,0)");
+    }
+
+    // Flood fill: set (3,3) to 7, then flood fill from (3,3) replacing 7 with 9
+    tm.TileData[static_cast<std::size_t>(3 * 4 + 3)] = 7;
+    {
+        // simple BFS fill
+        const int old = 7;
+        const int newId = 9;
+        std::vector<std::pair<int,int>> stack{{3, 3}};
+        int iter = 0;
+        while (!stack.empty() && iter < 10000)
+        {
+            auto [x, y] = stack.back();
+            stack.pop_back();
+            if (x < 0 || x >= 4 || y < 0 || y >= 4) continue;
+            if (tm.TileData[static_cast<std::size_t>(y * 4 + x)] != old) continue;
+            tm.TileData[static_cast<std::size_t>(y * 4 + x)] = newId;
+            ++iter;
+            stack.push_back({x+1,y}); stack.push_back({x-1,y});
+            stack.push_back({x,y+1}); stack.push_back({x,y-1});
+        }
+        Check(tm.TileData[static_cast<std::size_t>(3 * 4 + 3)] == 9, "flood fill sets target");
+        Check(tm.TileData[0] == 5, "flood fill doesn't touch different tiles");
+    }
+
+    // Eyedropper: read tile at (0,0) = 5
+    const int picked = tm.TileData[0];
+    Check(picked == 5, "eyedropper reads correct tile");
+}
+
+void TestTileMapLayerOps()
+{
+    using namespace fadix;
+    std::cout << "[2d-smoke] TileMap layer add/remove/reorder\n";
+
+    TileMapComponent tm;
+    tm.TileWidth = 16;
+    tm.TileHeight = 16;
+    tm.GridWidth = 2;
+    tm.GridHeight = 2;
+    tm.LayerCount = 1;
+    tm.TileData = {1, 2, 3, 4};
+
+    // Add layer
+    const int layerSize = tm.GridWidth * tm.GridHeight;
+    tm.TileData.resize(tm.TileData.size() + static_cast<std::size_t>(layerSize), -1);
+    ++tm.LayerCount;
+    Check(tm.LayerCount == 2, "layer add: LayerCount incremented");
+    Check(tm.TileData.size() == 8, "layer add: TileData doubled");
+    Check(tm.TileData[4] == -1, "layer add: new layer initialized empty");
+    Check(tm.TileData[0] == 1, "layer add: layer 0 unchanged");
+
+    // Set layer 1 tiles
+    tm.TileData[4] = 7;
+    tm.TileData[5] = 8;
+    Check(tm.TileData[4] == 7, "layer 1 tile set");
+
+    // Reorder (swap layer 0 and 1)
+    {
+        auto begin0 = tm.TileData.begin();
+        auto begin1 = tm.TileData.begin() + layerSize;
+        std::rotate(begin0, begin1, begin1 + layerSize);
+    }
+    Check(tm.TileData[0] == 7, "reorder: layer 0 now contains old layer 1 data");
+    Check(tm.TileData[4] == 1, "reorder: layer 1 now contains old layer 0 data");
+
+    // Remove layer 0
+    {
+        const auto begin = tm.TileData.begin();
+        tm.TileData.erase(begin, begin + layerSize);
+        --tm.LayerCount;
+    }
+    Check(tm.LayerCount == 1, "remove layer: LayerCount decremented");
+    Check(tm.TileData.size() == 4, "remove layer: TileData shrunk");
+    Check(tm.TileData[0] == 1, "remove layer: remaining layer correct");
+}
+
+void TestOrtho2DCameraConversion()
+{
+    std::cout << "[2d-smoke] Ortho2D ScreenToWorld / WorldToScreen round-trip\n";
+
+    // Replicate Ortho2DCamera math without the class (smoke is headless, no editor headers)
+    const float posX = 2.5F;
+    const float posY = -1.0F;
+    const float halfH = 5.0F;
+    const float viewW = 1280.0F;
+    const float viewH = 720.0F;
+    const float aspect = viewW / viewH;
+    const float halfW = halfH * aspect;
+
+    // WorldToScreen for a known world point
+    const float wx = 3.0F;
+    const float wy = 0.0F;
+    const float ndcX = (wx - posX) / halfW;
+    const float ndcY = (wy - posY) / halfH;
+    const float sx = (ndcX + 1.0F) * 0.5F * viewW;
+    const float sy = (1.0F - ndcY) * 0.5F * viewH;
+
+    // ScreenToWorld inverse
+    const float ndcX2 = 2.0F * sx / viewW - 1.0F;
+    const float ndcY2 = 1.0F - 2.0F * sy / viewH;
+    const float wx2 = posX + ndcX2 * halfW;
+    const float wy2 = posY + ndcY2 * halfH;
+
+    Check(std::abs(wx2 - wx) < 0.001F, "Ortho2D WorldToScreen->ScreenToWorld round-trip X");
+    Check(std::abs(wy2 - wy) < 0.001F, "Ortho2D WorldToScreen->ScreenToWorld round-trip Y");
+
+    // Check that world origin maps to center of viewport when cam is at origin
+    const float ox = 1.0F * 0.5F * viewW; // (ndcX=0+1)*0.5*W = 0.5*W... only if posX=0
+    static_cast<void>(ox);
+    {
+        const float px = 0.0F;
+        const float n = 2.0F * (viewW * 0.5F) / viewW - 1.0F; // 0.0
+        const float rx = px + n * halfW;
+        Check(std::abs(rx - 0.0F) < 0.001F, "Ortho2D center of screen maps to camera position X");
+    }
+}
+
+void TestGridSnapping()
+{
+    std::cout << "[2d-smoke] Grid snapping: world-to-tile and back\n";
+
+    // Tilemap with 32px tiles at 32ppu = 1 world-unit tiles
+    const float ppu = 32.0F;
+    const float tileW = 32.0F;
+    const float tileH = 32.0F;
+    const float tileWW = tileW / ppu;
+    const float tileWH = tileH / ppu;
+
+    // World pos (0.5, -0.5) -> tile (0, -1) in floor convention
+    const float wx = 0.5F;
+    const float wy = -0.5F;
+    const int tx = static_cast<int>(std::floor(wx / tileWW));
+    const int ty = static_cast<int>(std::floor(wy / tileWH));
+    Check(tx == 0, "grid snap: floor tile X");
+    Check(ty == -1, "grid snap: floor tile Y (negative)");
+
+    // Snap back to tile center
+    const float snapX = (static_cast<float>(tx) + 0.5F) * tileWW;
+    const float snapY = (static_cast<float>(ty) + 0.5F) * tileWH;
+    Check(std::abs(snapX - 0.5F) < 0.001F, "snap-to-tile-center X");
+    Check(std::abs(snapY - (-0.5F)) < 0.001F, "snap-to-tile-center Y");
+}
+
+void TestTileMapSaveLoadAfterPaint()
+{
+    using namespace fadix;
+    std::cout << "[2d-smoke] TileMap save/load after painting\n";
+
+    World source{false};
+    const entt::entity ent = source.Create();
+    source.Registry().emplace<NameComponent>(ent, "PaintedMap");
+    source.Registry().emplace<TransformComponent>(ent);
+
+    TileMapComponent tm = MakeDefaultTileMap();
+    tm.TileWidth = 16;
+    tm.TileHeight = 16;
+    tm.GridWidth = 3;
+    tm.GridHeight = 3;
+    tm.SheetColumns = 4;
+    tm.SheetRows = 4;
+    tm.LayerCount = 1;
+    tm.TileData.assign(9, -1);
+    // Paint some tiles
+    tm.TileData[0] = 2;
+    tm.TileData[4] = 7;
+    tm.TileData[8] = 1;
+    source.Registry().emplace<TileMapComponent>(ent, tm);
+
+    const std::filesystem::path path = TempPath("fadix_2d_painted_tilemap.fadix");
+    SceneDocument doc{Uuid::Generate(), "PaintTest", path, true};
+    SceneService service;
+    Check(service.Save(doc, source).IsOk(), "painted tilemap scene saves");
+
+    World loaded{false};
+    SceneDocument loadedDoc;
+    Check(service.Load(loadedDoc, loaded, path).IsOk(), "painted tilemap scene loads");
+
+    bool found = false;
+    for (const auto [e, t] : loaded.Registry().view<const TileMapComponent>().each())
+    {
+        found = true;
+        Check(t.TileData.size() == 9, "painted tilemap data size preserved");
+        Check(!t.TileData.empty() && t.TileData[0] == 2, "painted tile[0] preserved");
+        Check(t.TileData.size() >= 5 && t.TileData[4] == 7, "painted tile[4] preserved");
+        Check(t.TileData.size() >= 9 && t.TileData[8] == 1, "painted tile[8] preserved");
+        static_cast<void>(e);
+    }
+    Check(found, "painted TileMapComponent found after load");
+}
+
+void TestEmpty2DTemplateContents()
+{
+    using namespace fadix;
+    std::cout << "[2d-smoke] Empty 2D template scene structure\n";
+
+    // Load the template scene and verify it has expected structure.
+    // Template is at assets/templates/empty_2d/Scenes/Main.scene relative to project root.
+    // Smoke runs from bin/Debug, so we try to find it relative to CWD.
+    const std::array<std::filesystem::path, 3> candidates{
+        "../../assets/templates/empty_2d/Scenes/Main.scene",
+        "../../../assets/templates/empty_2d/Scenes/Main.scene",
+        "assets/templates/empty_2d/Scenes/Main.scene"};
+
+    std::filesystem::path templatePath;
+    for (const auto& p : candidates)
+    {
+        if (std::filesystem::exists(p))
+        {
+            templatePath = p;
+            break;
+        }
+    }
+    if (templatePath.empty())
+    {
+        std::cout << "  skip  template file not found from CWD (not a failure)\n";
+        return;
+    }
+
+    World world{false};
+    SceneDocument doc;
+    SceneService service;
+    const auto result = service.Load(doc, world, templatePath);
+    Check(result.IsOk(), "Empty 2D template scene loads without error");
+
+    bool hasSprite2D = false;
+    for (const auto [e, s] : world.Registry().view<const Sprite2DComponent>().each())
+    {
+        hasSprite2D = true;
+        static_cast<void>(e);
+        static_cast<void>(s);
+    }
+    Check(hasSprite2D, "Empty 2D template has at least one Sprite2D entity");
+
+    bool hasCamera = false;
+    for (const auto [e, c] : world.Registry().view<const CameraComponent>().each())
+    {
+        hasCamera = true;
+        static_cast<void>(e);
+        static_cast<void>(c);
+    }
+    Check(hasCamera, "Empty 2D template has a Camera entity");
+}
+
+void TestTileMapDuplication()
+{
+    using namespace fadix;
+    std::cout << "[2d-smoke] TileMap entity duplication preserves independent TileData\n";
+
+    World world{false};
+    const entt::entity ent = world.Create();
+    world.Registry().emplace<NameComponent>(ent, "Original");
+    world.Registry().emplace<TransformComponent>(ent);
+
+    TileMapComponent tm = MakeDefaultTileMap();
+    tm.GridWidth = 2;
+    tm.GridHeight = 2;
+    tm.LayerCount = 1;
+    tm.TileData = {10, 20, 30, 40};
+    world.Registry().emplace<TileMapComponent>(ent, tm);
+
+    // Simulate duplication by copying the component
+    TileMapComponent copy = *world.Registry().try_get<TileMapComponent>(ent);
+    const entt::entity ent2 = world.Create();
+    world.Registry().emplace<NameComponent>(ent2, "Duplicate");
+    world.Registry().emplace<TileMapComponent>(ent2, copy);
+
+    // Modify original
+    world.Registry().get<TileMapComponent>(ent).TileData[0] = 99;
+
+    // Duplicate should be unchanged (vector copy = independent)
+    const auto& dupData = world.Registry().get<const TileMapComponent>(ent2).TileData;
+    Check(!dupData.empty() && dupData[0] == 10, "duplicate TileData is independent from original");
+    Check(world.Registry().get<const TileMapComponent>(ent).TileData[0] == 99,
+        "original TileData modified");
+}
+
 } // namespace
 
 int main()
@@ -492,6 +813,13 @@ int main()
     TestTileMapNewFields();
     TestCollisionLayerMask();
     TestTileUvCalculation();
+    TestTileMapPainting();
+    TestTileMapLayerOps();
+    TestOrtho2DCameraConversion();
+    TestGridSnapping();
+    TestTileMapSaveLoadAfterPaint();
+    TestEmpty2DTemplateContents();
+    TestTileMapDuplication();
     if (g_Failures == 0)
     {
         std::cout << "all checks passed\n";

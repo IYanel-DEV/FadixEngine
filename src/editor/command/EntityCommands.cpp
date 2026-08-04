@@ -267,6 +267,8 @@ void AddEntityCommand::SetEnvironment(EnvironmentComponent component) { m_Entity
 void AddEntityCommand::SetCamera(CameraComponent component) { m_Entity.Camera = std::move(component); }
 void AddEntityCommand::SetJoltBody(JoltBodyComponent component) { m_Entity.JoltBody = std::move(component); }
 void AddEntityCommand::SetBox2DBody(Box2DBodyComponent component) { m_Entity.Box2DBody = std::move(component); }
+void AddEntityCommand::SetSprite2D(Sprite2DComponent component) { m_Entity.Sprite2D = std::move(component); }
+void AddEntityCommand::SetTileMap(TileMapComponent component) { m_Entity.TileMap = std::move(component); }
 
 DeleteEntityCommand::DeleteEntityCommand(IWorld& world, const Uuid entity)
     : m_World(world), m_Entity(entity)
