@@ -512,11 +512,13 @@ void WriteEntityLine(
     }
     if (const TileMapComponent* tm = registry.try_get<TileMapComponent>(entity))
     {
-        out << "TMC "
+        out << "TM2 "
             << (tm->TileSetTexture.IsValid() ? tm->TileSetTexture.ToString() : "-") << ' '
             << tm->TileWidth << ' ' << tm->TileHeight << ' '
             << tm->GridWidth << ' ' << tm->GridHeight << ' '
-            << tm->SheetColumns << ' ' << tm->PixelsPerUnit << ' '
+            << tm->SheetColumns << ' ' << tm->SheetRows << ' '
+            << tm->SortingLayer << ' ' << tm->OrderInLayer << ' '
+            << tm->PixelsPerUnit << ' '
             << tm->LayerCount << ' ' << tm->TileData.size() << ' ';
         for (const int tile : tm->TileData)
         {
@@ -1157,15 +1159,25 @@ Result<void> ParseEntityLine(std::string_view line, IWorld& world)
             }
             registry.emplace<SpriteFrameAnimatorComponent>(entity, std::move(value));
         }
-        else if (marker == "TMC")
+        else if (marker == "TMC" || marker == "TM2")
         {
             TileMapComponent value;
             std::string tsToken;
             std::size_t tileDataCount = 0;
             row >> tsToken >> value.TileWidth >> value.TileHeight
                 >> value.GridWidth >> value.GridHeight
-                >> value.SheetColumns >> value.PixelsPerUnit
-                >> value.LayerCount >> tileDataCount;
+                >> value.SheetColumns;
+            if (marker == "TM2")
+            {
+                // New format: sheetRows, sortingLayer, orderInLayer before pixelsPerUnit
+                row >> value.SheetRows >> value.SortingLayer >> value.OrderInLayer;
+            }
+            else
+            {
+                // Old format: default SheetRows to SheetColumns for square atlases
+                value.SheetRows = value.SheetColumns;
+            }
+            row >> value.PixelsPerUnit >> value.LayerCount >> tileDataCount;
             if (tsToken != "-")
             {
                 if (const auto id = Uuid::Parse(tsToken)) { value.TileSetTexture = *id; }

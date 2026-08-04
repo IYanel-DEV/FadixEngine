@@ -393,6 +393,7 @@ public:
                 return m_GltfMeshCache != nullptr ? m_GltfMeshCache->Get(handle) : nullptr;
             },
             dt);
+        UpdateSpriteAnimations(world.Registry(), dt);
     }
 
     void SetAssetDatabase(IAssetDatabase& database) override
@@ -1119,6 +1120,9 @@ private:
         }
         m_Graph.AddPass("WorldGeometry", [this, &world](rhi::CommandList& list) {
             DrawWorldGeometry(list, world);
+        });
+        m_Graph.AddPass("TileMaps2D", [this, &world](rhi::CommandList& list) {
+            DrawTileMap2D(list, world);
         });
         m_Graph.AddPass("Sprites2D", [this, &world](rhi::CommandList& list) {
             DrawSprites2D(list, world);
@@ -1946,6 +1950,122 @@ private:
 
             list.DrawIndexed(m_SpriteQuad.IndexCount, m_SpriteQuad.FirstIndex);
             RecordDrawCall();
+        }
+    }
+
+    void DrawTileMap2D(rhi::CommandList& list, const IWorld& world)
+    {
+        if (m_Sprite2DPipeline == nullptr)
+        {
+            return;
+        }
+        const auto& registry = world.Registry();
+        bool pipelineBound = false;
+
+        struct SpriteVertexUniform
+        {
+            glm::mat4 ViewProjection;
+            glm::mat4 Model;
+        };
+        struct SpriteFragmentUniform
+        {
+            glm::vec4 Tint;
+            glm::vec4 UvRect;
+        };
+
+        for (const auto [entity, tm] : registry.view<const TileMapComponent>().each())
+        {
+            if (HiddenInCurrentView(registry, entity) || tm.TileData.empty())
+            {
+                continue;
+            }
+            if (tm.SheetColumns <= 0 || tm.SheetRows <= 0 || tm.PixelsPerUnit <= 0.0F)
+            {
+                continue;
+            }
+
+            rhi::Texture* tex = nullptr;
+            if (tm.TileSetTexture.IsValid())
+            {
+                tex = m_Cache->GetTexture(tm.TileSetTexture, false);
+            }
+            if (tex == nullptr)
+            {
+                tex = m_Cache->GetWhiteTexture();
+            }
+
+            TextureImportSettings samplerSettings;
+            samplerSettings.Filter = TextureFilter::Nearest;
+            rhi::Sampler* sampler = m_Cache->GetSampler(samplerSettings);
+            if (sampler == nullptr)
+            {
+                sampler = m_DefaultSampler.get();
+            }
+
+            glm::vec3 origin{0.0F};
+            glm::quat rotation{1.0F, 0.0F, 0.0F, 0.0F};
+            if (const auto* tr = registry.try_get<const TransformComponent>(entity))
+            {
+                origin = tr->Position;
+                rotation = tr->Rotation;
+            }
+
+            if (!pipelineBound)
+            {
+                list.BindPipeline(*m_Sprite2DPipeline);
+                list.BindVertexBuffer(*m_VertexBuffer);
+                list.BindIndexBuffer(*m_IndexBuffer);
+                pipelineBound = true;
+            }
+
+            std::array<rhi::Texture*, 1> textures = {tex};
+            std::array<rhi::Sampler*, 1> samplers = {sampler};
+            list.BindFragmentSamplers(0, textures, samplers);
+
+            const float tileW = static_cast<float>(tm.TileWidth) / tm.PixelsPerUnit;
+            const float tileH = static_cast<float>(tm.TileHeight) / tm.PixelsPerUnit;
+            const float uvW = 1.0F / static_cast<float>(tm.SheetColumns);
+            const float uvH = 1.0F / static_cast<float>(tm.SheetRows);
+            const glm::mat4 vp = m_Projection * m_View;
+
+            for (int row = 0; row < tm.GridHeight; ++row)
+            {
+                for (int col = 0; col < tm.GridWidth; ++col)
+                {
+                    const int idx = row * tm.GridWidth + col;
+                    if (idx >= static_cast<int>(tm.TileData.size()))
+                    {
+                        break;
+                    }
+                    const int tileId = tm.TileData[static_cast<std::size_t>(idx)];
+                    if (tileId < 0)
+                    {
+                        continue;
+                    }
+
+                    const float px = origin.x + static_cast<float>(col) * tileW;
+                    const float py = origin.y - static_cast<float>(row) * tileH;
+                    const glm::vec3 pos{px + tileW * 0.5F, py - tileH * 0.5F, origin.z};
+                    const glm::mat4 model =
+                        glm::translate(glm::mat4{1.0F}, pos) *
+                        glm::mat4_cast(rotation) *
+                        glm::scale(glm::mat4{1.0F}, {tileW, tileH, 1.0F});
+
+                    const int sheetCol = tileId % tm.SheetColumns;
+                    const int sheetRow = tileId / tm.SheetColumns;
+                    const glm::vec4 uvRect{
+                        static_cast<float>(sheetCol) * uvW,
+                        static_cast<float>(sheetRow) * uvH,
+                        uvW, uvH};
+
+                    const SpriteVertexUniform vert{vp, model};
+                    list.PushVertexUniform(0, &vert, sizeof(vert));
+                    const SpriteFragmentUniform frag{glm::vec4{1.0F}, uvRect};
+                    list.PushFragmentUniform(0, &frag, sizeof(frag));
+                    list.DrawIndexed(m_SpriteQuad.IndexCount, m_SpriteQuad.FirstIndex);
+                    RecordDrawCall();
+                }
+            }
         }
     }
 

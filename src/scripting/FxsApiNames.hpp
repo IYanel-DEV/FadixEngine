@@ -70,6 +70,8 @@ inline constexpr const char* kEntitySetSpriteTint = "setSpriteTint";
 inline constexpr const char* kEntitySetSpriteVisible = "setSpriteVisible";
 inline constexpr const char* kEntitySetSortOrder = "setSortOrder";
 inline constexpr const char* kEntityPlaySpriteAnimation = "playSpriteAnimation";
+inline constexpr const char* kEntityStopSpriteAnimation = "stopSpriteAnimation";
+inline constexpr const char* kEntityPauseSpriteAnimation = "pauseSpriteAnimation";
 inline constexpr const char* kEntityGetVelocity2D = "getVelocity2D";
 inline constexpr const char* kEntitySetVelocity2D = "setVelocity2D";
 inline constexpr const char* kEntityApplyImpulse2D = "applyImpulse2D";
@@ -78,4 +80,6 @@ inline constexpr const char* kOnStart = "OnStart";
 inline constexpr const char* kOnUpdate = "OnUpdate";
 inline constexpr const char* kOnDestroy = "OnDestroy";
 inline constexpr const char* kOnAnimationEvent = "OnAnimationEvent";
+inline constexpr const char* kOnBodyEntered = "OnBodyEntered";
+inline constexpr const char* kOnBodyExited = "OnBodyExited";
 }

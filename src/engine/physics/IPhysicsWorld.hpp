@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <vector>
 
 namespace fadix
 {
@@ -69,6 +70,15 @@ struct Body2DDesc
     bool Dynamic{true};
 };
 
+// Sensor contact event generated after a Box2D step. SensorEntity carries a
+// Collider2DComponent with Sensor=true; VisitorEntity is the touching body.
+struct ContactEvent2D
+{
+    Uuid SensorEntity;
+    Uuid VisitorEntity;
+    bool Entered{true}; // true = begin touch, false = end touch
+};
+
 class IPhysicsWorld
 {
 public:
@@ -79,5 +89,7 @@ public:
     [[nodiscard]] virtual PhysicsBodyHandle CreateBody3D(const Body3DDesc& description) = 0;
     [[nodiscard]] virtual PhysicsBodyHandle CreateBody2D(const Body2DDesc& description) = 0;
     virtual void DestroyBody(PhysicsBodyHandle handle) = 0;
+    // Returns all sensor contact events collected since the last call and clears the queue.
+    [[nodiscard]] virtual std::vector<ContactEvent2D> DrainContactEvents2D() { return {}; }
 };
 }

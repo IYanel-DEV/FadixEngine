@@ -948,6 +948,14 @@ void InspectorPanel::Draw(SceneEditor& scene, EditorUiState& ui)
                 }
                 if (ImGui::IsItemDeactivatedAfterEdit())
                     scene.EndEditTransaction("Edit Sheet Columns");
+                int sr = tilemap->SheetRows;
+                if (ImGui::DragInt("Sheet Rows", &sr, 1, 1, 256))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    tilemap->SheetRows = sr;
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Sheet Rows");
                 float ppu = tilemap->PixelsPerUnit;
                 if (ImGui::DragFloat("Pixels Per Unit", &ppu, 1.0F, 1.0F, 4096.0F))
                 {

@@ -24,6 +24,7 @@ public:
     [[nodiscard]] PhysicsBodyHandle CreateBody3D(const Body3DDesc& description) override;
     [[nodiscard]] PhysicsBodyHandle CreateBody2D(const Body2DDesc& description) override;
     void DestroyBody(PhysicsBodyHandle handle) override;
+    [[nodiscard]] std::vector<ContactEvent2D> DrainContactEvents2D() override;
 
 private:
     void ReconcileRemovedBodies(

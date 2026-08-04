@@ -176,6 +176,9 @@ struct PhysicsWorld::State
     std::unordered_map<Uuid, PhysicsBodyHandle> EntityBodies2D;
     std::unordered_map<Uuid, PhysicsBodyHandle> EntityBodies2DNew;
     std::unordered_map<Uuid, CharacterRecord> Characters;
+    // Reverse map: b2BodyId.index1 -> entity UUID (for sensor event lookup)
+    std::unordered_map<int, Uuid> BodyIndexToEntity;
+    std::vector<ContactEvent2D> PendingContactEvents;
 };
 
 PhysicsWorld::PhysicsWorld(ICollisionMeshProvider* meshes)
@@ -283,6 +286,41 @@ void PhysicsWorld::StepFixed(const float fixedDeltaSeconds)
 
     m_State->Physics3D.Update(fixedDeltaSeconds, 1, &m_State->TempAllocator, &m_State->Jobs);
     b2World_Step(m_State->Physics2D, fixedDeltaSeconds, 4);
+
+    // Collect sensor contact events while shape IDs are still valid this step.
+    const b2SensorEvents sensorEvents = b2World_GetSensorEvents(m_State->Physics2D);
+    for (int i = 0; i < sensorEvents.beginCount; ++i)
+    {
+        const b2SensorBeginTouchEvent& ev = sensorEvents.beginEvents[i];
+        const b2BodyId sensorBody = b2Shape_GetBody(ev.sensorShapeId);
+        const b2BodyId visitorBody = b2Shape_GetBody(ev.visitorShapeId);
+        const auto sensorIt = m_State->BodyIndexToEntity.find(sensorBody.index1);
+        const auto visitorIt = m_State->BodyIndexToEntity.find(visitorBody.index1);
+        if (sensorIt != m_State->BodyIndexToEntity.end() &&
+            visitorIt != m_State->BodyIndexToEntity.end())
+        {
+            m_State->PendingContactEvents.push_back(
+                {sensorIt->second, visitorIt->second, true});
+        }
+    }
+    for (int i = 0; i < sensorEvents.endCount; ++i)
+    {
+        const b2SensorEndTouchEvent& ev = sensorEvents.endEvents[i];
+        if (!b2Shape_IsValid(ev.sensorShapeId) || !b2Shape_IsValid(ev.visitorShapeId))
+        {
+            continue;
+        }
+        const b2BodyId sensorBody = b2Shape_GetBody(ev.sensorShapeId);
+        const b2BodyId visitorBody = b2Shape_GetBody(ev.visitorShapeId);
+        const auto sensorIt = m_State->BodyIndexToEntity.find(sensorBody.index1);
+        const auto visitorIt = m_State->BodyIndexToEntity.find(visitorBody.index1);
+        if (sensorIt != m_State->BodyIndexToEntity.end() &&
+            visitorIt != m_State->BodyIndexToEntity.end())
+        {
+            m_State->PendingContactEvents.push_back(
+                {sensorIt->second, visitorIt->second, false});
+        }
+    }
 }
 
 PhysicsBodyHandle PhysicsWorld::CreateBody3D(const Body3DDesc& description)
@@ -445,6 +483,7 @@ void PhysicsWorld::DestroyBody(const PhysicsBodyHandle handle)
     {
         if (b2Body_IsValid(iterator->second.Id))
         {
+            m_State->BodyIndexToEntity.erase(iterator->second.Id.index1);
             b2DestroyBody(iterator->second.Id);
         }
         m_State->Bodies2DNew.erase(iterator);
@@ -723,6 +762,7 @@ void PhysicsWorld::SyncFromWorld(const IWorld& world)
             def.fixedRotation = rb.FixedRotation;
             def.linearDamping = rb.LinearDamping;
             def.angularDamping = rb.AngularDamping;
+            def.gravityScale = rb.GravityScale;
             const b2BodyId bid = b2CreateBody(m_State->Physics2D, &def);
             if (b2Body_IsValid(bid))
             {
@@ -731,6 +771,14 @@ void PhysicsWorld::SyncFromWorld(const IWorld& world)
                 sd.material.friction = col ? col->Friction : 0.6F;
                 sd.material.restitution = col ? col->Restitution : 0.0F;
                 sd.isSensor = col && col->Sensor;
+                // Wire collision layer/mask so filter rules are actually enforced.
+                if (col)
+                {
+                    b2Filter filter = b2DefaultFilter();
+                    filter.categoryBits = static_cast<std::uint64_t>(col->CollisionLayer);
+                    filter.maskBits = static_cast<std::uint64_t>(col->CollisionMask);
+                    sd.filter = filter;
+                }
                 if (shape == Collider2DShape::Circle)
                 {
                     const float radius = std::max(size.x * 0.5F, kMinHalfExtent);
@@ -756,6 +804,8 @@ void PhysicsWorld::SyncFromWorld(const IWorld& world)
                 const PhysicsBodyHandle handle = m_State->NextHandle++;
                 m_State->Bodies2DNew.emplace(handle, State::Body2DNewRecord{bid, rb.Type, shape, size});
                 m_State->EntityBodies2DNew.insert_or_assign(id.Id, handle);
+                // Track body index for sensor event reverse-lookup.
+                m_State->BodyIndexToEntity.emplace(bid.index1, id.Id);
             }
         }
         else
@@ -847,6 +897,33 @@ void PhysicsWorld::SyncToWorld(IWorld& world) const
             transform->Position.y = position.y;
             transform->Rotation = glm::angleAxis(b2Rot_GetAngle(rotation), glm::vec3{0.0F, 0.0F, 1.0F});
         }
+        // Sync actual body velocity back so scripts can read it; apply any
+        // overrides the scripts queued during the previous OnUpdate call.
+        if (RigidBody2DComponent* rb = registry.try_get<RigidBody2DComponent>(*entity))
+        {
+            if (rb->HasPendingVelocity)
+            {
+                b2Body_SetLinearVelocity(
+                    body->second.Id,
+                    {rb->PendingVelocity.x, rb->PendingVelocity.y});
+                rb->HasPendingVelocity = false;
+                rb->RuntimeLinearVelocity = rb->PendingVelocity;
+            }
+            else
+            {
+                const b2Vec2 vel = b2Body_GetLinearVelocity(body->second.Id);
+                rb->RuntimeLinearVelocity = {vel.x, vel.y};
+            }
+            if (rb->HasPendingImpulse)
+            {
+                b2Body_ApplyLinearImpulseToCenter(
+                    body->second.Id,
+                    {rb->PendingImpulse.x, rb->PendingImpulse.y},
+                    true);
+                rb->PendingImpulse = {0.0F, 0.0F};
+                rb->HasPendingImpulse = false;
+            }
+        }
     }
     for (auto& [id, record] : m_State->Characters)
     {
@@ -875,6 +952,13 @@ void PhysicsWorld::SyncToWorld(IWorld& world) const
 std::unique_ptr<IPhysicsWorld> CreatePhysicsWorld(ICollisionMeshProvider* meshes)
 {
     return std::make_unique<PhysicsWorld>(meshes);
+}
+
+std::vector<ContactEvent2D> PhysicsWorld::DrainContactEvents2D()
+{
+    std::vector<ContactEvent2D> result;
+    result.swap(m_State->PendingContactEvents);
+    return result;
 }
 
 }

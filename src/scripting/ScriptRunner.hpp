@@ -1,6 +1,7 @@
 #pragma once
 
 #include "assets/ScriptAsset.hpp"
+#include "engine/physics/IPhysicsWorld.hpp"
 #include "scripting/LuaVM.hpp"
 #include "scripting/NativeScriptLoader.hpp"
 
@@ -61,6 +62,9 @@ public:
     void StartEntity(entt::registry& registry, entt::entity entity, const SourceResolver& resolver);
     // Fire OnUpdate on every live instance, then apply deferred destroys.
     void Update(entt::registry& registry, float deltaTime);
+    // Dispatch OnBodyEntered / OnBodyExited to sensor-entity scripts.
+    void DispatchContactEvents(entt::registry& registry,
+        const std::vector<ContactEvent2D>& events);
     // Fire OnDestroy, drop all instances, and reset the VM.
     void Stop(entt::registry& registry);
 

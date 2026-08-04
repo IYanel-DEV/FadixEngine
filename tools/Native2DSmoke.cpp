@@ -5,11 +5,13 @@
 #include "editor/scene/SceneSerializer.hpp"
 #include "engine/scene/SceneDocument.hpp"
 #include "engine/Uuid.hpp"
+#include "runtime/AnimationRuntime.hpp"
 #include "runtime/Components.hpp"
 #include "runtime/World.hpp"
 
 #include <glm/glm.hpp>
 
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -300,6 +302,182 @@ void TestBox2DLegacy()
     Check(found, "Box2DBodyComponent (legacy) found after load");
 }
 
+void TestSpriteAnimationRuntime()
+{
+    using namespace fadix;
+    std::cout << "[2d-smoke] SpriteFrameAnimator runtime tick\n";
+
+    World world{false};
+    const entt::entity ent = world.Create();
+    world.Registry().emplace<NameComponent>(ent, "AnimEnt");
+
+    Sprite2DComponent spr;
+    spr.UvRect = {0.0F, 0.0F, 0.25F, 1.0F};
+    world.Registry().emplace<Sprite2DComponent>(ent, spr);
+
+    SpriteFrameAnimatorComponent anim;
+    anim.Autoplay = true;
+    anim.Speed = 1.0F;
+    SpriteAnimationClip clip;
+    clip.Name = "Run";
+    clip.Loop = true;
+    clip.Frames.push_back({{0.00F, 0.0F, 0.25F, 1.0F}, 0.1F});
+    clip.Frames.push_back({{0.25F, 0.0F, 0.25F, 1.0F}, 0.1F});
+    clip.Frames.push_back({{0.50F, 0.0F, 0.25F, 1.0F}, 0.1F});
+    clip.Frames.push_back({{0.75F, 0.0F, 0.25F, 1.0F}, 0.1F});
+    anim.Clips.push_back(clip);
+    anim.CurrentClip = "Run";
+    world.Registry().emplace<SpriteFrameAnimatorComponent>(ent, anim);
+
+    // First tick: autoplay starts, frame 0
+    UpdateSpriteAnimations(world.Registry(), 0.05F);
+    {
+        const auto& a = world.Registry().get<const SpriteFrameAnimatorComponent>(ent);
+        Check(a.Playing, "autoplay starts on first tick");
+        Check(a.CurrentFrame == 0, "frame 0 at t=0.05");
+        const auto& sp = world.Registry().get<const Sprite2DComponent>(ent);
+        Check(std::abs(sp.UvRect.x - 0.0F) < 0.01F, "UvRect written for frame 0");
+    }
+
+    // Advance past frame 0 boundary (>= 0.1s total)
+    UpdateSpriteAnimations(world.Registry(), 0.06F);
+    {
+        const auto& a = world.Registry().get<const SpriteFrameAnimatorComponent>(ent);
+        Check(a.CurrentFrame == 1, "frame advances to 1 at t=0.11");
+        const auto& sp = world.Registry().get<const Sprite2DComponent>(ent);
+        Check(std::abs(sp.UvRect.x - 0.25F) < 0.01F, "UvRect updated for frame 1");
+    }
+
+    // Advance 0.3 more: t=0.41 wraps (clip=0.4s) to 0.01 => frame 0
+    UpdateSpriteAnimations(world.Registry(), 0.30F);
+    {
+        const auto& a = world.Registry().get<const SpriteFrameAnimatorComponent>(ent);
+        Check(a.CurrentFrame == 0, "loop wraps; t=0.41 mod 0.4=0.01 => frame 0");
+    }
+}
+
+void TestTileMapNewFields()
+{
+    using namespace fadix;
+    std::cout << "[2d-smoke] TileMapComponent SheetRows/SortingLayer/OrderInLayer round-trip\n";
+
+    World source{false};
+    const entt::entity ent = source.Create();
+    source.Registry().emplace<NameComponent>(ent, "Map2");
+    source.Registry().emplace<TransformComponent>(ent);
+
+    TileMapComponent tm = MakeDefaultTileMap();
+    tm.TileWidth = 16;
+    tm.TileHeight = 16;
+    tm.GridWidth = 2;
+    tm.GridHeight = 2;
+    tm.SheetColumns = 4;
+    tm.SheetRows = 4;
+    tm.SortingLayer = 2;
+    tm.OrderInLayer = 1;
+    tm.PixelsPerUnit = 16.0F;
+    tm.LayerCount = 1;
+    tm.TileData = {0, 3, 7, -1};
+    source.Registry().emplace<TileMapComponent>(ent, tm);
+
+    const std::filesystem::path path = TempPath("fadix_2d_tilemap2.fadix");
+    SceneDocument doc{Uuid::Generate(), "TileTest2", path, true};
+    SceneService service;
+    const auto saved = service.Save(doc, source);
+    Check(saved.IsOk(), "TileMap TM2 scene saves");
+
+    World loaded{false};
+    SceneDocument loadedDoc;
+    const auto loadedResult = service.Load(loadedDoc, loaded, path);
+    Check(loadedResult.IsOk(), "TileMap TM2 scene loads");
+
+    bool found = false;
+    for (const auto [e, t] : loaded.Registry().view<const TileMapComponent>().each())
+    {
+        found = true;
+        Check(t.SheetRows == 4, "sheetRows preserved");
+        Check(t.SortingLayer == 2, "sortingLayer preserved");
+        Check(t.OrderInLayer == 1, "orderInLayer preserved");
+        Check(t.TileData.size() == 4, "tileData count preserved");
+        Check(!t.TileData.empty() && t.TileData[1] == 3, "tile[1] value preserved");
+        Check(t.TileData.size() >= 4 && t.TileData[3] == -1, "empty tile preserved");
+        static_cast<void>(e);
+    }
+    Check(found, "TileMapComponent found after TM2 load");
+}
+
+void TestCollisionLayerMask()
+{
+    using namespace fadix;
+    std::cout << "[2d-smoke] Collider2D CollisionLayer/Mask round-trip\n";
+
+    World source{false};
+    const entt::entity ent = source.Create();
+    source.Registry().emplace<NameComponent>(ent, "Filter");
+    source.Registry().emplace<TransformComponent>(ent);
+    source.Registry().emplace<RigidBody2DComponent>(ent);
+
+    Collider2DComponent col;
+    col.Shape = Collider2DShape::Box;
+    col.CollisionLayer = 0x0002;
+    col.CollisionMask = 0x0005;
+    col.Sensor = false;
+    source.Registry().emplace<Collider2DComponent>(ent, col);
+
+    const std::filesystem::path path = TempPath("fadix_2d_collayer.fadix");
+    SceneDocument doc{Uuid::Generate(), "LayerTest", path, true};
+    SceneService service;
+    const auto saved = service.Save(doc, source);
+    Check(saved.IsOk(), "CollisionLayer scene saves");
+
+    World loaded{false};
+    SceneDocument loadedDoc;
+    const auto loadedResult = service.Load(loadedDoc, loaded, path);
+    Check(loadedResult.IsOk(), "CollisionLayer scene loads");
+
+    bool found = false;
+    for (const auto [e, c] : loaded.Registry().view<const Collider2DComponent>().each())
+    {
+        found = true;
+        Check(c.CollisionLayer == 0x0002, "collisionLayer preserved");
+        Check(c.CollisionMask == 0x0005, "collisionMask preserved");
+        static_cast<void>(e);
+    }
+    Check(found, "Collider2DComponent with layer/mask found after load");
+}
+
+void TestTileUvCalculation()
+{
+    using namespace fadix;
+    std::cout << "[2d-smoke] Tile UV calculation (SheetColumns/Rows)\n";
+
+    // 4x4 atlas: tileId 5 => col=1, row=1 => UV (0.25, 0.25, 0.25, 0.25)
+    constexpr int cols = 4;
+    constexpr int rows = 4;
+    constexpr float uvW = 1.0F / static_cast<float>(cols);
+    constexpr float uvH = 1.0F / static_cast<float>(rows);
+    const int tileId = 5;
+    const int sheetCol = tileId % cols;
+    const int sheetRow = tileId / cols;
+    const float u = static_cast<float>(sheetCol) * uvW;
+    const float v = static_cast<float>(sheetRow) * uvH;
+    Check(std::abs(u - 0.25F) < 0.001F, "tile UV u correct for id=5, 4x4 atlas");
+    Check(std::abs(v - 0.25F) < 0.001F, "tile UV v correct for id=5, 4x4 atlas");
+    Check(std::abs(uvW - 0.25F) < 0.001F, "tile UV width correct");
+    Check(std::abs(uvH - 0.25F) < 0.001F, "tile UV height correct");
+
+    // 8x2 atlas: tileId 9 => col=1, row=1 => UV (0.125, 0.5, 0.125, 0.5)
+    constexpr int cols2 = 8;
+    constexpr int rows2 = 2;
+    const int tileId2 = 9;
+    const float uvW2 = 1.0F / static_cast<float>(cols2);
+    const float uvH2 = 1.0F / static_cast<float>(rows2);
+    const float u2 = static_cast<float>(tileId2 % cols2) * uvW2;
+    const float v2 = static_cast<float>(tileId2 / cols2) * uvH2;
+    Check(std::abs(u2 - 0.125F) < 0.001F, "tile UV u correct for id=9, 8x2 atlas");
+    Check(std::abs(v2 - 0.5F) < 0.001F, "tile UV v correct for id=9, 8x2 atlas");
+}
+
 } // namespace
 
 int main()
@@ -310,6 +488,10 @@ int main()
     TestSpriteFrameAnimator();
     TestTileMap();
     TestBox2DLegacy();
+    TestSpriteAnimationRuntime();
+    TestTileMapNewFields();
+    TestCollisionLayerMask();
+    TestTileUvCalculation();
     if (g_Failures == 0)
     {
         std::cout << "all checks passed\n";

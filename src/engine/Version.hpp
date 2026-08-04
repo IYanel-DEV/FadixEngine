@@ -4,5 +4,5 @@
 
 namespace fadix
 {
-inline constexpr std::string_view EngineVersion{"0.9.139"};
+inline constexpr std::string_view EngineVersion{"0.9.140"};
 }

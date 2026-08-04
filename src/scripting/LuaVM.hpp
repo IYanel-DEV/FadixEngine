@@ -77,6 +77,11 @@ public:
     void CallUpdate(int instance, const ScriptEntityHandle& entity, float deltaTime);
     void CallAnimationEvent(int instance, const ScriptEntityHandle& entity,
         const std::string& name, const std::string& payload);
+    // other is the touching entity (visitor for OnBodyEntered, sensor for OnBodyExited).
+    void CallBodyEntered(int instance, const ScriptEntityHandle& entity,
+        const ScriptEntityHandle& other);
+    void CallBodyExited(int instance, const ScriptEntityHandle& entity,
+        const ScriptEntityHandle& other);
     void CallDestroy(int instance, const ScriptEntityHandle& entity);
     void DestroyInstance(int instance);
 

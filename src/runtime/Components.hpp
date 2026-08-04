@@ -551,6 +551,12 @@ struct RigidBody2DComponent
     bool FixedRotation{false};
     glm::vec2 InitialLinearVelocity{0.0F};
     float InitialAngularVelocity{0.0F};
+    // Runtime only — not persisted:
+    glm::vec2 RuntimeLinearVelocity{0.0F}; // synced from Box2D body each step
+    glm::vec2 PendingVelocity{0.0F};       // written by scripts, applied next SyncFromWorld
+    bool HasPendingVelocity{false};
+    glm::vec2 PendingImpulse{0.0F};        // accumulated by scripts, applied next SyncFromWorld
+    bool HasPendingImpulse{false};
 };
 
 enum class Collider2DShape : std::uint8_t
@@ -626,6 +632,9 @@ struct TileMapComponent
     int GridWidth{20};
     int GridHeight{20};
     int SheetColumns{8};
+    int SheetRows{8};       // needed for correct V-axis UV calculation
+    int SortingLayer{0};
+    int OrderInLayer{0};
     float PixelsPerUnit{100.0F};
     int LayerCount{1};
     // Row-major: index = layer * GridWidth * GridHeight + y * GridWidth + x
