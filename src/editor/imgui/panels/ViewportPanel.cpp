@@ -419,9 +419,10 @@ void Draw2DSpritePlaceholders(
         const float ox = 0.5F - sprite.Pivot.x;
         const float oy = sprite.Pivot.y - 0.5F;
         // World-space corners matching the renderer model: pos + R*(S*(v+pivot)),
-        // with the same effective size = Sprite.Size * Transform.Scale.
-        const float sx = sprite.Size.x * scale.x;
-        const float sy = sprite.Size.y * scale.y;
+        // using the exact same effective size (scale + FlipX/FlipY) as the renderer.
+        const glm::vec2 effective = Sprite2DEffectiveSize(sprite, {scale.x, scale.y});
+        const float sx = effective.x;
+        const float sy = effective.y;
         const std::array<glm::vec2, 4> local{{{-0.5F, -0.5F}, {0.5F, -0.5F}, {0.5F, 0.5F},
             {-0.5F, 0.5F}}};
         std::array<ImVec2, 4> screen{};

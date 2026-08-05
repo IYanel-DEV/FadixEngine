@@ -869,9 +869,10 @@ void TestSprite2DEffectiveSize()
     using namespace fadix;
     std::cout << "[2d-smoke] Sprite2D effective size = Size * Transform.Scale (flip preserved)\n";
 
-    // Mirror the renderer/placeholder calculation:
-    //   sx = Size.x * Scale.x * (FlipX ? -1 : 1)
-    //   sy = Size.y * Scale.y * (FlipY ? -1 : 1)
+    // Shared helper Sprite2DEffectiveSize is the single source of truth used by
+    // the renderer and the Scene View placeholder:
+    //   x = Size.x * Scale.x * (FlipX ? -1 : 1)
+    //   y = Size.y * Scale.y * (FlipY ? -1 : 1)
     Sprite2DComponent spr;
     spr.Size = {2.0F, 3.0F};
     spr.FlipX = true;
@@ -879,19 +880,29 @@ void TestSprite2DEffectiveSize()
     TransformComponent xform;
     xform.Scale = {4.0F, 0.5F, 1.0F};
 
-    const float sx = spr.Size.x * xform.Scale.x * (spr.FlipX ? -1.0F : 1.0F);
-    const float sy = spr.Size.y * xform.Scale.y * (spr.FlipY ? -1.0F : 1.0F);
-    Check(std::abs(sx - (-8.0F)) < 0.001F, "effective X folds scale and flip (2*4*-1)");
-    Check(std::abs(sy - 1.5F) < 0.001F, "effective Y folds scale, no flip (3*0.5)");
-    Check(sx < 0.0F, "FlipX keeps negative X sign after scale");
-    Check(sy > 0.0F, "no FlipY keeps positive Y sign");
+    const glm::vec2 eff = Sprite2DEffectiveSize(spr, {xform.Scale.x, xform.Scale.y});
+    Check(std::abs(eff.x - (-8.0F)) < 0.001F, "effective X folds scale and flip (2*4*-1)");
+    Check(std::abs(eff.y - 1.5F) < 0.001F, "effective Y folds scale, no flip (3*0.5)");
+    Check(eff.x < 0.0F, "FlipX keeps negative X sign after scale");
+    Check(eff.y > 0.0F, "no FlipY keeps positive Y sign");
 
-    // Identity scale leaves Size unchanged.
-    const TransformComponent identity;
-    Check(std::abs(spr.Size.x * identity.Scale.x - 2.0F) < 0.001F,
-        "identity scale preserves Size.x");
-    Check(std::abs(spr.Size.y * identity.Scale.y - 3.0F) < 0.001F,
-        "identity scale preserves Size.y");
+    // FlipY with a non-centered pivot: sign flips independently of pivot.
+    Sprite2DComponent spr2;
+    spr2.Size = {5.0F, 5.0F};
+    spr2.FlipX = false;
+    spr2.FlipY = true;
+    spr2.Pivot = {0.0F, 1.0F}; // bottom-left / non-centered
+    const glm::vec2 eff2 = Sprite2DEffectiveSize(spr2, {1.0F, 2.0F});
+    Check(std::abs(eff2.x - 5.0F) < 0.001F, "no FlipX, unit scale keeps positive X");
+    Check(std::abs(eff2.y - (-10.0F)) < 0.001F, "FlipY + scale.y=2 gives -10 (pivot-independent)");
+    Check(eff2.y < 0.0F, "FlipY keeps negative Y sign with non-centered pivot");
+
+    // Identity scale, no flips leaves Size unchanged.
+    Sprite2DComponent plain;
+    plain.Size = {2.0F, 3.0F};
+    const glm::vec2 ident = Sprite2DEffectiveSize(plain, {1.0F, 1.0F});
+    Check(std::abs(ident.x - 2.0F) < 0.001F, "identity scale, no flip preserves Size.x");
+    Check(std::abs(ident.y - 3.0F) < 0.001F, "identity scale, no flip preserves Size.y");
 }
 
 } // namespace

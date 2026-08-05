@@ -1913,8 +1913,9 @@ private:
 
             // Effective size folds the entity's transform scale into the sprite
             // Size so the Scale gizmo visibly resizes the sprite. Flip signs kept.
-            const float sx = sprite.Size.x * scale.x * (sprite.FlipX ? -1.0F : 1.0F);
-            const float sy = sprite.Size.y * scale.y * (sprite.FlipY ? -1.0F : 1.0F);
+            const glm::vec2 effective = Sprite2DEffectiveSize(sprite, {scale.x, scale.y});
+            const float sx = effective.x;
+            const float sy = effective.y;
             const glm::vec3 pivotOffset{0.5F - sprite.Pivot.x, sprite.Pivot.y - 0.5F, 0.0F};
 
             const glm::mat4 model =

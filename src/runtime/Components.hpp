@@ -522,6 +522,16 @@ struct Sprite2DComponent
     return sprite.Texture.IsValid();
 }
 
+// Single source of truth for a Sprite2D's on-screen size. Folds the entity's
+// transform scale into Sprite.Size and applies FlipX/FlipY as sign flips. Used by
+// the renderer, the Scene View placeholder, and the 2D smoke so all three agree.
+[[nodiscard]] inline glm::vec2 Sprite2DEffectiveSize(
+    const Sprite2DComponent& sprite, const glm::vec2 transformScale) noexcept
+{
+    return {sprite.Size.x * transformScale.x * (sprite.FlipX ? -1.0F : 1.0F),
+        sprite.Size.y * transformScale.y * (sprite.FlipY ? -1.0F : 1.0F)};
+}
+
 // ============ Native 2D: Physics ============
 
 enum class Body2DType : std::uint8_t
