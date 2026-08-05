@@ -651,8 +651,9 @@ void HierarchyPanel::DrawTree(SceneEditor& scene, EditorUiState& ui)
                 ImGui::PopStyleColor();
             }
 
-            // Left click on the label (not the arrow — OpenOnArrow) selects.
-            if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
+            // Left click on the label selects; a click that toggled the expand
+            // arrow (IsItemToggledOpen) must not change the current selection.
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen())
             {
                 const ImGuiIO& io = ImGui::GetIO();
                 if (io.KeyShift)

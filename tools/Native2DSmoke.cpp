@@ -864,6 +864,36 @@ void Test2DPresetComponents()
     Check(area.second.Shape == Collider2DShape::Box, "Area 2D collider default Box shape");
 }
 
+void TestSprite2DEffectiveSize()
+{
+    using namespace fadix;
+    std::cout << "[2d-smoke] Sprite2D effective size = Size * Transform.Scale (flip preserved)\n";
+
+    // Mirror the renderer/placeholder calculation:
+    //   sx = Size.x * Scale.x * (FlipX ? -1 : 1)
+    //   sy = Size.y * Scale.y * (FlipY ? -1 : 1)
+    Sprite2DComponent spr;
+    spr.Size = {2.0F, 3.0F};
+    spr.FlipX = true;
+    spr.FlipY = false;
+    TransformComponent xform;
+    xform.Scale = {4.0F, 0.5F, 1.0F};
+
+    const float sx = spr.Size.x * xform.Scale.x * (spr.FlipX ? -1.0F : 1.0F);
+    const float sy = spr.Size.y * xform.Scale.y * (spr.FlipY ? -1.0F : 1.0F);
+    Check(std::abs(sx - (-8.0F)) < 0.001F, "effective X folds scale and flip (2*4*-1)");
+    Check(std::abs(sy - 1.5F) < 0.001F, "effective Y folds scale, no flip (3*0.5)");
+    Check(sx < 0.0F, "FlipX keeps negative X sign after scale");
+    Check(sy > 0.0F, "no FlipY keeps positive Y sign");
+
+    // Identity scale leaves Size unchanged.
+    const TransformComponent identity;
+    Check(std::abs(spr.Size.x * identity.Scale.x - 2.0F) < 0.001F,
+        "identity scale preserves Size.x");
+    Check(std::abs(spr.Size.y * identity.Scale.y - 3.0F) < 0.001F,
+        "identity scale preserves Size.y");
+}
+
 } // namespace
 
 int main()
@@ -887,6 +917,7 @@ int main()
     TestTileMapDuplication();
     TestSprite2DDefaultsAndPolicy();
     Test2DPresetComponents();
+    TestSprite2DEffectiveSize();
     if (g_Failures == 0)
     {
         std::cout << "all checks passed\n";

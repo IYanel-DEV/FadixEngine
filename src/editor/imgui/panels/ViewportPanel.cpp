@@ -409,21 +409,25 @@ void Draw2DSpritePlaceholders(
 
         glm::vec3 position{0.0F};
         glm::quat rotation{1.0F, 0.0F, 0.0F, 0.0F};
+        glm::vec3 scale{1.0F};
         if (const auto* xform = reg.try_get<TransformComponent>(entity))
         {
             position = xform->Position;
             rotation = xform->Rotation;
+            scale = xform->Scale;
         }
         const float ox = 0.5F - sprite.Pivot.x;
         const float oy = sprite.Pivot.y - 0.5F;
-        // World-space corners matching the renderer model: pos + R*(S*(v+pivot)).
+        // World-space corners matching the renderer model: pos + R*(S*(v+pivot)),
+        // with the same effective size = Sprite.Size * Transform.Scale.
+        const float sx = sprite.Size.x * scale.x;
+        const float sy = sprite.Size.y * scale.y;
         const std::array<glm::vec2, 4> local{{{-0.5F, -0.5F}, {0.5F, -0.5F}, {0.5F, 0.5F},
             {-0.5F, 0.5F}}};
         std::array<ImVec2, 4> screen{};
         for (std::size_t i = 0; i < 4; ++i)
         {
-            const glm::vec3 l{(local[i].x + ox) * sprite.Size.x,
-                (local[i].y + oy) * sprite.Size.y, 0.0F};
+            const glm::vec3 l{(local[i].x + ox) * sx, (local[i].y + oy) * sy, 0.0F};
             const glm::vec3 wpos = position + rotation * l;
             screen[i] = WorldToImGui({wpos.x, wpos.y}, cam, imgMin);
         }

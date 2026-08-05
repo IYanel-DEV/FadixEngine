@@ -1897,10 +1897,12 @@ private:
 
             glm::vec3 position{0.0F};
             glm::quat rotation{1.0F, 0.0F, 0.0F, 0.0F};
+            glm::vec3 scale{1.0F};
             if (transform != nullptr)
             {
                 position = transform->Position;
                 rotation = transform->Rotation;
+                scale = transform->Scale;
             }
             if (sprite.PixelSnap && sprite.PixelsPerUnit > 0.0F)
             {
@@ -1909,8 +1911,10 @@ private:
                 position.y = std::round(position.y / inv) * inv;
             }
 
-            const float sx = sprite.Size.x * (sprite.FlipX ? -1.0F : 1.0F);
-            const float sy = sprite.Size.y * (sprite.FlipY ? -1.0F : 1.0F);
+            // Effective size folds the entity's transform scale into the sprite
+            // Size so the Scale gizmo visibly resizes the sprite. Flip signs kept.
+            const float sx = sprite.Size.x * scale.x * (sprite.FlipX ? -1.0F : 1.0F);
+            const float sy = sprite.Size.y * scale.y * (sprite.FlipY ? -1.0F : 1.0F);
             const glm::vec3 pivotOffset{0.5F - sprite.Pivot.x, sprite.Pivot.y - 0.5F, 0.0F};
 
             const glm::mat4 model =
