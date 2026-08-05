@@ -532,6 +532,31 @@ struct Sprite2DComponent
         sprite.Size.y * transformScale.y * (sprite.FlipY ? -1.0F : 1.0F)};
 }
 
+// Editor-only: how the Scene View "No Sprite" placeholder previews a textureless
+// Sprite2D's Tint so tint edits give immediate feedback. The card fill blends a
+// neutral base toward the tint RGB and its opacity tracks tint alpha, while the
+// outline alpha keeps a floor so a zero-alpha sprite stays visible/selectable.
+// Single source of truth shared by the placeholder overlay and the 2D smoke.
+struct Sprite2DPlaceholderStyle
+{
+    glm::vec4 Card;     // filled card RGBA (0..1), tint-blended + translucent
+    float OutlineAlpha; // 0..1, never below a floor so it can't vanish
+};
+
+[[nodiscard]] inline Sprite2DPlaceholderStyle Sprite2DPlaceholderStyleFor(
+    const glm::vec4& tint) noexcept
+{
+    constexpr glm::vec3 neutral{40.0F / 255.0F, 44.0F / 255.0F, 52.0F / 255.0F};
+    constexpr float mixT = 0.55F;
+    const glm::vec3 card{
+        neutral.x + (tint.r - neutral.x) * mixT,
+        neutral.y + (tint.g - neutral.y) * mixT,
+        neutral.z + (tint.b - neutral.z) * mixT};
+    const float cardA = 0.30F + 0.35F * tint.a; // 0.30 (transparent) .. 0.65 (opaque)
+    const float outlineAlpha = tint.a > 0.35F ? tint.a : 0.35F;
+    return {{card.x, card.y, card.z, cardA}, outlineAlpha};
+}
+
 // ============ Native 2D: Physics ============
 
 enum class Body2DType : std::uint8_t

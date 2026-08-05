@@ -2,7 +2,9 @@
 // Collider2DComponent, SpriteFrameAnimatorComponent, TileMapComponent round-trips and
 // Box2DBodyComponent legacy compat. Exits non-zero on any failure.
 
+#include "editor/camera/Ortho2DCamera.hpp"
 #include "editor/scene/SceneSerializer.hpp"
+#include "engine/render/GizmoTypes.hpp"
 #include "engine/scene/SceneDocument.hpp"
 #include "engine/Uuid.hpp"
 #include "runtime/AnimationRuntime.hpp"
@@ -10,6 +12,7 @@
 #include "runtime/World.hpp"
 
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
 #include <array>
@@ -905,6 +908,112 @@ void TestSprite2DEffectiveSize()
     Check(std::abs(ident.y - 3.0F) < 0.001F, "identity scale, no flip preserves Size.y");
 }
 
+void TestOrtho2DLogicalIndependence()
+{
+    using namespace fadix;
+    using namespace fadix::editor;
+    std::cout << "[2d-smoke] Ortho2D logical mouse conversion is render-scale independent\n";
+
+    // Camera viewport is the LOGICAL image size; render-resolution scale only
+    // changes the GPU pixel target, which never touches ScreenToWorld. Feeding
+    // logical coords is scale-independent; feeding render pixels drifts.
+    Ortho2DCamera cam;
+    cam.SetViewportSize({800.0F, 600.0F}); // logical
+
+    constexpr float normX = 0.75F;
+    constexpr float normY = 0.25F;
+
+    // Production path: normalized cursor -> logical coords (logical size fixed).
+    const glm::vec2 world100 =
+        cam.ScreenToWorld({normX * 800.0F, normY * 600.0F});
+    const glm::vec2 worldLogicalAgain =
+        cam.ScreenToWorld({normX * 800.0F, normY * 600.0F});
+    Check(std::abs(world100.x - worldLogicalAgain.x) < 1.0e-5F &&
+              std::abs(world100.y - worldLogicalAgain.y) < 1.0e-5F,
+        "logical ScreenToWorld identical at 50% and 100% render (logical size fixed)");
+
+    // Bug path: at 50% render scale, feeding render pixels (norm * pixelSize,
+    // pixelSize = logical * 0.5) into the logical-size camera drifts off-cursor.
+    const glm::vec2 worldPix50 =
+        cam.ScreenToWorld({normX * 400.0F, normY * 300.0F});
+    Check(std::abs(world100.x - worldPix50.x) > 0.5F ||
+              std::abs(world100.y - worldPix50.y) > 0.5F,
+        "feeding render pixels into a logical camera drifts (must use logical)");
+
+    // Active-camera projection identity: Ortho2D is orthographic (w-row = 0,0,0,1);
+    // a perspective projection is not — this is exactly what EditProjection selects.
+    const glm::mat4 ortho = cam.Projection();
+    Check(std::abs(ortho[3][3] - 1.0F) < 1.0e-4F, "Ortho2D projection is orthographic");
+    const glm::mat4 persp =
+        glm::perspectiveRH_ZO(glm::radians(45.0F), 800.0F / 600.0F, 0.1F, 100.0F);
+    Check(std::abs(persp[3][3]) < 1.0e-4F, "perspective projection differs (w-divide)");
+}
+
+void TestGizmoScreenSizeTracksZoom()
+{
+    using namespace fadix;
+    std::cout << "[2d-smoke] Gizmo world size keeps a constant on-screen pixel size across zoom\n";
+
+    // Mirrors the Scene View hit-test path: the gizmo world size the renderer and
+    // hit-test share must project back to ~GizmoPixelSize screen pixels at every
+    // Ortho2D zoom, so the click zone tracks the drawn arrow.
+    const float pixelsH = 720.0F;
+    const float aspect = 1280.0F / 720.0F;
+    const glm::vec3 anchor{2.0F, -1.0F, 0.0F};
+    const glm::mat4 view = glm::lookAtRH(
+        glm::vec3{0.0F, 0.0F, 10.0F}, glm::vec3{0.0F, 0.0F, 0.0F}, glm::vec3{0.0F, 1.0F, 0.0F});
+
+    for (const float halfHeight : {0.05F, 1.0F, 5.0F, 50.0F, 500.0F})
+    {
+        const float hw = halfHeight * aspect;
+        const glm::mat4 proj =
+            glm::ortho(-hw, hw, -halfHeight, halfHeight, -1000.0F, 1000.0F);
+        const float worldSize = GizmoWorldSize(view, proj, anchor, pixelsH);
+        // Project the axis tip (anchor + worldSize on X) and the anchor to screen,
+        // measure the pixel gap: should stay ~GizmoPixelSize regardless of zoom.
+        const auto toScreenX = [&](const glm::vec3 p) {
+            const glm::vec4 clip = proj * view * glm::vec4{p, 1.0F};
+            return (clip.x / clip.w * 0.5F + 0.5F) * (pixelsH * aspect);
+        };
+        const float tipPx = toScreenX(anchor + glm::vec3{worldSize, 0.0F, 0.0F});
+        const float anchorPx = toScreenX(anchor);
+        const float screenLen = std::abs(tipPx - anchorPx);
+        Check(std::abs(screenLen - GizmoPixelSize) < 1.0F,
+            "gizmo tip stays ~" + std::to_string(static_cast<int>(GizmoPixelSize)) +
+                "px from anchor at halfHeight=" + std::to_string(halfHeight));
+    }
+}
+
+void TestSprite2DPlaceholderTint()
+{
+    using namespace fadix;
+    std::cout << "[2d-smoke] Textureless placeholder tint math + min outline\n";
+
+    // Card fill blends toward the tint RGB: a red tint yields a red-dominant card.
+    const Sprite2DPlaceholderStyle red =
+        Sprite2DPlaceholderStyleFor({1.0F, 0.0F, 0.0F, 1.0F});
+    Check(red.Card.x > red.Card.y && red.Card.x > red.Card.z,
+        "red tint pushes placeholder card toward red");
+
+    const Sprite2DPlaceholderStyle green =
+        Sprite2DPlaceholderStyleFor({0.0F, 1.0F, 0.0F, 1.0F});
+    Check(green.Card.y > green.Card.x && green.Card.y > green.Card.z,
+        "green tint pushes placeholder card toward green");
+
+    // Card opacity tracks tint alpha (more opaque tint -> more opaque preview).
+    const Sprite2DPlaceholderStyle faint =
+        Sprite2DPlaceholderStyleFor({1.0F, 1.0F, 1.0F, 0.0F});
+    const Sprite2DPlaceholderStyle solid =
+        Sprite2DPlaceholderStyleFor({1.0F, 1.0F, 1.0F, 1.0F});
+    Check(solid.Card.w > faint.Card.w, "card alpha increases with tint alpha");
+
+    // Alpha-zero tint keeps a minimum outline so the sprite stays selectable.
+    Check(faint.OutlineAlpha >= 0.35F - 1.0e-4F,
+        "alpha-zero placeholder retains a minimum editor outline");
+    Check(std::abs(solid.OutlineAlpha - 1.0F) < 1.0e-4F,
+        "opaque tint outline is fully opaque");
+}
+
 } // namespace
 
 int main()
@@ -929,6 +1038,9 @@ int main()
     TestSprite2DDefaultsAndPolicy();
     Test2DPresetComponents();
     TestSprite2DEffectiveSize();
+    TestOrtho2DLogicalIndependence();
+    TestGizmoScreenSizeTracksZoom();
+    TestSprite2DPlaceholderTint();
     if (g_Failures == 0)
     {
         std::cout << "all checks passed\n";

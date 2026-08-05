@@ -677,13 +677,24 @@ void InspectorPanel::Draw(SceneEditor& scene, EditorUiState& ui)
             }
             {
                 float col[4] = {sprite->Tint.r, sprite->Tint.g, sprite->Tint.b, sprite->Tint.a};
+                // ColorEdit4 activates one frame before it first reports a change,
+                // so begin the transaction on activation (outside the change guard)
+                // or the first edit frame is lost and undo has nothing to restore.
+                // Values stay normalized 0..1 internally even when shown as 0..255.
                 if (ImGui::ColorEdit4("Tint", col))
-                {
-                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
                     sprite->Tint = {col[0], col[1], col[2], col[3]};
-                }
+                if (ImGui::IsItemActivated())
+                    scene.BeginEditTransaction();
                 if (ImGui::IsItemDeactivatedAfterEdit())
                     scene.EndEditTransaction("Edit Sprite Tint");
+            }
+            if (!Sprite2DHasRenderableTexture(*sprite))
+            {
+                ImGui::TextDisabled("(?) Tint previews in Scene View only");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        "Tint previews here, but this Sprite2D requires a texture "
+                        "to render in Game View.");
             }
             {
                 float v[2] = {sprite->Pivot.x, sprite->Pivot.y};

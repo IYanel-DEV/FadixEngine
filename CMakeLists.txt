@@ -620,6 +620,7 @@ add_dependencies(fadix_editor fadix_scene_persistence_smoke)
 
 add_executable(fadix_2d_smoke
     tools/Native2DSmoke.cpp
+    src/editor/camera/Ortho2DCamera.cpp
     src/editor/scene/EntityTextIO.cpp
     src/editor/scene/SceneSerializer.cpp
     src/engine/Uuid.cpp)

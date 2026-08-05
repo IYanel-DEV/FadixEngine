@@ -334,6 +334,30 @@ void Draw2DEntityOverlays(
     }
 }
 
+// Cheap, readback-free contrast scheme for the floating viewport overlays. The
+// foreground glyph color is chosen from the known viewport background (bright in
+// Ortho2D, dark in perspective) and paired with a 1px opposite-color shadow so
+// glyphs stay legible over both bright and dark scene content behind them.
+struct OverlayPalette
+{
+    ImU32 Fg;     // glyph / chevron color
+    ImU32 Shadow; // 1px opposite-color drop shadow
+    ImU32 Hover;  // subtle translucent neutral hover background
+    ImU32 Active; // restrained Fadix blue for the active tool
+};
+
+[[nodiscard]] OverlayPalette MakeOverlayPalette(const bool lightScene) noexcept
+{
+    constexpr ImU32 kAccent = IM_COL32(58, 122, 226, 235); // restrained Fadix blue
+    if (lightScene)
+    {
+        return {IM_COL32(28, 32, 40, 255), IM_COL32(255, 255, 255, 175),
+            IM_COL32(0, 0, 0, 32), kAccent};
+    }
+    return {IM_COL32(228, 232, 240, 255), IM_COL32(0, 0, 0, 175),
+        IM_COL32(255, 255, 255, 32), kAccent};
+}
+
 // Draws a crisp chevron from line primitives (no icon-font glyph dependency).
 // dir: 0 = left '<', 1 = right '>', 2 = down 'v'.
 void DrawChevron(ImDrawList* dl, const ImVec2 center, const float size, const int dir,
@@ -435,16 +459,38 @@ void Draw2DSpritePlaceholders(
 
         const bool selected = selection && world.Find(*selection) == entity;
 
-        // Hatched translucent card + outline.
-        drawList->AddQuadFilled(screen[0], screen[1], screen[2], screen[3],
-            IM_COL32(40, 44, 52, 120));
-        const ImU32 outline = selected ? IM_COL32(90, 160, 250, 255)
-                                       : IM_COL32(150, 158, 175, 180);
+        // Fold the sprite's Tint into the placeholder so tint edits preview live
+        // even with no texture. The card fill blends toward the tint RGB; outline
+        // and glyph blend a light neutral base toward the tint so they read the
+        // tint yet never vanish (e.g. a black or zero-alpha tint stays visible).
+        const Sprite2DPlaceholderStyle style = Sprite2DPlaceholderStyleFor(sprite.Tint);
+        const auto toU32 = [](const glm::vec4& c) {
+            return IM_COL32(static_cast<int>(std::clamp(c.x, 0.0F, 1.0F) * 255.0F),
+                static_cast<int>(std::clamp(c.y, 0.0F, 1.0F) * 255.0F),
+                static_cast<int>(std::clamp(c.z, 0.0F, 1.0F) * 255.0F),
+                static_cast<int>(std::clamp(c.w, 0.0F, 1.0F) * 255.0F));
+        };
+        const auto blendTowardTint = [&sprite](const glm::vec3 base, const float k) {
+            return glm::vec3{base.x + (sprite.Tint.r - base.x) * k,
+                base.y + (sprite.Tint.g - base.y) * k,
+                base.z + (sprite.Tint.b - base.z) * k};
+        };
+        const glm::vec3 outlineRgb =
+            blendTowardTint({150.0F / 255.0F, 158.0F / 255.0F, 175.0F / 255.0F}, 0.6F);
+        const glm::vec3 glyphRgb =
+            blendTowardTint({190.0F / 255.0F, 198.0F / 255.0F, 214.0F / 255.0F}, 0.5F);
+
+        // Tint-blended translucent card.
+        drawList->AddQuadFilled(screen[0], screen[1], screen[2], screen[3], toU32(style.Card));
+        const ImU32 outline = selected
+            ? IM_COL32(90, 160, 250, 255)
+            : toU32({outlineRgb.x, outlineRgb.y, outlineRgb.z, style.OutlineAlpha});
         drawList->AddQuad(screen[0], screen[1], screen[2], screen[3], outline,
             selected ? 2.2F : 1.4F);
         // Two hatch strokes across the card for the "empty" read.
-        drawList->AddLine(screen[0], screen[2], IM_COL32(150, 158, 175, 70), 1.0F);
-        drawList->AddLine(screen[1], screen[3], IM_COL32(150, 158, 175, 70), 1.0F);
+        const ImU32 hatch = toU32({outlineRgb.x, outlineRgb.y, outlineRgb.z, 0.28F});
+        drawList->AddLine(screen[0], screen[2], hatch, 1.0F);
+        drawList->AddLine(screen[1], screen[3], hatch, 1.0F);
 
         // Centered image glyph, sized to the on-screen card, when large enough.
         const ImVec2 center{(screen[0].x + screen[2].x) * 0.5F,
@@ -453,14 +499,14 @@ void Draw2DSpritePlaceholders(
         const float glyphR = std::clamp(diag * 0.18F, 5.0F, 22.0F);
         if (diag > 26.0F)
         {
-            DrawImageGlyph(drawList, center, glyphR, IM_COL32(190, 198, 214, 210));
+            DrawImageGlyph(drawList, center, glyphR, toU32({glyphRgb.x, glyphRgb.y, glyphRgb.z, 0.82F}));
         }
         if (diag > 90.0F)
         {
             const char* label = "No Sprite";
             const ImVec2 ts = ImGui::CalcTextSize(label);
             drawList->AddText({center.x - ts.x * 0.5F, center.y + glyphR + 3.0F},
-                IM_COL32(190, 198, 214, 200), label);
+                toU32({glyphRgb.x, glyphRgb.y, glyphRgb.z, 0.80F}), label);
         }
     }
 }
@@ -887,18 +933,32 @@ void ViewportPanel::DrawViewImage(View& view, const char* emptyMessage, const bo
     view.Hovered = ImGui::IsItemHovered();
 }
 
-glm::vec2 ViewportPanel::MouseInViewPixels(const View& view) const
+glm::vec2 ViewportPanel::MouseInViewNormalized(const View& view) const
 {
     const ImVec2 mouse = ImGui::GetIO().MousePos;
-    if (view.ImageSize.x <= 1.0F || view.ImageSize.y <= 1.0F || view.PixelW == 0)
+    if (view.ImageSize.x <= 1.0F || view.ImageSize.y <= 1.0F)
     {
         return {};
     }
-    const float u = (mouse.x - view.ImageMin.x) / view.ImageSize.x;
-    const float v = (mouse.y - view.ImageMin.y) / view.ImageSize.y;
-    return {
-        std::clamp(u, 0.0F, 1.0F) * static_cast<float>(view.PixelW - 1),
-        std::clamp(v, 0.0F, 1.0F) * static_cast<float>(view.PixelH - 1)};
+    return {std::clamp((mouse.x - view.ImageMin.x) / view.ImageSize.x, 0.0F, 1.0F),
+        std::clamp((mouse.y - view.ImageMin.y) / view.ImageSize.y, 0.0F, 1.0F)};
+}
+
+glm::vec2 ViewportPanel::MouseInViewLogical(const View& view) const
+{
+    const glm::vec2 n = MouseInViewNormalized(view);
+    return {n.x * view.LogicalW, n.y * view.LogicalH};
+}
+
+glm::vec2 ViewportPanel::MouseInViewPixels(const View& view) const
+{
+    if (view.PixelW == 0 || view.PixelH == 0)
+    {
+        return {};
+    }
+    const glm::vec2 n = MouseInViewNormalized(view);
+    return {n.x * static_cast<float>(view.PixelW - 1),
+        n.y * static_cast<float>(view.PixelH - 1)};
 }
 
 void ViewportPanel::DrawSceneToolbar(
@@ -1102,11 +1162,14 @@ bool ViewportPanel::EdgeTab(
     const bool clicked = ImGui::InvisibleButton("##tab", size);
     const bool hovered = ImGui::IsItemHovered();
     m_OverlayHovered = m_OverlayHovered || hovered;
+    const OverlayPalette pal = MakeOverlayPalette(m_SceneViewLight);
     dl->AddRectFilled(pos, {pos.x + size.x, pos.y + size.y},
-        hovered ? IM_COL32(255, 255, 255, 34) : IM_COL32(255, 255, 255, 18), 4.0F);
-    DrawChevron(dl, {pos.x + size.x * 0.5F, pos.y + size.y * 0.5F},
-        std::min(size.x, size.y) * 0.6F, dir,
-        hovered ? IM_COL32(235, 238, 245, 255) : IM_COL32(190, 196, 208, 230));
+        hovered ? pal.Hover : IM_COL32(128, 128, 128, 26), 4.0F);
+    const ImVec2 chevronCenter{pos.x + size.x * 0.5F, pos.y + size.y * 0.5F};
+    const float chevronSize = std::min(size.x, size.y) * 0.6F;
+    // Opposite-color 1px shadow first, then the adaptive foreground glyph.
+    DrawChevron(dl, {chevronCenter.x + 1.0F, chevronCenter.y + 1.0F}, chevronSize, dir, pal.Shadow);
+    DrawChevron(dl, chevronCenter, chevronSize, dir, pal.Fg);
     if (hovered)
     {
         ImGui::SetTooltip("%s", tip);
@@ -1122,7 +1185,6 @@ void ViewportPanel::DrawTransformRail(const View& view)
         return;
     }
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    static constexpr ImU32 kAccent = IM_COL32(58, 122, 226, 235); // restrained Fadix blue
 
     if (!m_TransformRailVisible)
     {
@@ -1159,42 +1221,46 @@ void ViewportPanel::DrawTransformRail(const View& view)
     const float x = view.ImageMin.x + 12.0F;
     float y = view.ImageMin.y + view.ImageSize.y * 0.5F - h * 0.5F;
 
-    // No solid backing panel: each button is transparent until hovered/active.
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 7.0F);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0F);
-    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255, 255, 255, 30));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(255, 255, 255, 46));
+    // No solid backing panel and no ImGui button chrome: an InvisibleButton takes
+    // the click, and the glyph is drawn manually so its color adapts to the scene
+    // (dark on bright Ortho2D, light on dark perspective) with a 1px opposite
+    // shadow, staying readable over any scene content behind it.
+    const OverlayPalette pal = MakeOverlayPalette(m_SceneViewLight);
     for (const Tool& t : tools)
     {
-        ImGui::SetCursorScreenPos({x, y});
+        const ImVec2 p{x, y};
+        ImGui::SetCursorScreenPos(p);
         ImGui::PushID(t.Id);
+        const bool clicked = ImGui::InvisibleButton("##tool", {btn, btn});
+        const bool hovered = ImGui::IsItemHovered();
+        m_OverlayHovered = m_OverlayHovered || hovered;
         const bool active = m_GizmoTool == t.Id;
         if (active)
         {
-            // Soft rounded blue highlight behind the active tool.
-            dl->AddRectFilled({x, y}, {x + btn, y + btn}, kAccent, 7.0F);
-            ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
+            dl->AddRectFilled(p, {p.x + btn, p.y + btn}, pal.Active, 7.0F);
         }
-        if (ImGui::Button(t.Icon, {btn, btn}))
+        else if (hovered)
         {
-            m_GizmoTool = t.Id;
+            dl->AddRectFilled(p, {p.x + btn, p.y + btn}, pal.Hover, 7.0F);
         }
-        if (active)
-        {
-            ImGui::PopStyleColor();
-        }
-        const bool hovered = ImGui::IsItemHovered();
-        m_OverlayHovered = m_OverlayHovered || hovered;
+        const ImVec2 ts = ImGui::CalcTextSize(t.Icon);
+        const ImVec2 gp{p.x + (btn - ts.x) * 0.5F, p.y + (btn - ts.y) * 0.5F};
+        // Active tool sits on the blue chip, so a white glyph reads best there.
+        const ImU32 fg = active ? IM_COL32(255, 255, 255, 255) : pal.Fg;
+        const ImU32 sh = active ? IM_COL32(0, 0, 0, 150) : pal.Shadow;
+        dl->AddText({gp.x + 1.0F, gp.y + 1.0F}, sh, t.Icon);
+        dl->AddText(gp, fg, t.Icon);
         if (hovered)
         {
             ImGui::SetTooltip("%s", t.Tip);
         }
+        if (clicked)
+        {
+            m_GizmoTool = t.Id;
+        }
         ImGui::PopID();
         y += btn + spacing;
     }
-    ImGui::PopStyleColor(3);
-    ImGui::PopStyleVar(2);
 
     // Collapse chevron tab beneath the tools.
     if (EdgeTab("##RailCollapse", {x + (btn - 20.0F) * 0.5F, y + 2.0F}, {20.0F, 16.0F}, 0,
@@ -1300,19 +1366,25 @@ void ViewportPanel::DrawOrientationGizmo(const View& view, CameraModule& camera)
             dl->AddLine(center, p.Pos, withAlpha(b.Color, 0.35F + 0.55F * front), 1.5F);
             const float er = (hovered ? 10.0F : 8.5F) + 1.5F * front; // emphasize camera-facing
             dl->AddCircleFilled(p.Pos, er, withAlpha(b.Color, 0.55F + 0.45F * front), 24);
+            // Dark contrasting outline keeps the colored endpoint readable against
+            // bright scene content without hiding the red/green/blue identity.
+            dl->AddCircle(p.Pos, er, IM_COL32(18, 20, 26, 200), 24, 1.0F);
             if (hovered)
             {
                 dl->AddCircle(p.Pos, er + 1.5F, IM_COL32(255, 255, 255, 220), 24, 1.5F);
             }
             const char label[2]{b.Letter, '\0'};
             const ImVec2 ts = ImGui::CalcTextSize(label);
-            dl->AddText({p.Pos.x - ts.x * 0.5F, p.Pos.y - ts.y * 0.5F},
-                IM_COL32(20, 22, 26, 255), label);
+            const ImVec2 lp{p.Pos.x - ts.x * 0.5F, p.Pos.y - ts.y * 0.5F};
+            dl->AddText({lp.x + 1.0F, lp.y + 1.0F}, IM_COL32(255, 255, 255, 130), label);
+            dl->AddText(lp, IM_COL32(20, 22, 26, 255), label);
         }
         else
         {
-            // Smaller muted ring for the negative direction.
+            // Smaller muted ring for the negative direction, with a subtle dark
+            // contrasting outline so it stays visible on bright scenes.
             const float rr = hovered ? 6.5F : 5.0F;
+            dl->AddCircle(p.Pos, rr + 0.5F, IM_COL32(18, 20, 26, 150), 20, 1.0F);
             dl->AddCircle(p.Pos, rr, withAlpha(b.Color, 0.3F + 0.4F * front), 20, 1.6F);
             if (hovered)
             {
@@ -1431,16 +1503,23 @@ std::optional<GizmoHandle> ViewportPanel::HitTestGizmo(
         return std::nullopt;
     }
 
-    const glm::vec2 local = MouseInViewPixels(view);
+    // Active edit camera: Ortho2D matrices in 2D, workbench perspective otherwise
+    // — the same matrices the renderer drew the gizmo with, so hit zones track the
+    // visible arrows at any zoom. The ray uses logical mouse + logical size (NDC is
+    // resolution-independent); GizmoWorldSize uses PixelH to match the renderer,
+    // which builds gizmo geometry against the render-target height.
+    const glm::mat4 editView = camera.EditView();
+    const glm::mat4 editProjection = camera.EditProjection();
+    const glm::vec2 local = MouseInViewLogical(view);
     const GizmoRay ray = MouseRayFromCamera(
-        camera.Camera().View(),
-        camera.Camera().Projection(),
+        editView,
+        editProjection,
         local,
-        {static_cast<float>(view.PixelW), static_cast<float>(view.PixelH)});
+        {view.LogicalW, view.LogicalH});
     const glm::vec3 position = transform->Position;
     const float size = GizmoWorldSize(
-        camera.Camera().View(),
-        camera.Camera().Projection(),
+        editView,
+        editProjection,
         position,
         static_cast<float>(view.PixelH));
     if (size <= 0.0F)
@@ -1578,6 +1657,26 @@ void ViewportPanel::Draw(
 
             m_OverlayHovered = false;
 
+            // Overlay glyph contrast follows the viewport: the Ortho2D scene is
+            // bright (dark glyphs), the perspective scene is dark (light glyphs).
+            const ViewportProjectionMode projMode = camera.ProjectionMode();
+            m_SceneViewLight = projMode == ViewportProjectionMode::Ortho2D;
+
+            // Clear stale gizmo hover when the projection mode or 2D zoom changes,
+            // so a hover cached at a different scale/mode never displaces the click
+            // zone (wheel zoom fires no motion event to re-hit-test). Not while
+            // dragging — an active drag owns the handle regardless of zoom.
+            const float ortho2DZoom = camera.Ortho2D().OrthoHalfHeight();
+            if (!m_GizmoDragging &&
+                (projMode != m_LastProjectionMode ||
+                    (projMode == ViewportProjectionMode::Ortho2D &&
+                        std::abs(ortho2DZoom - m_LastOrtho2DZoom) > 1.0e-4F)))
+            {
+                m_GizmoHover.reset();
+            }
+            m_LastProjectionMode = projMode;
+            m_LastOrtho2DZoom = ortho2DZoom;
+
             // Update 2D camera cursor position for zoom centering. The Ortho2D
             // camera's viewport size is the LOGICAL image size, so feed the cursor
             // in that same logical space (not render pixels) or zoom-to-cursor
@@ -1648,20 +1747,22 @@ void ViewportPanel::Draw(
                         {
                             if (payload->IsDelivery() && m_Sprite2DDropHandler)
                             {
-                                const glm::vec2 pixel = MouseInViewPixels(m_Scene);
-                                const glm::vec2 worldPos = camera.Ortho2D().ScreenToWorld(pixel);
+                                // Ortho2D camera is configured in logical size; feed
+                                // logical mouse coords (not render pixels) or the drop
+                                // lands off-cursor when DPI/resolution-scale != 1.
+                                const glm::vec2 logical = MouseInViewLogical(m_Scene);
+                                const glm::vec2 worldPos = camera.Ortho2D().ScreenToWorld(logical);
                                 m_Sprite2DDropHandler(*asset, worldPos);
                             }
                         }
                         else if (asset->AssetType == "Mesh" && !in2DMode)
                         {
-                            const glm::vec2 pixel = MouseInViewPixels(m_Scene);
+                            const glm::vec2 logical = MouseInViewLogical(m_Scene);
                             const GizmoRay ray = MouseRayFromCamera(
-                                camera.Camera().View(),
-                                camera.Camera().Projection(),
-                                pixel,
-                                {static_cast<float>(m_Scene.PixelW),
-                                    static_cast<float>(m_Scene.PixelH)});
+                                camera.EditView(),
+                                camera.EditProjection(),
+                                logical,
+                                {m_Scene.LogicalW, m_Scene.LogicalH});
                             if (const auto hit = RayPlaneIntersect(
                                     ray, glm::vec3{0.0F}, glm::vec3{0.0F, 1.0F, 0.0F}))
                             {
@@ -1794,13 +1895,15 @@ void ViewportPanel::HandleEvent(
     }
 
     const GizmoMode mode = ToolToMode(m_GizmoTool);
-    const glm::vec2 local = MouseInViewPixels(m_Scene);
+    // Logical mouse + active edit-camera matrices (Ortho2D in 2D, workbench in 3D)
+    // so drag rays share the projection the gizmo was drawn with.
+    const glm::vec2 local = MouseInViewLogical(m_Scene);
     const auto mouseRay = [&]() {
         return MouseRayFromCamera(
-            camera.Camera().View(),
-            camera.Camera().Projection(),
+            camera.EditView(),
+            camera.EditProjection(),
             local,
-            {static_cast<float>(m_Scene.PixelW), static_cast<float>(m_Scene.PixelH)});
+            {m_Scene.LogicalW, m_Scene.LogicalH});
     };
 
     // 2D tilemap viewport painting (intercepts before gizmo when a paint tool is active)

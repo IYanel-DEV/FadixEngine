@@ -36,6 +36,13 @@ public:
     void SetProjectionMode(ViewportProjectionMode mode) noexcept;
     void SetCursorViewportPos(glm::vec2 viewportPos) noexcept;
 
+    /// Active edit-camera matrices: the Ortho2D camera in 2D mode, otherwise the
+    /// perspective workbench camera. Renderer gizmo drawing, gizmo world size, hit
+    /// testing and drag rays must all use these so the visible gizmo and its click
+    /// zones share one projection (ApplyToViewport feeds the renderer the same).
+    [[nodiscard]] glm::mat4 EditView() const noexcept;
+    [[nodiscard]] glm::mat4 EditProjection() const noexcept;
+
     [[nodiscard]] WorkbenchCamera& Camera() noexcept;
     [[nodiscard]] const WorkbenchCamera& Camera() const noexcept;
     [[nodiscard]] Ortho2DCamera& Ortho2D() noexcept;

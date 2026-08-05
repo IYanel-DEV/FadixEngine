@@ -190,6 +190,12 @@ private:
     void DrawViewImage(View& view, const char* emptyMessage, bool showTexture);
     void MeasureView(View& view, float dpiScale);
     void EnsureSize(View& view);
+    // Cursor position inside a view in three coordinate spaces. Normalized [0,1]
+    // is the shared source; Logical feeds camera math (ScreenToWorld / mouse rays,
+    // both configured in logical size); Pixels feeds GPU picking only. Never feed
+    // render pixels into a logical-size camera.
+    [[nodiscard]] glm::vec2 MouseInViewNormalized(const View& view) const;
+    [[nodiscard]] glm::vec2 MouseInViewLogical(const View& view) const;
     [[nodiscard]] glm::vec2 MouseInViewPixels(const View& view) const;
     void UpdateGizmoVisual(
         View& view,
@@ -219,6 +225,13 @@ private:
     int m_GizmoTool{1};
     bool m_GizmoDragging{false};
     std::optional<GizmoHandle> m_GizmoHover;
+    // Overlay glyphs adapt to the active viewport: dark on the bright Ortho2D
+    // scene, light on the dark perspective scene. Set each Scene View frame.
+    bool m_SceneViewLight{false};
+    // Stale gizmo-hover clearing: reset hover when the projection mode or 2D zoom
+    // changes (wheel zoom fires no mouse-motion that would otherwise re-hit-test).
+    ViewportProjectionMode m_LastProjectionMode{ViewportProjectionMode::Perspective};
+    float m_LastOrtho2DZoom{-1.0F};
     std::optional<TransformComponent> m_GizmoStartTransform;
     bool m_PendingPick{false};
     ViewportDebugView m_DebugView{ViewportDebugView::None};

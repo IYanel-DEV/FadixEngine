@@ -39,6 +39,24 @@ void CameraModule::ApplyToViewport(ViewportRenderer& viewport) const
     viewport.SetCamera(m_Camera.View(), m_Camera.Projection());
 }
 
+glm::mat4 CameraModule::EditView() const noexcept
+{
+    if (m_ProjectionMode == ViewportProjectionMode::Ortho2D)
+    {
+        return m_Ortho2D.View();
+    }
+    return m_Camera.View();
+}
+
+glm::mat4 CameraModule::EditProjection() const noexcept
+{
+    if (m_ProjectionMode == ViewportProjectionMode::Ortho2D)
+    {
+        return m_Ortho2D.Projection();
+    }
+    return m_Camera.Projection();
+}
+
 void CameraModule::SetViewportMode(const ViewportCameraMode mode) noexcept
 {
     m_ViewportMode = mode;
