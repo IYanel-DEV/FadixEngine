@@ -10,5 +10,7 @@ struct CameraComponent
     float NearPlane{0.05F};
     float FarPlane{5000.0F};
     bool Primary{false};
+    bool Orthographic{false};
+    float OrthoSize{10.0F}; // half-height in world units
 };
 }

@@ -115,6 +115,21 @@ void WorkbenchCamera::Look(const glm::vec2 delta)
     m_Pivot = m_Position + Forward() * m_OrbitDistance;
 }
 
+void WorkbenchCamera::SetLookDirection(glm::vec3 forward) noexcept
+{
+    const float length = glm::length(forward);
+    if (length <= 1.0e-6F)
+    {
+        return;
+    }
+    forward /= length;
+    // Clamp near-vertical looks so Right()/Up() (cross with WorldUp) stay well-defined.
+    m_Pitch = glm::clamp(
+        glm::degrees(std::asin(glm::clamp(forward.y, -1.0F, 1.0F))), -89.0F, 89.0F);
+    m_Yaw = glm::degrees(std::atan2(forward.z, forward.x));
+    UpdateOrbitPosition();
+}
+
 void WorkbenchCamera::SetViewportSize(const glm::vec2 size) noexcept
 {
     m_ViewportSize = glm::max(size, glm::vec2{1.0F});

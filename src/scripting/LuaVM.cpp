@@ -573,6 +573,97 @@ struct LuaEntity
         }
         return sol::make_object(state, sol::lua_nil);
     }
+
+    [[nodiscard]] std::tuple<float, float, float, float> getSpriteTint() const
+    {
+        if (const auto* s = reg ? reg->try_get<Sprite2DComponent>(e) : nullptr)
+        {
+            return {s->Tint.r, s->Tint.g, s->Tint.b, s->Tint.a};
+        }
+        return {1.0F, 1.0F, 1.0F, 1.0F};
+    }
+    void setSpriteTint(float r, float g, float b, float a)
+    {
+        if (auto* s = reg ? reg->try_get<Sprite2DComponent>(e) : nullptr)
+        {
+            s->Tint = {r, g, b, a};
+        }
+    }
+    void setSpriteVisible(const bool visible)
+    {
+        if (auto* s = reg ? reg->try_get<Sprite2DComponent>(e) : nullptr)
+        {
+            s->Tint.a = visible ? 1.0F : 0.0F;
+        }
+    }
+    void setSortOrder(const int layer, const int order)
+    {
+        if (auto* s = reg ? reg->try_get<Sprite2DComponent>(e) : nullptr)
+        {
+            s->SortingLayer = layer;
+            s->OrderInLayer = order;
+        }
+    }
+    void playSpriteAnimation(const std::string& clipName)
+    {
+        if (auto* a = reg ? reg->try_get<SpriteFrameAnimatorComponent>(e) : nullptr)
+        {
+            if (a->CurrentClip != clipName)
+            {
+                a->CurrentClip = clipName;
+                a->CurrentTime = 0.0F;
+                a->CurrentFrame = 0;
+            }
+            a->Playing = true;
+        }
+    }
+    void stopSpriteAnimation()
+    {
+        if (auto* a = reg ? reg->try_get<SpriteFrameAnimatorComponent>(e) : nullptr)
+        {
+            a->Playing = false;
+            a->CurrentTime = 0.0F;
+            a->CurrentFrame = 0;
+        }
+    }
+    void pauseSpriteAnimation()
+    {
+        if (auto* a = reg ? reg->try_get<SpriteFrameAnimatorComponent>(e) : nullptr)
+        {
+            a->Playing = false;
+        }
+    }
+    [[nodiscard]] std::tuple<float, float> getVelocity2D() const
+    {
+        if (reg == nullptr)
+        {
+            return {0.0F, 0.0F};
+        }
+        const RigidBody2DComponent* rb = reg->try_get<RigidBody2DComponent>(e);
+        if (rb == nullptr)
+        {
+            return {0.0F, 0.0F};
+        }
+        // Return the runtime velocity synced from Box2D (accurate after the first step).
+        return {rb->RuntimeLinearVelocity.x, rb->RuntimeLinearVelocity.y};
+    }
+    void setVelocity2D(const float vx, const float vy)
+    {
+        if (auto* rb = reg ? reg->try_get<RigidBody2DComponent>(e) : nullptr)
+        {
+            rb->PendingVelocity = {vx, vy};
+            rb->HasPendingVelocity = true;
+        }
+    }
+    void applyImpulse2D(const float ix, const float iy)
+    {
+        if (auto* rb = reg ? reg->try_get<RigidBody2DComponent>(e) : nullptr)
+        {
+            rb->PendingImpulse.x += ix;
+            rb->PendingImpulse.y += iy;
+            rb->HasPendingImpulse = true;
+        }
+    }
 };
 
 // Physical scancodes via SDL so WASD stays layout-stable. Returns false when
@@ -839,7 +930,17 @@ public:
             fxs::kEntitySetAnimatorInt, &LuaEntity::setAnimatorInt,
             fxs::kEntityTriggerAnimator, &LuaEntity::triggerAnimator,
             fxs::kEntityDestroy, &LuaEntity::destroy,
-            fxs::kEntityGetTarget, &LuaEntity::getTarget);
+            fxs::kEntityGetTarget, &LuaEntity::getTarget,
+            fxs::kEntityGetSpriteTint, &LuaEntity::getSpriteTint,
+            fxs::kEntitySetSpriteTint, &LuaEntity::setSpriteTint,
+            fxs::kEntitySetSpriteVisible, &LuaEntity::setSpriteVisible,
+            fxs::kEntitySetSortOrder, &LuaEntity::setSortOrder,
+            fxs::kEntityPlaySpriteAnimation, &LuaEntity::playSpriteAnimation,
+            fxs::kEntityStopSpriteAnimation, &LuaEntity::stopSpriteAnimation,
+            fxs::kEntityPauseSpriteAnimation, &LuaEntity::pauseSpriteAnimation,
+            fxs::kEntityGetVelocity2D, &LuaEntity::getVelocity2D,
+            fxs::kEntitySetVelocity2D, &LuaEntity::setVelocity2D,
+            fxs::kEntityApplyImpulse2D, &LuaEntity::applyImpulse2D);
 
         // Route print() to the editor's Output panel instead of stdout.
         m_Lua.set_function(fxs::kPrint, [this](sol::variadic_args args) {
@@ -1071,6 +1172,30 @@ public:
         }
     }
 
+    void CallBodyContact(int instance, const char* callbackName,
+        const ScriptEntityHandle& entity, const ScriptEntityHandle& other)
+    {
+        if (instance < 0 || instance >= static_cast<int>(m_Instances.size()) ||
+            !m_Instances[static_cast<std::size_t>(instance)])
+        {
+            return;
+        }
+        sol::environment& environment = *m_Instances[static_cast<std::size_t>(instance)];
+        sol::protected_function callback = environment[callbackName];
+        if (!callback.valid())
+        {
+            return;
+        }
+        const LuaEntity self{entity.Registry, entity.Entity, entity.PendingDestroy};
+        const LuaEntity otherEntity{other.Registry, other.Entity, other.PendingDestroy};
+        const sol::protected_function_result result = callback(self, otherEntity);
+        if (!result.valid())
+        {
+            const sol::error error = result;
+            Fail(error.what());
+        }
+    }
+
     void DestroyInstance(int instance)
     {
         if (instance >= 0 && instance < static_cast<int>(m_Instances.size()))
@@ -1138,6 +1263,16 @@ void LuaVM::CallAnimationEvent(int instance, const ScriptEntityHandle& entity,
 {
     m_Impl->CallAnimationEvent(instance, entity, name, payload);
 }
+void LuaVM::CallBodyEntered(int instance, const ScriptEntityHandle& entity,
+    const ScriptEntityHandle& other)
+{
+    m_Impl->CallBodyContact(instance, fxs::kOnBodyEntered, entity, other);
+}
+void LuaVM::CallBodyExited(int instance, const ScriptEntityHandle& entity,
+    const ScriptEntityHandle& other)
+{
+    m_Impl->CallBodyContact(instance, fxs::kOnBodyExited, entity, other);
+}
 void LuaVM::CallDestroy(int instance, const ScriptEntityHandle& entity)
 {
     m_Impl->Call(instance, fxs::kOnDestroy, entity, nullptr);
@@ -1169,6 +1304,8 @@ int LuaVM::Instantiate(const std::string&) { return -1; }
 void LuaVM::CallStart(int, const ScriptEntityHandle&) {}
 void LuaVM::CallUpdate(int, const ScriptEntityHandle&, float) {}
 void LuaVM::CallAnimationEvent(int, const ScriptEntityHandle&, const std::string&, const std::string&) {}
+void LuaVM::CallBodyEntered(int, const ScriptEntityHandle&, const ScriptEntityHandle&) {}
+void LuaVM::CallBodyExited(int, const ScriptEntityHandle&, const ScriptEntityHandle&) {}
 void LuaVM::CallDestroy(int, const ScriptEntityHandle&) {}
 void LuaVM::DestroyInstance(int) {}
 void LuaVM::Reset() {}

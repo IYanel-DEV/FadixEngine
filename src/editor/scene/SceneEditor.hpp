@@ -88,6 +88,10 @@ public:
     bool AssignTerrainAlbedo(AssetHandle handle);
     bool AssignScriptTarget(Uuid entityId);
     bool ClearScriptTarget();
+    bool AssignSpriteTexture(AssetHandle handle);
+    bool ClearSpriteTexture();
+    bool AssignTileSetTexture(AssetHandle handle);
+    bool ClearTileSetTexture();
 
     // Uses provider set via SetSelectedMaterial/MeshProvider.
     bool AssignMaterialFromSelection();

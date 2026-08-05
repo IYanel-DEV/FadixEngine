@@ -363,6 +363,8 @@ void PlaySession::Tick()
         m_Physics->SyncFromWorld(*m_RuntimeWorld);
         m_Physics->StepFixed(m_FixedDeltaSeconds);
         m_Physics->SyncToWorld(*m_RuntimeWorld);
+        const auto contactEvents = m_Physics->DrainContactEvents2D();
+        m_Scripts.DispatchContactEvents(m_RuntimeWorld->Registry(), contactEvents);
     }
 }
 

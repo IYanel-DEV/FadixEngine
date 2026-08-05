@@ -47,6 +47,7 @@ struct EditorUiState
     bool FocusFdxAnimation{false}; // Inspector "Open FDX Animation" pops the tab to front
     bool ShowExport{false};
     bool ShowGraphicsWindow{false};
+    bool ShowPerformanceWindow{false};
     ViewportDebugView SceneDebugView{ViewportDebugView::None};
     bool ShowCollisionShapes{true};
     bool ShowDemo{false};

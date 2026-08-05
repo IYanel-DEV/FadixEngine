@@ -13,12 +13,14 @@ struct SDL_Window;
 namespace fadix::editor
 {
 class WorkbenchCamera;
+class Ortho2DCamera;
 
 class EditorCameraInput
 {
 public:
     [[nodiscard]] bool HandleEvent(const SDL_Event& event, bool viewportHovered);
     void Update(WorkbenchCamera& camera, float deltaSeconds);
+    void UpdateOrtho2D(Ortho2DCamera& camera, glm::vec2 cursorNdc);
     void SetFocusBounds(std::optional<Bounds> bounds) noexcept;
     void Reset() noexcept;
 

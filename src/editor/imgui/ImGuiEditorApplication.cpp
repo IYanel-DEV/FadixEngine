@@ -4,6 +4,7 @@
 #include "assets/EmbeddedAssetProvider.hpp"
 #include "assets/GltfMeshCache.hpp"
 #include "editor/camera/CameraSelection.hpp"
+#include "editor/command/EntityCommands.hpp"
 #include "editor/play/PlaySession.hpp"
 #include "editor/scene/PrefabSerializer.hpp"
 #include "editor/scene/SceneEditor.hpp"
@@ -646,6 +647,29 @@ void ImGuiEditorApplication::WireAssetBrowser()
         [createMeshEntity](const AssetDragPayload& payload, const glm::vec3& gridPosition) {
             createMeshEntity(payload.Handle, payload.SourcePath, gridPosition);
         });
+    m_Viewports.SetSprite2DDropHandler(
+        [this](const AssetDragPayload& payload, const glm::vec2& worldPos) {
+            if (!m_SceneEditor)
+            {
+                return;
+            }
+            const std::string name = payload.SourcePath.stem().string();
+            auto cmd = std::make_unique<AddEntityCommand>(
+                m_Session.EditWorld(), name.empty() ? "Sprite" : name);
+            TransformComponent xform;
+            xform.Position = {worldPos.x, worldPos.y, 0.0F};
+            cmd->SetTransform(xform);
+            Sprite2DComponent spr;
+            spr.Texture = payload.Handle;
+            spr.Size = {1.0F, 1.0F};
+            spr.Pivot = {0.5F, 0.5F};
+            spr.PixelsPerUnit = 100.0F;
+            cmd->SetSprite2D(spr);
+            const Uuid newId = cmd->EntityId();
+            m_Session.History().Push(std::move(cmd));
+            m_SceneEditor->SetSelection(newId, true);
+            m_Ui.StatusText = "Created Sprite2D from " + payload.SourcePath.filename().string();
+        });
     static_cast<void>(m_AssetBrowser->Refresh());
 }
 
@@ -685,7 +709,20 @@ void ImGuiEditorApplication::EnterWorkbench(const ProjectMetadata& project)
         m_Viewports.SetAssetDatabase(*m_Session.assetDatabase);
         m_Viewports.SetGltfMeshCache(m_GltfMeshes.get());
         m_Viewports.SetQualityChangedHandler([this]() { SaveGraphicsSettings(); });
+        m_Viewports.SetProjectionModeChangedHandler([this]() { SaveGraphicsSettings(); });
+        m_Viewports.SetWidgetVisibilityChangedHandler([this]() { SaveGraphicsSettings(); });
+        const bool hasGraphicsFile = std::filesystem::exists(
+            project.RootPath / "Saved" / "Editor" / "graphics.json");
         LoadGraphicsSettings(project.RootPath);
+        LoadPerformanceSettings(project.RootPath);
+        if (!hasGraphicsFile)
+        {
+            m_GraphicsPrefs.ProjectionMode =
+                project.Template == ProjectTemplate::Empty2D
+                    ? ViewportProjectionMode::Ortho2D
+                    : ViewportProjectionMode::Perspective;
+        }
+        m_Camera.SetProjectionMode(m_GraphicsPrefs.ProjectionMode);
     }
     WireAssetBrowser();
     m_Shell.SetProjectIniPath(project.RootPath, m_Ui);
@@ -1053,6 +1090,9 @@ void ImGuiEditorApplication::SaveGraphicsSettings()
     }
     m_GraphicsPrefs.SceneQuality = m_Viewports.SceneQuality();
     m_GraphicsPrefs.GameQuality = m_Viewports.GameQuality();
+    m_GraphicsPrefs.ProjectionMode = m_Camera.ProjectionMode();
+    m_GraphicsPrefs.TransformRailVisible = m_Viewports.TransformRailVisible();
+    m_GraphicsPrefs.OrientationGizmoVisible = m_Viewports.OrientationGizmoVisible();
     const std::string json = editor::StringifyGraphicsPreferences(m_GraphicsPrefs);
 
     const std::filesystem::path path = folder / "graphics.json";
@@ -1075,6 +1115,167 @@ void ImGuiEditorApplication::SaveGraphicsSettings()
             "Could not replace graphics settings " + path.generic_string() + ": " + error.message(),
             "error");
     }
+}
+
+void ImGuiEditorApplication::LoadPerformanceSettings(const std::filesystem::path& root)
+{
+    if (root.empty()) return;
+    const std::filesystem::path path = root / "Saved" / "Editor" / "performance.json";
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return;
+    std::ostringstream text;
+    text << input.rdbuf();
+    editor::PerformancePreferences prefs = editor::PerformancePreferences::Defaults();
+    if (!editor::ParsePerformancePreferences(text.str(), prefs))
+    {
+        m_Log.Log("Ignoring invalid performance settings " + path.generic_string(), "warn");
+        return;
+    }
+    m_PerfPrefs = prefs;
+    ApplyPerformancePreferences();
+}
+
+void ImGuiEditorApplication::SavePerformanceSettings()
+{
+    const std::filesystem::path& root = m_Session.activeProject.RootPath;
+    if (root.empty()) return;
+    const std::filesystem::path folder = root / "Saved" / "Editor";
+    std::error_code error;
+    std::filesystem::create_directories(folder, error);
+    if (error)
+    {
+        m_Log.Log("Could not create performance settings folder: " + error.message(), "error");
+        return;
+    }
+    const std::string json = editor::StringifyPerformancePreferences(m_PerfPrefs);
+    const std::filesystem::path path = folder / "performance.json";
+    const std::filesystem::path tmp = folder / "performance.json.tmp";
+    {
+        std::ofstream output(tmp, std::ios::binary | std::ios::trunc);
+        if (!output)
+        {
+            m_Log.Log("Could not write performance settings " + tmp.generic_string(), "error");
+            return;
+        }
+        output << json;
+    }
+    std::filesystem::remove(path, error);
+    error.clear();
+    std::filesystem::rename(tmp, path, error);
+    if (error)
+    {
+        m_Log.Log(
+            "Could not replace performance settings " + path.generic_string() + ": " + error.message(),
+            "error");
+    }
+}
+
+void ImGuiEditorApplication::ApplyPerformancePreferences()
+{
+    m_FpsForeground = m_PerfPrefs.FpsForeground;
+    m_FpsUnfocused = m_PerfPrefs.FpsUnfocused;
+    m_FpsMinimized = m_PerfPrefs.FpsMinimized;
+    SavePerformanceSettings();
+}
+
+void ImGuiEditorApplication::DrawPerformanceWindow()
+{
+    if (!m_Ui.ShowPerformanceWindow)
+    {
+        return;
+    }
+    if (!ImGui::Begin("Performance###Performance", &m_Ui.ShowPerformanceWindow))
+    {
+        ImGui::End();
+        return;
+    }
+
+    editor::PerformancePreferences& prefs = m_PerfPrefs;
+    bool changed = false;
+
+    // --- Preset selector ---
+    static constexpr std::array<const char*, 3> kPresetLabels{
+        "Low Spec", "Balanced", "Full Quality"};
+    int presetIndex = static_cast<int>(prefs.ActivePreset);
+    if (ImGui::Combo("Preset", &presetIndex, kPresetLabels.data(),
+            static_cast<int>(kPresetLabels.size())))
+    {
+        prefs.ApplyPreset(static_cast<editor::PerformancePreset>(presetIndex));
+        changed = true;
+    }
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Frame-rate limits (0 = unlimited)");
+
+    auto fpsInput = [&](const char* label, float& value) {
+        if (ImGui::InputFloat(label, &value, 1.0F, 5.0F, "%.0f"))
+        {
+            if (value < 0.0F) value = 0.0F;
+            if (value > 999.0F) value = 999.0F;
+            prefs.ActivePreset = editor::PerformancePreset::Balanced; // custom
+            changed = true;
+        }
+    };
+    fpsInput("Foreground FPS", prefs.FpsForeground);
+    fpsInput("Unfocused FPS", prefs.FpsUnfocused);
+    fpsInput("Minimized FPS", prefs.FpsMinimized);
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Background work budget (per frame)");
+    if (ImGui::InputInt("Thumbnails per frame", &prefs.ThumbnailsPerFrame))
+    {
+        prefs.ThumbnailsPerFrame = std::max(1, prefs.ThumbnailsPerFrame);
+        changed = true;
+    }
+    if (ImGui::InputInt("Import polls per frame", &prefs.ImportsPolledPerFrame))
+    {
+        prefs.ImportsPolledPerFrame = std::max(1, prefs.ImportsPolledPerFrame);
+        changed = true;
+    }
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Diagnostics");
+
+    const float fps = m_FrameDelta > 0.0F ? 1.0F / m_FrameDelta : 0.0F;
+    ImGui::Text("FPS %.1f  Frame %.2f ms", fps, m_FrameDelta * 1000.0F);
+    ImGui::Text("Preset: %s", editor::ToString(prefs.ActivePreset));
+
+    const bool hasFocus =
+        m_Window && (SDL_GetWindowFlags(m_Window) & SDL_WINDOW_INPUT_FOCUS) != 0;
+    const bool minimized =
+        m_Window && (SDL_GetWindowFlags(m_Window) & SDL_WINDOW_MINIMIZED) != 0;
+    ImGui::Text(
+        "Window: %s",
+        minimized ? "minimized" : hasFocus ? "focused" : "unfocused");
+
+    if (m_Session.assetDatabase)
+    {
+        const auto* db = dynamic_cast<AssetDatabase*>(m_Session.assetDatabase.get());
+        if (db != nullptr)
+        {
+            const std::size_t pending = std::count_if(
+                db->ImportStatuses().begin(),
+                db->ImportStatuses().end(),
+                [](const AssetImportStatus& s) {
+                    return s.State == AssetImportState::Queued
+                        || s.State == AssetImportState::Importing;
+                });
+            ImGui::Text("Import queue: %zu", pending);
+        }
+    }
+
+    if (ImGui::Button("Reset to Balanced"))
+    {
+        prefs.ApplyPreset(editor::PerformancePreset::Balanced);
+        changed = true;
+    }
+
+    if (changed)
+    {
+        ApplyPerformancePreferences();
+    }
+
+    ImGui::End();
 }
 
 void ImGuiEditorApplication::SyncGameCameraFromWorld()
@@ -1605,6 +1806,32 @@ void ImGuiEditorApplication::HandleShortcuts(const SDL_Event& event)
     }
 }
 
+void ImGuiEditorApplication::SleepUntilNextFrame(const float targetFps)
+{
+    if (targetFps <= 0.0F)
+    {
+        return; // unlimited
+    }
+    const auto frameDuration =
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<float>{1.0F / targetFps});
+    const auto now = std::chrono::steady_clock::now();
+    if (m_FrameDeadline <= now)
+    {
+        m_FrameDeadline = now + frameDuration;
+        return;
+    }
+    const auto remaining = m_FrameDeadline - now;
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(remaining).count();
+    if (ms > 1)
+    {
+        SDL_Delay(static_cast<Uint32>(ms - 1));
+    }
+    // Spin for the last sub-millisecond to stay accurate.
+    while (std::chrono::steady_clock::now() < m_FrameDeadline) {} // ponytail: busy-spin <1ms, upgrade to POSIX nanosleep/WaitableTimer if sub-ms CPU burn matters
+    m_FrameDeadline += frameDuration;
+}
+
 bool ImGuiEditorApplication::ProcessEvents()
 {
     SDL_Event event;
@@ -1697,6 +1924,7 @@ void ImGuiEditorApplication::DrawUi()
             &m_ExportPanel);
         m_Shell.DrawModals(m_Session, m_Ui, m_Theme);
         DrawGraphicsWindow();
+        DrawPerformanceWindow();
         DrawProfilerWindow();
     }
     else
@@ -1819,9 +2047,10 @@ int ImGuiEditorApplication::Run()
     auto previous = std::chrono::steady_clock::now();
     while (m_Running && ProcessEvents())
     {
-        if ((SDL_GetWindowFlags(m_Window) & SDL_WINDOW_MINIMIZED) != 0)
+        const SDL_WindowFlags windowFlags = SDL_GetWindowFlags(m_Window);
+        if ((windowFlags & SDL_WINDOW_MINIMIZED) != 0)
         {
-            SDL_Delay(10);
+            SleepUntilNextFrame(m_FpsMinimized);
             continue;
         }
         const auto now = std::chrono::steady_clock::now();
@@ -1851,6 +2080,10 @@ int ImGuiEditorApplication::Run()
                 m_GameUi->Render();
                 gpuRender->EndFrame();
             });
+        {
+            const bool hasFocus = (windowFlags & SDL_WINDOW_INPUT_FOCUS) != 0;
+            SleepUntilNextFrame(hasFocus ? m_FpsForeground : m_FpsUnfocused);
+        }
     }
 
     Shutdown();

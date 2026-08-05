@@ -21,6 +21,122 @@
 
 namespace fadix
 {
+// ---- Sprite frame animation runtime ----------------------------------------
+
+// Locate a SpriteAnimationClip by name. Falls back to the first clip when the
+// name is empty or not found (so Autoplay works without CurrentClip being set).
+[[nodiscard]] inline const SpriteAnimationClip* FindSpriteClip(
+    const SpriteFrameAnimatorComponent& animator, const std::string_view name)
+{
+    if (!animator.Clips.empty())
+    {
+        for (const SpriteAnimationClip& clip : animator.Clips)
+        {
+            if (clip.Name == name)
+            {
+                return &clip;
+            }
+        }
+        if (name.empty())
+        {
+            return &animator.Clips.front();
+        }
+    }
+    return nullptr;
+}
+
+// Sum of all frame durations in a clip. Clamps each frame to a minimum so
+// division by zero and large-delta corruption are both impossible.
+[[nodiscard]] inline float SpriteClipDuration(const SpriteAnimationClip& clip)
+{
+    float total = 0.0F;
+    for (const SpriteFrame& frame : clip.Frames)
+    {
+        total += std::max(frame.Duration, 0.0001F);
+    }
+    return total;
+}
+
+// Map a playback time (already wrapped/clamped) to a frame index by walking
+// cumulative per-frame durations. Safe on empty clips — returns 0.
+[[nodiscard]] inline int SpriteFrameAtTime(const SpriteAnimationClip& clip, const float time)
+{
+    if (clip.Frames.empty())
+    {
+        return 0;
+    }
+    float accumulated = 0.0F;
+    for (int i = 0; i < static_cast<int>(clip.Frames.size()); ++i)
+    {
+        accumulated += std::max(clip.Frames[static_cast<std::size_t>(i)].Duration, 0.0001F);
+        if (time < accumulated)
+        {
+            return i;
+        }
+    }
+    return static_cast<int>(clip.Frames.size()) - 1;
+}
+
+// Per-frame: advance every SpriteFrameAnimatorComponent and write the current
+// frame's UV into the sibling Sprite2DComponent (when present).
+// Handles autoplay, looping, non-looping stop, pause, speed=0, dt spikes.
+inline void UpdateSpriteAnimations(entt::registry& registry, const float dt)
+{
+    for (auto&& [entity, animator] : registry.view<SpriteFrameAnimatorComponent>().each())
+    {
+        // Lazy autoplay: start on the first update tick.
+        if (animator.Autoplay && !animator.Playing && animator.CurrentTime <= 0.0F)
+        {
+            animator.Playing = true;
+        }
+        if (!animator.Playing)
+        {
+            continue;
+        }
+        const SpriteAnimationClip* clip =
+            FindSpriteClip(animator, animator.CurrentClip);
+        if (clip == nullptr || clip->Frames.empty())
+        {
+            continue;
+        }
+        const float clipDuration = SpriteClipDuration(*clip);
+        if (clipDuration <= 0.0F)
+        {
+            continue;
+        }
+        if (std::abs(animator.Speed) > 1.0e-6F)
+        {
+            animator.CurrentTime += dt * animator.Speed;
+        }
+        if (clip->Loop)
+        {
+            animator.CurrentTime = std::fmod(animator.CurrentTime, clipDuration);
+            if (animator.CurrentTime < 0.0F)
+            {
+                animator.CurrentTime += clipDuration;
+            }
+        }
+        else
+        {
+            if (animator.CurrentTime >= clipDuration)
+            {
+                animator.CurrentTime = clipDuration;
+                animator.Playing = false;
+            }
+            animator.CurrentTime =
+                std::clamp(animator.CurrentTime, 0.0F, clipDuration);
+        }
+        const int frame = SpriteFrameAtTime(*clip, animator.CurrentTime);
+        animator.CurrentFrame = frame;
+        if (Sprite2DComponent* sprite = registry.try_get<Sprite2DComponent>(entity))
+        {
+            sprite->UvRect = clip->Frames[static_cast<std::size_t>(frame)].UvRect;
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
+
 template <typename Animator>
 inline void ClearAnimationBlend(Animator& animator)
 {

@@ -4,6 +4,7 @@
 #include "editor/camera/CameraSelection.hpp"
 #include "editor/command/EntityCommands.hpp"
 #include "editor/imgui/EditorIcons.hpp"
+#include "editor/imgui/panels/TilemapPanel.hpp"
 #include "engine/scene/IWorld.hpp"
 #include "render/ViewportRendererFactory.hpp"
 #include "rhi/sdl/SdlRhi.hpp"
@@ -14,6 +15,7 @@
 #include <SDL3/SDL_gpu.h>
 
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
 #include <array>
@@ -135,6 +137,379 @@ void SyncPreviewComponent(const entt::registry& source, const entt::entity sourc
         preview.remove<Component>(previewEntity);
     }
 }
+
+[[nodiscard]] ImVec2 WorldToImGui(
+    const glm::vec2 worldPos,
+    const Ortho2DCamera& cam,
+    const ImVec2 imgMin)
+{
+    const glm::vec2 screen = cam.WorldToScreen(worldPos);
+    return {imgMin.x + screen.x, imgMin.y + screen.y};
+}
+
+// Subtle adaptive 2D grid. Line density is chosen from the current zoom so that
+// spacing stays visually stable: as you zoom out the finest tier fades away, and
+// as you zoom in a new finer subdivision fades in. Two tiers are drawn (minor +
+// major = minor*10), with axis lines in restrained X/Y colors on top.
+void Draw2DGrid(
+    ImDrawList* drawList,
+    const Ortho2DCamera& cam,
+    const ImVec2 imgMin,
+    const ImVec2 imgSize)
+{
+    static_cast<void>(imgSize); // caller already clips to the image rect
+    const glm::vec2 viewSize = cam.ViewportSize();
+    if (viewSize.x < 1.0F || viewSize.y < 1.0F)
+    {
+        return;
+    }
+    const float hh = cam.OrthoHalfHeight();
+    const float hw = hh * (viewSize.x / viewSize.y);
+    const float pxPerUnit = viewSize.y / std::max(2.0F * hh, 1.0e-6F);
+
+    // Minor step = smallest power of ten whose on-screen spacing is >= ~8px.
+    // Zooming in shrinks the step (adds subdivisions); zooming out grows it.
+    constexpr float kMinMinorPx = 8.0F;
+    const float minorStep =
+        std::pow(10.0F, std::ceil(std::log10(kMinMinorPx / std::max(pxPerUnit, 1.0e-6F))));
+    const float majorStep = minorStep * 10.0F;
+
+    const glm::vec2 wMin = cam.Position() - glm::vec2{hw, hh};
+    const glm::vec2 wMax = cam.Position() + glm::vec2{hw, hh};
+
+    // Alpha ramps with on-screen spacing so dense lines fade out and freshly
+    // added subdivisions fade in smoothly rather than popping.
+    const auto tierAlpha = [](const float spacingPx, const float fadeLo, const float fadeHi) {
+        return std::clamp((spacingPx - fadeLo) / std::max(fadeHi - fadeLo, 1.0e-3F), 0.0F, 1.0F);
+    };
+    const auto drawTier = [&](const float step, const ImU32 baseColor, const float alpha) {
+        if (alpha <= 0.02F)
+        {
+            return;
+        }
+        const int a = static_cast<int>(alpha * static_cast<float>((baseColor >> IM_COL32_A_SHIFT) & 0xFFU));
+        const ImU32 col = (baseColor & ~(0xFFU << IM_COL32_A_SHIFT)) |
+            (static_cast<ImU32>(a) << IM_COL32_A_SHIFT);
+        for (float x = std::floor(wMin.x / step) * step; x <= wMax.x + step; x += step)
+        {
+            drawList->AddLine(WorldToImGui({x, wMax.y}, cam, imgMin),
+                WorldToImGui({x, wMin.y}, cam, imgMin), col, 1.0F);
+        }
+        for (float y = std::floor(wMin.y / step) * step; y <= wMax.y + step; y += step)
+        {
+            drawList->AddLine(WorldToImGui({wMin.x, y}, cam, imgMin),
+                WorldToImGui({wMax.x, y}, cam, imgMin), col, 1.0F);
+        }
+    };
+
+    // Low-opacity minor lines fade out as they crowd together (zoom-out);
+    // slightly stronger major lines stay steady.
+    drawTier(minorStep, IM_COL32(150, 155, 175, 46),
+        tierAlpha(minorStep * pxPerUnit, kMinMinorPx, 22.0F));
+    drawTier(majorStep, IM_COL32(165, 170, 195, 110), 1.0F);
+
+    // Restrained X (red) / Y (green) axes.
+    const ImVec2 axisXLeft = WorldToImGui({wMin.x, 0.0F}, cam, imgMin);
+    const ImVec2 axisXRight = WorldToImGui({wMax.x, 0.0F}, cam, imgMin);
+    drawList->AddLine(axisXLeft, axisXRight, IM_COL32(188, 96, 96, 190), 1.4F);
+    const ImVec2 axisYTop = WorldToImGui({0.0F, wMax.y}, cam, imgMin);
+    const ImVec2 axisYBot = WorldToImGui({0.0F, wMin.y}, cam, imgMin);
+    drawList->AddLine(axisYTop, axisYBot, IM_COL32(96, 176, 112, 190), 1.4F);
+}
+
+void Draw2DEntityOverlays(
+    ImDrawList* drawList,
+    const Ortho2DCamera& cam,
+    const ImVec2 imgMin,
+    const IWorld& world,
+    const SceneEditor& scene)
+{
+    const auto sel = scene.Selection();
+    if (!sel)
+    {
+        return;
+    }
+    const auto entity = world.Find(*sel);
+    if (!entity)
+    {
+        return;
+    }
+    const entt::registry& reg = world.Registry();
+
+    // Get transform position
+    glm::vec2 origin{0.0F};
+    if (const TransformComponent* xform = reg.try_get<TransformComponent>(*entity))
+    {
+        origin = {xform->Position.x, xform->Position.y};
+    }
+
+    // Sprite2D bounds
+    if (const Sprite2DComponent* spr = reg.try_get<Sprite2DComponent>(*entity))
+    {
+        const float halfW = spr->Size.x * 0.5F;
+        const float halfH = spr->Size.y * 0.5F;
+        const float pivotOffX = (0.5F - spr->Pivot.x) * spr->Size.x;
+        const float pivotOffY = (0.5F - spr->Pivot.y) * spr->Size.y;
+        const float cx = origin.x + pivotOffX;
+        const float cy = origin.y + pivotOffY;
+        const ImVec2 tl = WorldToImGui({cx - halfW, cy + halfH}, cam, imgMin);
+        const ImVec2 tr = WorldToImGui({cx + halfW, cy + halfH}, cam, imgMin);
+        const ImVec2 br = WorldToImGui({cx + halfW, cy - halfH}, cam, imgMin);
+        const ImVec2 bl = WorldToImGui({cx - halfW, cy - halfH}, cam, imgMin);
+        drawList->AddQuad(tl, tr, br, bl, IM_COL32(255, 220, 0, 230), 1.5F);
+        // Pivot dot
+        const ImVec2 pivotScreen = WorldToImGui(origin, cam, imgMin);
+        drawList->AddCircleFilled(pivotScreen, 4.0F, IM_COL32(255, 100, 0, 255));
+    }
+
+    // Collider2D
+    if (const Collider2DComponent* col = reg.try_get<Collider2DComponent>(*entity))
+    {
+        const ImU32 colColor = col->Sensor
+            ? IM_COL32(0, 180, 255, 200)
+            : IM_COL32(0, 255, 120, 200);
+        const glm::vec2 colCenter = origin + col->Offset;
+        if (col->Shape == Collider2DShape::Box)
+        {
+            const float hw = col->Size.x;
+            const float hh = col->Size.y;
+            const ImVec2 tl = WorldToImGui({colCenter.x - hw, colCenter.y + hh}, cam, imgMin);
+            const ImVec2 tr = WorldToImGui({colCenter.x + hw, colCenter.y + hh}, cam, imgMin);
+            const ImVec2 br = WorldToImGui({colCenter.x + hw, colCenter.y - hh}, cam, imgMin);
+            const ImVec2 bl = WorldToImGui({colCenter.x - hw, colCenter.y - hh}, cam, imgMin);
+            drawList->AddQuad(tl, tr, br, bl, colColor, 1.5F);
+        }
+        else // Circle
+        {
+            const float radius = col->Size.x;
+            const glm::vec2 screenCenter = cam.WorldToScreen(colCenter);
+            const float screenRadius = radius * cam.ViewportSize().y / (2.0F * cam.OrthoHalfHeight());
+            drawList->AddCircle(
+                {imgMin.x + screenCenter.x, imgMin.y + screenCenter.y},
+                screenRadius, colColor, 32, 1.5F);
+        }
+    }
+
+    // TileMap grid overlay for selected tilemap
+    if (const TileMapComponent* tm = reg.try_get<TileMapComponent>(*entity))
+    {
+        const float tileWW = static_cast<float>(tm->TileWidth) /
+            std::max(tm->PixelsPerUnit, 0.001F);
+        const float tileWH = static_cast<float>(tm->TileHeight) /
+            std::max(tm->PixelsPerUnit, 0.001F);
+        const ImU32 gridCol = IM_COL32(120, 200, 255, 120);
+
+        // Map bounds
+        const float mapW = tileWW * static_cast<float>(tm->GridWidth);
+        const float mapH = tileWH * static_cast<float>(tm->GridHeight);
+        const ImVec2 mapTL = WorldToImGui(origin, cam, imgMin);
+        const ImVec2 mapBR = WorldToImGui(
+            {origin.x + mapW, origin.y - mapH}, cam, imgMin);
+        drawList->AddRect(mapTL, mapBR, IM_COL32(120, 200, 255, 200), 0.0F, 0, 2.0F);
+
+        // Individual tile lines (limit to avoid drawing thousands of lines)
+        constexpr int kMaxLines = 80;
+        if (tm->GridWidth <= kMaxLines)
+        {
+            for (int x = 0; x <= tm->GridWidth; ++x)
+            {
+                const ImVec2 top = WorldToImGui(
+                    {origin.x + x * tileWW, origin.y}, cam, imgMin);
+                const ImVec2 bot = WorldToImGui(
+                    {origin.x + x * tileWW, origin.y - mapH}, cam, imgMin);
+                drawList->AddLine(top, bot, gridCol, 0.5F);
+            }
+        }
+        if (tm->GridHeight <= kMaxLines)
+        {
+            for (int y = 0; y <= tm->GridHeight; ++y)
+            {
+                const ImVec2 left = WorldToImGui(
+                    {origin.x, origin.y - y * tileWH}, cam, imgMin);
+                const ImVec2 right = WorldToImGui(
+                    {origin.x + mapW, origin.y - y * tileWH}, cam, imgMin);
+                drawList->AddLine(left, right, gridCol, 0.5F);
+            }
+        }
+    }
+}
+
+// Cheap, readback-free contrast scheme for the floating viewport overlays. The
+// foreground glyph color is chosen from the known viewport background (bright in
+// Ortho2D, dark in perspective) and paired with a 1px opposite-color shadow so
+// glyphs stay legible over both bright and dark scene content behind them.
+struct OverlayPalette
+{
+    ImU32 Fg;     // glyph / chevron color
+    ImU32 Shadow; // 1px opposite-color drop shadow
+    ImU32 Hover;  // subtle translucent neutral hover background
+    ImU32 Active; // restrained Fadix blue for the active tool
+};
+
+[[nodiscard]] OverlayPalette MakeOverlayPalette(const bool lightScene) noexcept
+{
+    constexpr ImU32 kAccent = IM_COL32(58, 122, 226, 235); // restrained Fadix blue
+    if (lightScene)
+    {
+        return {IM_COL32(28, 32, 40, 255), IM_COL32(255, 255, 255, 175),
+            IM_COL32(0, 0, 0, 32), kAccent};
+    }
+    return {IM_COL32(228, 232, 240, 255), IM_COL32(0, 0, 0, 175),
+        IM_COL32(255, 255, 255, 32), kAccent};
+}
+
+// Draws a crisp chevron from line primitives (no icon-font glyph dependency).
+// dir: 0 = left '<', 1 = right '>', 2 = down 'v'.
+void DrawChevron(ImDrawList* dl, const ImVec2 center, const float size, const int dir,
+    const ImU32 col, const float thickness = 1.7F)
+{
+    const float h = size * 0.5F;
+    const float w = h * 0.62F;
+    ImVec2 a{};
+    ImVec2 b{};
+    ImVec2 c{};
+    switch (dir)
+    {
+    case 0: // '<'
+        a = {center.x + w, center.y - h};
+        b = {center.x - w, center.y};
+        c = {center.x + w, center.y + h};
+        break;
+    case 1: // '>'
+        a = {center.x - w, center.y - h};
+        b = {center.x + w, center.y};
+        c = {center.x - w, center.y + h};
+        break;
+    default: // 'v'
+        a = {center.x - h, center.y - w};
+        b = {center.x, center.y + w};
+        c = {center.x + h, center.y - w};
+        break;
+    }
+    dl->AddLine(a, b, col, thickness);
+    dl->AddLine(b, c, col, thickness);
+}
+
+// Minimal "image" glyph (frame + sun + mountain) for the no-sprite placeholder.
+void DrawImageGlyph(ImDrawList* dl, const ImVec2 center, const float r, const ImU32 col)
+{
+    const ImVec2 tl{center.x - r, center.y - r * 0.8F};
+    const ImVec2 br{center.x + r, center.y + r * 0.8F};
+    dl->AddRect(tl, br, col, r * 0.18F, 0, 1.6F);
+    dl->AddCircleFilled({center.x - r * 0.4F, center.y - r * 0.35F}, r * 0.18F, col, 12);
+    const ImVec2 p0{tl.x + r * 0.12F, br.y - r * 0.12F};
+    const ImVec2 p1{center.x - r * 0.1F, center.y + r * 0.05F};
+    const ImVec2 p2{center.x + r * 0.15F, center.y + r * 0.35F};
+    const ImVec2 p3{br.x - r * 0.12F, br.y - r * 0.12F};
+    dl->AddLine(p0, p1, col, 1.6F);
+    dl->AddLine(p1, p2, col, 1.6F);
+    dl->AddLine(p2, p3, col, 1.6F);
+}
+
+// Editor-only Scene View placeholder for Sprite2D entities that have no texture.
+// The renderer draws nothing for them (no white quad), so this hatched card marks
+// where an empty sprite lives. Follows position, rotation, Size, pivot, and zoom.
+// Never drawn in Game View (only called from the Scene View 2D overlay block).
+void Draw2DSpritePlaceholders(
+    ImDrawList* drawList,
+    const Ortho2DCamera& cam,
+    const ImVec2 imgMin,
+    const IWorld& world,
+    const SceneEditor& scene)
+{
+    const std::optional<Uuid> selection = scene.Selection();
+    const entt::registry& reg = world.Registry();
+    for (const auto [entity, sprite] : reg.view<const Sprite2DComponent>().each())
+    {
+        if (Sprite2DHasRenderableTexture(sprite))
+        {
+            continue;
+        }
+        if (const auto* vis = reg.try_get<VisibilityComponent>(entity);
+            vis != nullptr && !vis->VisibleInEditor)
+        {
+            continue;
+        }
+
+        glm::vec3 position{0.0F};
+        glm::quat rotation{1.0F, 0.0F, 0.0F, 0.0F};
+        glm::vec3 scale{1.0F};
+        if (const auto* xform = reg.try_get<TransformComponent>(entity))
+        {
+            position = xform->Position;
+            rotation = xform->Rotation;
+            scale = xform->Scale;
+        }
+        const float ox = 0.5F - sprite.Pivot.x;
+        const float oy = sprite.Pivot.y - 0.5F;
+        // World-space corners matching the renderer model: pos + R*(S*(v+pivot)),
+        // using the exact same effective size (scale + FlipX/FlipY) as the renderer.
+        const glm::vec2 effective = Sprite2DEffectiveSize(sprite, {scale.x, scale.y});
+        const float sx = effective.x;
+        const float sy = effective.y;
+        const std::array<glm::vec2, 4> local{{{-0.5F, -0.5F}, {0.5F, -0.5F}, {0.5F, 0.5F},
+            {-0.5F, 0.5F}}};
+        std::array<ImVec2, 4> screen{};
+        for (std::size_t i = 0; i < 4; ++i)
+        {
+            const glm::vec3 l{(local[i].x + ox) * sx, (local[i].y + oy) * sy, 0.0F};
+            const glm::vec3 wpos = position + rotation * l;
+            screen[i] = WorldToImGui({wpos.x, wpos.y}, cam, imgMin);
+        }
+
+        const bool selected = selection && world.Find(*selection) == entity;
+
+        // Fold the sprite's Tint into the placeholder so tint edits preview live
+        // even with no texture. The card fill blends toward the tint RGB; outline
+        // and glyph blend a light neutral base toward the tint so they read the
+        // tint yet never vanish (e.g. a black or zero-alpha tint stays visible).
+        const Sprite2DPlaceholderStyle style = Sprite2DPlaceholderStyleFor(sprite.Tint);
+        const auto toU32 = [](const glm::vec4& c) {
+            return IM_COL32(static_cast<int>(std::clamp(c.x, 0.0F, 1.0F) * 255.0F),
+                static_cast<int>(std::clamp(c.y, 0.0F, 1.0F) * 255.0F),
+                static_cast<int>(std::clamp(c.z, 0.0F, 1.0F) * 255.0F),
+                static_cast<int>(std::clamp(c.w, 0.0F, 1.0F) * 255.0F));
+        };
+        const auto blendTowardTint = [&sprite](const glm::vec3 base, const float k) {
+            return glm::vec3{base.x + (sprite.Tint.r - base.x) * k,
+                base.y + (sprite.Tint.g - base.y) * k,
+                base.z + (sprite.Tint.b - base.z) * k};
+        };
+        const glm::vec3 outlineRgb =
+            blendTowardTint({150.0F / 255.0F, 158.0F / 255.0F, 175.0F / 255.0F}, 0.6F);
+        const glm::vec3 glyphRgb =
+            blendTowardTint({190.0F / 255.0F, 198.0F / 255.0F, 214.0F / 255.0F}, 0.5F);
+
+        // Tint-blended translucent card.
+        drawList->AddQuadFilled(screen[0], screen[1], screen[2], screen[3], toU32(style.Card));
+        const ImU32 outline = selected
+            ? IM_COL32(90, 160, 250, 255)
+            : toU32({outlineRgb.x, outlineRgb.y, outlineRgb.z, style.OutlineAlpha});
+        drawList->AddQuad(screen[0], screen[1], screen[2], screen[3], outline,
+            selected ? 2.2F : 1.4F);
+        // Two hatch strokes across the card for the "empty" read.
+        const ImU32 hatch = toU32({outlineRgb.x, outlineRgb.y, outlineRgb.z, 0.28F});
+        drawList->AddLine(screen[0], screen[2], hatch, 1.0F);
+        drawList->AddLine(screen[1], screen[3], hatch, 1.0F);
+
+        // Centered image glyph, sized to the on-screen card, when large enough.
+        const ImVec2 center{(screen[0].x + screen[2].x) * 0.5F,
+            (screen[0].y + screen[2].y) * 0.5F};
+        float diag = std::hypot(screen[2].x - screen[0].x, screen[2].y - screen[0].y);
+        const float glyphR = std::clamp(diag * 0.18F, 5.0F, 22.0F);
+        if (diag > 26.0F)
+        {
+            DrawImageGlyph(drawList, center, glyphR, toU32({glyphRgb.x, glyphRgb.y, glyphRgb.z, 0.82F}));
+        }
+        if (diag > 90.0F)
+        {
+            const char* label = "No Sprite";
+            const ImVec2 ts = ImGui::CalcTextSize(label);
+            drawList->AddText({center.x - ts.x * 0.5F, center.y + glyphR + 3.0F},
+                toU32({glyphRgb.x, glyphRgb.y, glyphRgb.z, 0.80F}), label);
+        }
+    }
+}
 }
 
 void ViewportPanel::Initialize(rhi::Device& device, IAssetDatabase& assets)
@@ -171,6 +546,8 @@ void ViewportPanel::SetGraphicsPreferences(const GraphicsPreferences& prefs)
     m_GraphicsPrefs = prefs;
     m_Scene.Preset = prefs.SceneQuality;
     m_Game.Preset = prefs.GameQuality;
+    m_TransformRailVisible = prefs.TransformRailVisible;
+    m_OrientationGizmoVisible = prefs.OrientationGizmoVisible;
     ApplyQuality(m_Scene);
     ApplyQuality(m_Game);
     if (m_Scene.Renderer)
@@ -320,13 +697,15 @@ void ViewportPanel::RenderTargets(
     if (m_Scene.Visible && m_Scene.Renderer && m_Scene.PixelW > 0 && m_Scene.PixelH > 0)
     {
         EnsureSize(m_Scene);
+        const bool in2D = camera.ProjectionMode() == ViewportProjectionMode::Ortho2D;
         m_Scene.Renderer->SetEditorVisualsEnabled(!playing);
-        m_Scene.Renderer->SetGroundGridEnabled(!playing && m_ShowGroundGrid);
+        m_Scene.Renderer->SetGroundGridEnabled(!playing && m_ShowGroundGrid && !in2D);
         m_Scene.Renderer->SetCollisionVisualizationEnabled(!playing && m_ShowCollisionShapes);
         m_Scene.Renderer->SetViewportDebugView(m_DebugView);
         m_Scene.Renderer->SetSimDelta(deltaSeconds);
         camera.Camera().SetViewportSize({m_Scene.LogicalW, m_Scene.LogicalH});
-        m_Scene.Renderer->SetCamera(camera.Camera().View(), camera.Camera().Projection());
+        camera.Ortho2D().SetViewportSize({m_Scene.LogicalW, m_Scene.LogicalH});
+        camera.ApplyToViewport(*m_Scene.Renderer);
         m_Scene.Renderer->SetMeshPreview(!playing ? m_MeshPreview : std::nullopt);
         UpdateGizmoVisual(m_Scene, scene, gizmo, !playing);
         m_Scene.Renderer->DrawWorld(world);
@@ -554,18 +933,32 @@ void ViewportPanel::DrawViewImage(View& view, const char* emptyMessage, const bo
     view.Hovered = ImGui::IsItemHovered();
 }
 
-glm::vec2 ViewportPanel::MouseInViewPixels(const View& view) const
+glm::vec2 ViewportPanel::MouseInViewNormalized(const View& view) const
 {
     const ImVec2 mouse = ImGui::GetIO().MousePos;
-    if (view.ImageSize.x <= 1.0F || view.ImageSize.y <= 1.0F || view.PixelW == 0)
+    if (view.ImageSize.x <= 1.0F || view.ImageSize.y <= 1.0F)
     {
         return {};
     }
-    const float u = (mouse.x - view.ImageMin.x) / view.ImageSize.x;
-    const float v = (mouse.y - view.ImageMin.y) / view.ImageSize.y;
-    return {
-        std::clamp(u, 0.0F, 1.0F) * static_cast<float>(view.PixelW - 1),
-        std::clamp(v, 0.0F, 1.0F) * static_cast<float>(view.PixelH - 1)};
+    return {std::clamp((mouse.x - view.ImageMin.x) / view.ImageSize.x, 0.0F, 1.0F),
+        std::clamp((mouse.y - view.ImageMin.y) / view.ImageSize.y, 0.0F, 1.0F)};
+}
+
+glm::vec2 ViewportPanel::MouseInViewLogical(const View& view) const
+{
+    const glm::vec2 n = MouseInViewNormalized(view);
+    return {n.x * view.LogicalW, n.y * view.LogicalH};
+}
+
+glm::vec2 ViewportPanel::MouseInViewPixels(const View& view) const
+{
+    if (view.PixelW == 0 || view.PixelH == 0)
+    {
+        return {};
+    }
+    const glm::vec2 n = MouseInViewNormalized(view);
+    return {n.x * static_cast<float>(view.PixelW - 1),
+        n.y * static_cast<float>(view.PixelH - 1)};
 }
 
 void ViewportPanel::DrawSceneToolbar(
@@ -575,30 +968,8 @@ void ViewportPanel::DrawSceneToolbar(
     const EditorPlayMode playMode)
 {
     static_cast<void>(gizmo);
-    auto tool = [&](const char* label, const char* tip, const int id) {
-        const bool active = m_GizmoTool == id;
-        if (active)
-        {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-        }
-        if (ImGui::SmallButton(label))
-        {
-            m_GizmoTool = id;
-        }
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip("%s", tip);
-        }
-        if (active)
-        {
-            ImGui::PopStyleColor();
-        }
-        ImGui::SameLine();
-    };
-    tool(FADIX_ICON_SELECT, "Select (Q)", 0);
-    tool(FADIX_ICON_MOVE, "Move (W)", 1);
-    tool(FADIX_ICON_ROTATE, "Rotate (E)", 2);
-    tool(FADIX_ICON_SCALE, "Scale (R)", 3);
+    // Select/Move/Rotate/Scale now live in the floating in-viewport transform rail
+    // (DrawTransformRail); the top toolbar keeps only space + play/quality controls.
     if (ImGui::SmallButton(m_GizmoLocalSpace ? FADIX_ICON_CUBE " Local" : FADIX_ICON_GLOBE " World"))
     {
         m_GizmoLocalSpace = !m_GizmoLocalSpace;
@@ -680,21 +1051,27 @@ void ViewportPanel::DrawSceneToolbar(
     ImGui::SameLine();
     DrawQualityCombo(m_Scene, "##SceneQuality");
     ImGui::SameLine();
-    if (m_ShowGroundGrid)
+    const bool is2DMode = camera.ProjectionMode() == ViewportProjectionMode::Ortho2D;
+    if (!is2DMode)
     {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-    }
-    if (ImGui::SmallButton(FADIX_ICON_GRID " Grid"))
-    {
-        m_ShowGroundGrid = !m_ShowGroundGrid;
-    }
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip("Show ground grid in Scene View");
-    }
-    if (m_ShowGroundGrid)
-    {
-        ImGui::PopStyleColor();
+        if (m_ShowGroundGrid)
+        {
+            ImGui::PushStyleColor(
+                ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        }
+        if (ImGui::SmallButton(FADIX_ICON_GRID " Grid"))
+        {
+            m_ShowGroundGrid = !m_ShowGroundGrid;
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Show ground grid in Scene View");
+        }
+        if (m_ShowGroundGrid)
+        {
+            ImGui::PopStyleColor();
+        }
+        ImGui::SameLine();
     }
     ImGui::SameLine();
     const bool collisionActive = ui.ShowCollisionShapes;
@@ -748,6 +1125,295 @@ void ViewportPanel::DrawSceneToolbar(
     if (ImGui::IsItemHovered())
     {
         ImGui::SetTooltip("Reset the Scene View camera");
+    }
+    ImGui::SameLine();
+    ImGui::TextUnformatted("|");
+    ImGui::SameLine();
+    const bool is2D = camera.ProjectionMode() == ViewportProjectionMode::Ortho2D;
+    if (is2D)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+    }
+    if (ImGui::SmallButton("2D"))
+    {
+        camera.SetProjectionMode(
+            is2D ? ViewportProjectionMode::Perspective : ViewportProjectionMode::Ortho2D);
+        if (m_ProjectionModeChanged)
+        {
+            m_ProjectionModeChanged();
+        }
+    }
+    if (is2D)
+    {
+        ImGui::PopStyleColor();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Toggle 2D orthographic / 3D perspective viewport");
+    }
+}
+
+bool ViewportPanel::EdgeTab(
+    const char* id, const ImVec2 pos, const ImVec2 size, const int dir, const char* tip)
+{
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImGui::SetCursorScreenPos(pos);
+    ImGui::PushID(id);
+    const bool clicked = ImGui::InvisibleButton("##tab", size);
+    const bool hovered = ImGui::IsItemHovered();
+    m_OverlayHovered = m_OverlayHovered || hovered;
+    const OverlayPalette pal = MakeOverlayPalette(m_SceneViewLight);
+    dl->AddRectFilled(pos, {pos.x + size.x, pos.y + size.y},
+        hovered ? pal.Hover : IM_COL32(128, 128, 128, 26), 4.0F);
+    const ImVec2 chevronCenter{pos.x + size.x * 0.5F, pos.y + size.y * 0.5F};
+    const float chevronSize = std::min(size.x, size.y) * 0.6F;
+    // Opposite-color 1px shadow first, then the adaptive foreground glyph.
+    DrawChevron(dl, {chevronCenter.x + 1.0F, chevronCenter.y + 1.0F}, chevronSize, dir, pal.Shadow);
+    DrawChevron(dl, chevronCenter, chevronSize, dir, pal.Fg);
+    if (hovered)
+    {
+        ImGui::SetTooltip("%s", tip);
+    }
+    ImGui::PopID();
+    return clicked;
+}
+
+void ViewportPanel::DrawTransformRail(const View& view)
+{
+    if (!view.Visible || view.ImageSize.x < 48.0F || view.ImageSize.y < 48.0F)
+    {
+        return;
+    }
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    if (!m_TransformRailVisible)
+    {
+        // Collapsed: slim restore tab on the left viewport edge.
+        if (EdgeTab("##RailRestore",
+                {view.ImageMin.x + 2.0F, view.ImageMin.y + view.ImageSize.y * 0.5F - 20.0F},
+                {14.0F, 40.0F}, 1, "Show transform tools"))
+        {
+            m_TransformRailVisible = true;
+            if (m_WidgetVisibilityChanged)
+            {
+                m_WidgetVisibilityChanged();
+            }
+        }
+        return;
+    }
+
+    struct Tool
+    {
+        const char* Icon;
+        const char* Tip;
+        int Id;
+    };
+    static constexpr std::array<Tool, 4> tools{{
+        {FADIX_ICON_SELECT, "Select (Q)", 0},
+        {FADIX_ICON_MOVE, "Move (W)", 1},
+        {FADIX_ICON_ROTATE, "Rotate (E)", 2},
+        {FADIX_ICON_SCALE, "Scale (R)", 3}}};
+
+    constexpr float btn = 30.0F;
+    constexpr float spacing = 6.0F;
+    const float h = static_cast<float>(tools.size()) * btn +
+        static_cast<float>(tools.size() - 1) * spacing;
+    const float x = view.ImageMin.x + 12.0F;
+    float y = view.ImageMin.y + view.ImageSize.y * 0.5F - h * 0.5F;
+
+    // No solid backing panel and no ImGui button chrome: an InvisibleButton takes
+    // the click, and the glyph is drawn manually so its color adapts to the scene
+    // (dark on bright Ortho2D, light on dark perspective) with a 1px opposite
+    // shadow, staying readable over any scene content behind it.
+    const OverlayPalette pal = MakeOverlayPalette(m_SceneViewLight);
+    for (const Tool& t : tools)
+    {
+        const ImVec2 p{x, y};
+        ImGui::SetCursorScreenPos(p);
+        ImGui::PushID(t.Id);
+        const bool clicked = ImGui::InvisibleButton("##tool", {btn, btn});
+        const bool hovered = ImGui::IsItemHovered();
+        m_OverlayHovered = m_OverlayHovered || hovered;
+        const bool active = m_GizmoTool == t.Id;
+        if (active)
+        {
+            dl->AddRectFilled(p, {p.x + btn, p.y + btn}, pal.Active, 7.0F);
+        }
+        else if (hovered)
+        {
+            dl->AddRectFilled(p, {p.x + btn, p.y + btn}, pal.Hover, 7.0F);
+        }
+        const ImVec2 ts = ImGui::CalcTextSize(t.Icon);
+        const ImVec2 gp{p.x + (btn - ts.x) * 0.5F, p.y + (btn - ts.y) * 0.5F};
+        // Active tool sits on the blue chip, so a white glyph reads best there.
+        const ImU32 fg = active ? IM_COL32(255, 255, 255, 255) : pal.Fg;
+        const ImU32 sh = active ? IM_COL32(0, 0, 0, 150) : pal.Shadow;
+        dl->AddText({gp.x + 1.0F, gp.y + 1.0F}, sh, t.Icon);
+        dl->AddText(gp, fg, t.Icon);
+        if (hovered)
+        {
+            ImGui::SetTooltip("%s", t.Tip);
+        }
+        if (clicked)
+        {
+            m_GizmoTool = t.Id;
+        }
+        ImGui::PopID();
+        y += btn + spacing;
+    }
+
+    // Collapse chevron tab beneath the tools.
+    if (EdgeTab("##RailCollapse", {x + (btn - 20.0F) * 0.5F, y + 2.0F}, {20.0F, 16.0F}, 0,
+            "Hide transform tools"))
+    {
+        m_TransformRailVisible = false;
+        if (m_WidgetVisibilityChanged)
+        {
+            m_WidgetVisibilityChanged();
+        }
+    }
+}
+
+void ViewportPanel::DrawOrientationGizmo(const View& view, CameraModule& camera)
+{
+    if (!view.Visible || view.ImageSize.x < 90.0F || view.ImageSize.y < 90.0F)
+    {
+        return;
+    }
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    constexpr float margin = 12.0F;
+    constexpr float radius = 34.0F;
+
+    if (!m_OrientationGizmoVisible)
+    {
+        // Collapsed: slim restore tab on the right viewport edge.
+        if (EdgeTab("##OrientRestore",
+                {view.ImageMin.x + view.ImageSize.x - 16.0F, view.ImageMin.y + margin},
+                {14.0F, 40.0F}, 0, "Show orientation gizmo"))
+        {
+            m_OrientationGizmoVisible = true;
+            if (m_WidgetVisibilityChanged)
+            {
+                m_WidgetVisibilityChanged();
+            }
+        }
+        return;
+    }
+
+    const ImVec2 center{
+        view.ImageMin.x + view.ImageSize.x - margin - radius, view.ImageMin.y + margin + radius};
+    // Subtle translucent backing for readability against bright scenes.
+    dl->AddCircleFilled(center, radius + 9.0F, IM_COL32(24, 26, 32, 120), 40);
+
+    // Project the world axes through the camera's view rotation so the widget
+    // tracks the live camera orientation.
+    const glm::mat3 viewRot{camera.Camera().View()};
+    struct Ball
+    {
+        glm::vec3 Dir;
+        ImU32 Color;
+        char Letter;
+        bool Positive;
+    };
+    static constexpr ImU32 kRed = IM_COL32(206, 92, 92, 255);
+    static constexpr ImU32 kGreen = IM_COL32(116, 190, 128, 255);
+    static constexpr ImU32 kBlue = IM_COL32(100, 146, 220, 255);
+    const std::array<Ball, 6> balls{{
+        {{1.0F, 0.0F, 0.0F}, kRed, 'X', true},
+        {{0.0F, 1.0F, 0.0F}, kGreen, 'Y', true},
+        {{0.0F, 0.0F, 1.0F}, kBlue, 'Z', true},
+        {{-1.0F, 0.0F, 0.0F}, kRed, 'X', false},
+        {{0.0F, -1.0F, 0.0F}, kGreen, 'Y', false},
+        {{0.0F, 0.0F, -1.0F}, kBlue, 'Z', false}}};
+
+    struct Projected
+    {
+        ImVec2 Pos;
+        float Depth; // camera-space z: >0 toward viewer
+        int Index;
+    };
+    std::array<Projected, 6> order{};
+    for (int i = 0; i < 6; ++i)
+    {
+        const glm::vec3 v = viewRot * balls[static_cast<std::size_t>(i)].Dir;
+        order[static_cast<std::size_t>(i)] = {
+            {center.x + v.x * radius, center.y - v.y * radius}, v.z, i};
+    }
+    // Back-to-front so front-facing endpoints draw on top and win hover priority.
+    std::sort(order.begin(), order.end(),
+        [](const Projected& a, const Projected& b) { return a.Depth < b.Depth; });
+
+    for (const Projected& p : order)
+    {
+        const Ball& b = balls[static_cast<std::size_t>(p.Index)];
+        const float front = std::clamp((p.Depth + 1.0F) * 0.5F, 0.0F, 1.0F); // 0=rear 1=front
+        const auto withAlpha = [](const ImU32 base, const float a01) {
+            const ImU32 a = static_cast<ImU32>(std::clamp(a01, 0.0F, 1.0F) * 255.0F);
+            return (base & ~(0xFFU << IM_COL32_A_SHIFT)) | (a << IM_COL32_A_SHIFT);
+        };
+
+        // All six directions are clickable snap targets.
+        ImGui::SetCursorScreenPos({p.Pos.x - 9.0F, p.Pos.y - 9.0F});
+        ImGui::PushID(p.Index);
+        const bool clicked = ImGui::InvisibleButton("##axis", {18.0F, 18.0F});
+        const bool hovered = ImGui::IsItemHovered();
+        m_OverlayHovered = m_OverlayHovered || hovered;
+        ImGui::PopID();
+
+        if (b.Positive)
+        {
+            // Thin anti-aliased stem + filled endpoint with axis letter.
+            dl->AddLine(center, p.Pos, withAlpha(b.Color, 0.35F + 0.55F * front), 1.5F);
+            const float er = (hovered ? 10.0F : 8.5F) + 1.5F * front; // emphasize camera-facing
+            dl->AddCircleFilled(p.Pos, er, withAlpha(b.Color, 0.55F + 0.45F * front), 24);
+            // Dark contrasting outline keeps the colored endpoint readable against
+            // bright scene content without hiding the red/green/blue identity.
+            dl->AddCircle(p.Pos, er, IM_COL32(18, 20, 26, 200), 24, 1.0F);
+            if (hovered)
+            {
+                dl->AddCircle(p.Pos, er + 1.5F, IM_COL32(255, 255, 255, 220), 24, 1.5F);
+            }
+            const char label[2]{b.Letter, '\0'};
+            const ImVec2 ts = ImGui::CalcTextSize(label);
+            const ImVec2 lp{p.Pos.x - ts.x * 0.5F, p.Pos.y - ts.y * 0.5F};
+            dl->AddText({lp.x + 1.0F, lp.y + 1.0F}, IM_COL32(255, 255, 255, 130), label);
+            dl->AddText(lp, IM_COL32(20, 22, 26, 255), label);
+        }
+        else
+        {
+            // Smaller muted ring for the negative direction, with a subtle dark
+            // contrasting outline so it stays visible on bright scenes.
+            const float rr = hovered ? 6.5F : 5.0F;
+            dl->AddCircle(p.Pos, rr + 0.5F, IM_COL32(18, 20, 26, 150), 20, 1.0F);
+            dl->AddCircle(p.Pos, rr, withAlpha(b.Color, 0.3F + 0.4F * front), 20, 1.6F);
+            if (hovered)
+            {
+                dl->AddCircleFilled(p.Pos, rr - 1.0F, withAlpha(b.Color, 0.5F), 20);
+            }
+        }
+
+        if (hovered)
+        {
+            ImGui::SetTooltip("View from %c%c", b.Positive ? '+' : '-', b.Letter);
+        }
+        if (clicked)
+        {
+            // Snap so the camera looks toward the origin from the clicked axis
+            // (forward = -direction); pivot + orbit distance preserved.
+            camera.Camera().SetLookDirection(-b.Dir);
+            ResetTemporalHistory();
+        }
+    }
+
+    // Collapse chevron tab beneath the widget.
+    if (EdgeTab("##OrientCollapse", {center.x - 10.0F, center.y + radius + 6.0F}, {20.0F, 16.0F},
+            2, "Hide orientation gizmo"))
+    {
+        m_OrientationGizmoVisible = false;
+        if (m_WidgetVisibilityChanged)
+        {
+            m_WidgetVisibilityChanged();
+        }
     }
 }
 
@@ -837,16 +1503,23 @@ std::optional<GizmoHandle> ViewportPanel::HitTestGizmo(
         return std::nullopt;
     }
 
-    const glm::vec2 local = MouseInViewPixels(view);
+    // Active edit camera: Ortho2D matrices in 2D, workbench perspective otherwise
+    // — the same matrices the renderer drew the gizmo with, so hit zones track the
+    // visible arrows at any zoom. The ray uses logical mouse + logical size (NDC is
+    // resolution-independent); GizmoWorldSize uses PixelH to match the renderer,
+    // which builds gizmo geometry against the render-target height.
+    const glm::mat4 editView = camera.EditView();
+    const glm::mat4 editProjection = camera.EditProjection();
+    const glm::vec2 local = MouseInViewLogical(view);
     const GizmoRay ray = MouseRayFromCamera(
-        camera.Camera().View(),
-        camera.Camera().Projection(),
+        editView,
+        editProjection,
         local,
-        {static_cast<float>(view.PixelW), static_cast<float>(view.PixelH)});
+        {view.LogicalW, view.LogicalH});
     const glm::vec3 position = transform->Position;
     const float size = GizmoWorldSize(
-        camera.Camera().View(),
-        camera.Camera().Projection(),
+        editView,
+        editProjection,
         position,
         static_cast<float>(view.PixelH));
     if (size <= 0.0F)
@@ -961,9 +1634,8 @@ void ViewportPanel::Draw(
     SceneDocument& document,
     SDL_Window* window)
 {
-    static_cast<void>(history);
-    static_cast<void>(editWorld);
     static_cast<void>(document);
+    static_cast<void>(history);
     const float dpi =
         window != nullptr ? std::max(SDL_GetWindowDisplayScale(window), 0.01F) : 1.0F;
 
@@ -982,6 +1654,60 @@ void ViewportPanel::Draw(
             DrawSceneToolbar(ui, camera, gizmo, playMode);
             MeasureView(m_Scene, dpi);
             DrawViewImage(m_Scene, "Resize Scene View", true);
+
+            m_OverlayHovered = false;
+
+            // Overlay glyph contrast follows the viewport: the Ortho2D scene is
+            // bright (dark glyphs), the perspective scene is dark (light glyphs).
+            const ViewportProjectionMode projMode = camera.ProjectionMode();
+            m_SceneViewLight = projMode == ViewportProjectionMode::Ortho2D;
+
+            // Clear stale gizmo hover when the projection mode or 2D zoom changes,
+            // so a hover cached at a different scale/mode never displaces the click
+            // zone (wheel zoom fires no motion event to re-hit-test). Not while
+            // dragging — an active drag owns the handle regardless of zoom.
+            const float ortho2DZoom = camera.Ortho2D().OrthoHalfHeight();
+            if (!m_GizmoDragging &&
+                (projMode != m_LastProjectionMode ||
+                    (projMode == ViewportProjectionMode::Ortho2D &&
+                        std::abs(ortho2DZoom - m_LastOrtho2DZoom) > 1.0e-4F)))
+            {
+                m_GizmoHover.reset();
+            }
+            m_LastProjectionMode = projMode;
+            m_LastOrtho2DZoom = ortho2DZoom;
+
+            // Update 2D camera cursor position for zoom centering. The Ortho2D
+            // camera's viewport size is the LOGICAL image size, so feed the cursor
+            // in that same logical space (not render pixels) or zoom-to-cursor
+            // drifts by the DPI/resolution-scale factor and the sprite appears to
+            // slide instead of scaling in place.
+            {
+                const ImVec2 mp = ImGui::GetIO().MousePos;
+                const glm::vec2 cursorLogical{
+                    (mp.x - m_Scene.ImageMin.x) / std::max(m_Scene.ImageSize.x, 1.0F) *
+                        m_Scene.LogicalW,
+                    (mp.y - m_Scene.ImageMin.y) / std::max(m_Scene.ImageSize.y, 1.0F) *
+                        m_Scene.LogicalH};
+                camera.SetCursorViewportPos(cursorLogical);
+            }
+
+            // 2D viewport overlays (grid, sprite bounds, colliders, tilemap grid)
+            if (camera.ProjectionMode() == ViewportProjectionMode::Ortho2D &&
+                m_Scene.Visible && m_Scene.ImageSize.x > 0.0F)
+            {
+                ImDrawList* drawList = ImGui::GetWindowDrawList();
+                drawList->PushClipRect(m_Scene.ImageMin,
+                    {m_Scene.ImageMin.x + m_Scene.ImageSize.x,
+                        m_Scene.ImageMin.y + m_Scene.ImageSize.y},
+                    true);
+                Draw2DGrid(drawList, camera.Ortho2D(), m_Scene.ImageMin, m_Scene.ImageSize);
+                Draw2DSpritePlaceholders(
+                    drawList, camera.Ortho2D(), m_Scene.ImageMin, editWorld, scene);
+                Draw2DEntityOverlays(drawList, camera.Ortho2D(), m_Scene.ImageMin, editWorld, scene);
+                drawList->PopClipRect();
+            }
+
             // Per-cascade depth preview (debug only, Scene View only). Each active
             // cascade's real depth texture is drawn as a small inset along the top,
             // cascade 0 leftmost, so their contents can be compared directly.
@@ -1015,15 +1741,28 @@ void ViewportPanel::Draw(
                     if (const auto asset = ParseAssetDragDropBlob(
                             payload->Data, static_cast<std::size_t>(payload->DataSize)))
                     {
-                        if (asset->AssetType == "Mesh")
+                        const bool in2DMode =
+                            camera.ProjectionMode() == ViewportProjectionMode::Ortho2D;
+                        if (asset->AssetType == "Texture" && in2DMode)
                         {
-                            const glm::vec2 pixel = MouseInViewPixels(m_Scene);
+                            if (payload->IsDelivery() && m_Sprite2DDropHandler)
+                            {
+                                // Ortho2D camera is configured in logical size; feed
+                                // logical mouse coords (not render pixels) or the drop
+                                // lands off-cursor when DPI/resolution-scale != 1.
+                                const glm::vec2 logical = MouseInViewLogical(m_Scene);
+                                const glm::vec2 worldPos = camera.Ortho2D().ScreenToWorld(logical);
+                                m_Sprite2DDropHandler(*asset, worldPos);
+                            }
+                        }
+                        else if (asset->AssetType == "Mesh" && !in2DMode)
+                        {
+                            const glm::vec2 logical = MouseInViewLogical(m_Scene);
                             const GizmoRay ray = MouseRayFromCamera(
-                                camera.Camera().View(),
-                                camera.Camera().Projection(),
-                                pixel,
-                                {static_cast<float>(m_Scene.PixelW),
-                                    static_cast<float>(m_Scene.PixelH)});
+                                camera.EditView(),
+                                camera.EditProjection(),
+                                logical,
+                                {m_Scene.LogicalW, m_Scene.LogicalH});
                             if (const auto hit = RayPlaneIntersect(
                                     ray, glm::vec3{0.0F}, glm::vec3{0.0F, 1.0F, 0.0F}))
                             {
@@ -1083,6 +1822,16 @@ void ViewportPanel::Draw(
             {
                 m_MeshPreview.reset();
             }
+
+            // Floating in-viewport overlays. Drawn after the drag-drop target so
+            // the scene image stays the drop target; their hover feeds
+            // m_OverlayHovered so overlay clicks don't also pick scene entities.
+            DrawTransformRail(m_Scene);
+            if (camera.ProjectionMode() == ViewportProjectionMode::Perspective)
+            {
+                DrawOrientationGizmo(m_Scene, camera);
+            }
+
             if (m_Scene.Hovered && m_PendingPick && m_Scene.Picking)
             {
                 if (const auto result = m_Scene.Picking->Poll())
@@ -1146,14 +1895,51 @@ void ViewportPanel::HandleEvent(
     }
 
     const GizmoMode mode = ToolToMode(m_GizmoTool);
-    const glm::vec2 local = MouseInViewPixels(m_Scene);
+    // Logical mouse + active edit-camera matrices (Ortho2D in 2D, workbench in 3D)
+    // so drag rays share the projection the gizmo was drawn with.
+    const glm::vec2 local = MouseInViewLogical(m_Scene);
     const auto mouseRay = [&]() {
         return MouseRayFromCamera(
-            camera.Camera().View(),
-            camera.Camera().Projection(),
+            camera.EditView(),
+            camera.EditProjection(),
             local,
-            {static_cast<float>(m_Scene.PixelW), static_cast<float>(m_Scene.PixelH)});
+            {m_Scene.LogicalW, m_Scene.LogicalH});
     };
+
+    // 2D tilemap viewport painting (intercepts before gizmo when a paint tool is active)
+    if (camera.ProjectionMode() == ViewportProjectionMode::Ortho2D &&
+        m_TilemapPanel != nullptr && m_TilemapPanel->IsActive() &&
+        m_TilemapPanel->ActiveTool() != TilemapTool::Select)
+    {
+        const glm::vec2 worldPos2D = camera.Ortho2D().ScreenToWorld(local);
+        if (event.type == SDL_EVENT_MOUSE_MOTION)
+        {
+            m_TilemapPanel->HandleViewportMouseMove(worldPos2D, scene, editWorld);
+        }
+        else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+            event.button.button == SDL_BUTTON_LEFT)
+        {
+            if (m_TilemapPanel->HandleViewportMouseDown(worldPos2D, scene, editWorld))
+            {
+                return;
+            }
+        }
+        else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP &&
+            event.button.button == SDL_BUTTON_LEFT)
+        {
+            m_TilemapPanel->HandleViewportMouseUp(scene, editWorld, history);
+            return;
+        }
+    }
+
+    // Ignore gizmo hover / picking while the cursor is over a floating overlay
+    // control (transform rail, orientation gizmo). Ongoing drags and button-up
+    // still fall through so a drag started on the scene finishes cleanly.
+    if (m_OverlayHovered && !m_GizmoDragging &&
+        (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_MOTION))
+    {
+        return;
+    }
 
     if (event.type == SDL_EVENT_MOUSE_MOTION)
     {

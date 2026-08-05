@@ -495,6 +495,205 @@ struct Box2DBodyComponent
     bool Dynamic{true};
 };
 
+// ============ Native 2D: Sprite ============
+
+struct Sprite2DComponent
+{
+    AssetHandle Texture{};
+    glm::vec4 Tint{1.0F, 1.0F, 1.0F, 1.0F};  // RGBA tint
+    glm::vec2 Size{1.0F, 1.0F};               // world-unit dimensions
+    glm::vec2 Pivot{0.5F, 0.5F};              // normalized anchor within Size
+    glm::vec4 UvRect{0.0F, 0.0F, 1.0F, 1.0F}; // xy=UV offset, zw=UV scale
+    bool FlipX{false};
+    bool FlipY{false};
+    int SortingLayer{0};
+    int OrderInLayer{0};
+    float PixelsPerUnit{100.0F};
+    bool NearestFilter{false};
+    bool PixelSnap{false};
+};
+
+// Shared Scene/Game render policy: a Sprite2D only produces real renderable
+// content when it has a texture assigned. Textureless sprites render nothing in
+// Game View (no white-quad fallback); Scene View draws an editor-only placeholder
+// instead. Single source of truth for the renderer and the 2D smoke test.
+[[nodiscard]] inline bool Sprite2DHasRenderableTexture(const Sprite2DComponent& sprite) noexcept
+{
+    return sprite.Texture.IsValid();
+}
+
+// Single source of truth for a Sprite2D's on-screen size. Folds the entity's
+// transform scale into Sprite.Size and applies FlipX/FlipY as sign flips. Used by
+// the renderer, the Scene View placeholder, and the 2D smoke so all three agree.
+[[nodiscard]] inline glm::vec2 Sprite2DEffectiveSize(
+    const Sprite2DComponent& sprite, const glm::vec2 transformScale) noexcept
+{
+    return {sprite.Size.x * transformScale.x * (sprite.FlipX ? -1.0F : 1.0F),
+        sprite.Size.y * transformScale.y * (sprite.FlipY ? -1.0F : 1.0F)};
+}
+
+// Editor-only: how the Scene View "No Sprite" placeholder previews a textureless
+// Sprite2D's Tint so tint edits give immediate feedback. The card fill blends a
+// neutral base toward the tint RGB and its opacity tracks tint alpha, while the
+// outline alpha keeps a floor so a zero-alpha sprite stays visible/selectable.
+// Single source of truth shared by the placeholder overlay and the 2D smoke.
+struct Sprite2DPlaceholderStyle
+{
+    glm::vec4 Card;     // filled card RGBA (0..1), tint-blended + translucent
+    float OutlineAlpha; // 0..1, never below a floor so it can't vanish
+};
+
+[[nodiscard]] inline Sprite2DPlaceholderStyle Sprite2DPlaceholderStyleFor(
+    const glm::vec4& tint) noexcept
+{
+    constexpr glm::vec3 neutral{40.0F / 255.0F, 44.0F / 255.0F, 52.0F / 255.0F};
+    constexpr float mixT = 0.55F;
+    const glm::vec3 card{
+        neutral.x + (tint.r - neutral.x) * mixT,
+        neutral.y + (tint.g - neutral.y) * mixT,
+        neutral.z + (tint.b - neutral.z) * mixT};
+    const float cardA = 0.30F + 0.35F * tint.a; // 0.30 (transparent) .. 0.65 (opaque)
+    const float outlineAlpha = tint.a > 0.35F ? tint.a : 0.35F;
+    return {{card.x, card.y, card.z, cardA}, outlineAlpha};
+}
+
+// ============ Native 2D: Physics ============
+
+enum class Body2DType : std::uint8_t
+{
+    Static,
+    Kinematic,
+    Dynamic
+};
+
+[[nodiscard]] inline const char* Body2DTypeName(const Body2DType type) noexcept
+{
+    switch (type)
+    {
+    case Body2DType::Kinematic: return "Kinematic";
+    case Body2DType::Dynamic: return "Dynamic";
+    case Body2DType::Static: break;
+    }
+    return "Static";
+}
+
+[[nodiscard]] inline Body2DType SanitizeBody2DType(const unsigned value) noexcept
+{
+    return value <= static_cast<unsigned>(Body2DType::Dynamic)
+        ? static_cast<Body2DType>(value)
+        : Body2DType::Static;
+}
+
+struct RigidBody2DComponent
+{
+    PhysicsBodyHandle Handle{InvalidPhysicsBody};
+    Body2DType Type{Body2DType::Dynamic};
+    float Mass{1.0F};
+    float GravityScale{1.0F};
+    float LinearDamping{0.0F};
+    float AngularDamping{0.0F};
+    bool FixedRotation{false};
+    glm::vec2 InitialLinearVelocity{0.0F};
+    float InitialAngularVelocity{0.0F};
+    // Runtime only — not persisted:
+    glm::vec2 RuntimeLinearVelocity{0.0F}; // synced from Box2D body each step
+    glm::vec2 PendingVelocity{0.0F};       // written by scripts, applied next SyncFromWorld
+    bool HasPendingVelocity{false};
+    glm::vec2 PendingImpulse{0.0F};        // accumulated by scripts, applied next SyncFromWorld
+    bool HasPendingImpulse{false};
+};
+
+enum class Collider2DShape : std::uint8_t
+{
+    Box,
+    Circle
+};
+
+[[nodiscard]] inline const char* Collider2DShapeName(const Collider2DShape shape) noexcept
+{
+    switch (shape)
+    {
+    case Collider2DShape::Circle: return "Circle";
+    case Collider2DShape::Box: break;
+    }
+    return "Box";
+}
+
+[[nodiscard]] inline Collider2DShape SanitizeCollider2DShape(const unsigned value) noexcept
+{
+    return value <= static_cast<unsigned>(Collider2DShape::Circle)
+        ? static_cast<Collider2DShape>(value)
+        : Collider2DShape::Box;
+}
+
+struct Collider2DComponent
+{
+    Collider2DShape Shape{Collider2DShape::Box};
+    glm::vec2 Offset{0.0F};
+    glm::vec2 Size{0.5F, 0.5F}; // half-extents for Box; x=radius for Circle
+    float Friction{0.3F};
+    float Restitution{0.1F};
+    float Density{1.0F};
+    bool Sensor{false};
+    std::uint32_t CollisionLayer{0xFFFF};
+    std::uint32_t CollisionMask{0xFFFF};
+};
+
+// ============ Native 2D: Sprite Animation ============
+
+struct SpriteFrame
+{
+    glm::vec4 UvRect{0.0F, 0.0F, 1.0F, 1.0F};
+    float Duration{0.1F};
+};
+
+struct SpriteAnimationClip
+{
+    std::string Name;
+    std::vector<SpriteFrame> Frames;
+    bool Loop{true};
+};
+
+struct SpriteFrameAnimatorComponent
+{
+    std::vector<SpriteAnimationClip> Clips;
+    std::string CurrentClip;
+    bool Playing{false};
+    bool Autoplay{false};
+    float Speed{1.0F};
+    // Runtime only — not persisted:
+    float CurrentTime{0.0F};
+    int CurrentFrame{0};
+};
+
+// ============ Native 2D: TileMap ============
+
+struct TileMapComponent
+{
+    AssetHandle TileSetTexture{};
+    int TileWidth{16};
+    int TileHeight{16};
+    int GridWidth{20};
+    int GridHeight{20};
+    int SheetColumns{8};
+    int SheetRows{8};       // needed for correct V-axis UV calculation
+    int SortingLayer{0};
+    int OrderInLayer{0};
+    float PixelsPerUnit{100.0F};
+    int LayerCount{1};
+    // Row-major: index = layer * GridWidth * GridHeight + y * GridWidth + x
+    // -1 = empty, 0+ = tile index in sheet
+    std::vector<int> TileData;
+};
+
+[[nodiscard]] inline TileMapComponent MakeDefaultTileMap() noexcept
+{
+    TileMapComponent tm;
+    tm.TileData.assign(static_cast<std::size_t>(tm.LayerCount) *
+        static_cast<std::size_t>(tm.GridWidth) * static_cast<std::size_t>(tm.GridHeight), -1);
+    return tm;
+}
+
 struct ScriptComponent
 {
     std::vector<std::string> ScriptNames; // scripts attached to this entity, by name
@@ -795,6 +994,43 @@ inline void RegisterRuntimeComponentProperties(PropertyRegistry& registry)
     registry.RegisterComponent<Box2DBodyComponent>("Box2DBody");
     registry.AddProperty<Box2DBodyComponent>("halfExtent");
     registry.AddProperty<Box2DBodyComponent>("dynamic");
+    registry.RegisterComponent<Sprite2DComponent>("Sprite2D");
+    registry.AddProperty<Sprite2DComponent>("texture");
+    registry.AddProperty<Sprite2DComponent>("tint");
+    registry.AddProperty<Sprite2DComponent>("size");
+    registry.AddProperty<Sprite2DComponent>("pivot");
+    registry.AddProperty<Sprite2DComponent>("uvRect");
+    registry.AddProperty<Sprite2DComponent>("flipX");
+    registry.AddProperty<Sprite2DComponent>("flipY");
+    registry.AddProperty<Sprite2DComponent>("sortingLayer");
+    registry.AddProperty<Sprite2DComponent>("orderInLayer");
+    registry.AddProperty<Sprite2DComponent>("pixelsPerUnit");
+    registry.RegisterComponent<RigidBody2DComponent>("RigidBody2D");
+    registry.AddProperty<RigidBody2DComponent>("type");
+    registry.AddProperty<RigidBody2DComponent>("mass");
+    registry.AddProperty<RigidBody2DComponent>("gravityScale");
+    registry.AddProperty<RigidBody2DComponent>("linearDamping");
+    registry.AddProperty<RigidBody2DComponent>("angularDamping");
+    registry.AddProperty<RigidBody2DComponent>("fixedRotation");
+    registry.RegisterComponent<Collider2DComponent>("Collider2D");
+    registry.AddProperty<Collider2DComponent>("shape");
+    registry.AddProperty<Collider2DComponent>("offset");
+    registry.AddProperty<Collider2DComponent>("size");
+    registry.AddProperty<Collider2DComponent>("friction");
+    registry.AddProperty<Collider2DComponent>("restitution");
+    registry.AddProperty<Collider2DComponent>("density");
+    registry.AddProperty<Collider2DComponent>("sensor");
+    registry.RegisterComponent<SpriteFrameAnimatorComponent>("SpriteFrameAnimator");
+    registry.AddProperty<SpriteFrameAnimatorComponent>("currentClip");
+    registry.AddProperty<SpriteFrameAnimatorComponent>("playing");
+    registry.AddProperty<SpriteFrameAnimatorComponent>("autoplay");
+    registry.AddProperty<SpriteFrameAnimatorComponent>("speed");
+    registry.RegisterComponent<TileMapComponent>("TileMap");
+    registry.AddProperty<TileMapComponent>("tileWidth");
+    registry.AddProperty<TileMapComponent>("tileHeight");
+    registry.AddProperty<TileMapComponent>("gridWidth");
+    registry.AddProperty<TileMapComponent>("gridHeight");
+    registry.AddProperty<TileMapComponent>("layerCount");
     registry.RegisterComponent<ScriptComponent>("Script");
     registry.AddProperty<ScriptComponent>("scriptNames");
     registry.AddProperty<ScriptComponent>("enabled");

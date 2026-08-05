@@ -275,6 +275,7 @@ void EditorShell::DrawMenus(EditorSession& session, EditorUiState& ui)
         ImGui::MenuItem("Material Editor", nullptr, &ui.ShowMaterialEditor);
         ImGui::MenuItem("FDX Animation", nullptr, &ui.ShowFdxAnimation);
         ImGui::MenuItem("Profiler", nullptr, &ui.ShowProfiler);
+        ImGui::MenuItem("Performance...", nullptr, &ui.ShowPerformanceWindow);
         ImGui::MenuItem("Export...", nullptr, &ui.ShowExport);
         if (ImGui::BeginMenu("Rendering"))
         {
@@ -541,6 +542,11 @@ void EditorShell::DrawPanels(
         m_Hierarchy.Draw(*scene, ui);
         m_Inspector.Draw(*scene, ui);
         m_FdxAnim.Draw(*scene, ui, session.ActiveProject().RootPath, viewports);
+        m_Tilemap.Draw(*scene, ui, session.EditWorld(), session.History());
+    }
+    if (viewports != nullptr)
+    {
+        viewports->SetTilemapPanel(&m_Tilemap);
     }
     if (contentBrowser != nullptr)
     {

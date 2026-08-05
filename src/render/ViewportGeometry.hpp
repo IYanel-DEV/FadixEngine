@@ -42,5 +42,8 @@ void AppendSphere(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& ind
 void AppendTorus(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices, float tubeRadius, int majorSegments, int minorSegments);
 void AppendQuad(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices);
 void AppendPlanePrimitive(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices);
+// XY-plane unit quad centered at origin, front face only (for sprite rendering).
+// UV (0,0) = top-left, (1,1) = bottom-right in image space with Y-up world.
+void AppendSpriteQuad(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices);
 void AppendCapsule(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices, int slices, int stacks);
 } // namespace fadix::viewport_geometry

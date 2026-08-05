@@ -144,6 +144,13 @@ struct PhysicsWorld::State
         glm::vec2 HalfExtent{0.5F};
         bool Dynamic{true};
     };
+    struct Body2DNewRecord
+    {
+        b2BodyId Id;
+        Body2DType Type{Body2DType::Dynamic};
+        Collider2DShape Shape{Collider2DShape::Box};
+        glm::vec2 Size{1.0F};
+    };
     struct CharacterRecord
     {
         JPH::Ref<JPH::CharacterVirtual> Controller;
@@ -164,9 +171,14 @@ struct PhysicsWorld::State
     PhysicsBodyHandle NextHandle{1};
     std::unordered_map<PhysicsBodyHandle, Body3DRecord> Bodies3D;
     std::unordered_map<PhysicsBodyHandle, Body2DRecord> Bodies2D;
+    std::unordered_map<PhysicsBodyHandle, Body2DNewRecord> Bodies2DNew;
     std::unordered_map<Uuid, PhysicsBodyHandle> EntityBodies3D;
     std::unordered_map<Uuid, PhysicsBodyHandle> EntityBodies2D;
+    std::unordered_map<Uuid, PhysicsBodyHandle> EntityBodies2DNew;
     std::unordered_map<Uuid, CharacterRecord> Characters;
+    // Reverse map: b2BodyId.index1 -> entity UUID (for sensor event lookup)
+    std::unordered_map<int, Uuid> BodyIndexToEntity;
+    std::vector<ContactEvent2D> PendingContactEvents;
 };
 
 PhysicsWorld::PhysicsWorld(ICollisionMeshProvider* meshes)
@@ -274,6 +286,41 @@ void PhysicsWorld::StepFixed(const float fixedDeltaSeconds)
 
     m_State->Physics3D.Update(fixedDeltaSeconds, 1, &m_State->TempAllocator, &m_State->Jobs);
     b2World_Step(m_State->Physics2D, fixedDeltaSeconds, 4);
+
+    // Collect sensor contact events while shape IDs are still valid this step.
+    const b2SensorEvents sensorEvents = b2World_GetSensorEvents(m_State->Physics2D);
+    for (int i = 0; i < sensorEvents.beginCount; ++i)
+    {
+        const b2SensorBeginTouchEvent& ev = sensorEvents.beginEvents[i];
+        const b2BodyId sensorBody = b2Shape_GetBody(ev.sensorShapeId);
+        const b2BodyId visitorBody = b2Shape_GetBody(ev.visitorShapeId);
+        const auto sensorIt = m_State->BodyIndexToEntity.find(sensorBody.index1);
+        const auto visitorIt = m_State->BodyIndexToEntity.find(visitorBody.index1);
+        if (sensorIt != m_State->BodyIndexToEntity.end() &&
+            visitorIt != m_State->BodyIndexToEntity.end())
+        {
+            m_State->PendingContactEvents.push_back(
+                {sensorIt->second, visitorIt->second, true});
+        }
+    }
+    for (int i = 0; i < sensorEvents.endCount; ++i)
+    {
+        const b2SensorEndTouchEvent& ev = sensorEvents.endEvents[i];
+        if (!b2Shape_IsValid(ev.sensorShapeId) || !b2Shape_IsValid(ev.visitorShapeId))
+        {
+            continue;
+        }
+        const b2BodyId sensorBody = b2Shape_GetBody(ev.sensorShapeId);
+        const b2BodyId visitorBody = b2Shape_GetBody(ev.visitorShapeId);
+        const auto sensorIt = m_State->BodyIndexToEntity.find(sensorBody.index1);
+        const auto visitorIt = m_State->BodyIndexToEntity.find(visitorBody.index1);
+        if (sensorIt != m_State->BodyIndexToEntity.end() &&
+            visitorIt != m_State->BodyIndexToEntity.end())
+        {
+            m_State->PendingContactEvents.push_back(
+                {sensorIt->second, visitorIt->second, false});
+        }
+    }
 }
 
 PhysicsBodyHandle PhysicsWorld::CreateBody3D(const Body3DDesc& description)
@@ -431,8 +478,19 @@ void PhysicsWorld::DestroyBody(const PhysicsBodyHandle handle)
         }
         m_State->Bodies2D.erase(iterator);
     }
+    if (const auto iterator = m_State->Bodies2DNew.find(handle);
+        iterator != m_State->Bodies2DNew.end())
+    {
+        if (b2Body_IsValid(iterator->second.Id))
+        {
+            m_State->BodyIndexToEntity.erase(iterator->second.Id.index1);
+            b2DestroyBody(iterator->second.Id);
+        }
+        m_State->Bodies2DNew.erase(iterator);
+    }
     std::erase_if(m_State->EntityBodies3D, [handle](const auto& item) { return item.second == handle; });
     std::erase_if(m_State->EntityBodies2D, [handle](const auto& item) { return item.second == handle; });
+    std::erase_if(m_State->EntityBodies2DNew, [handle](const auto& item) { return item.second == handle; });
 }
 
 void PhysicsWorld::SyncFromWorld(const IWorld& world)
@@ -660,6 +718,110 @@ void PhysicsWorld::SyncFromWorld(const IWorld& world)
         static_cast<void>(entity);
     }
     ReconcileRemovedBodies(m_State->EntityBodies2D, seen2D);
+
+    // --- 2D new-style (RigidBody2D + Collider2D) ---
+    std::vector<Uuid> seen2DNew;
+    for (const auto [entity, id, transform, rb] :
+         registry.view<const UuidComponent, const TransformComponent, const RigidBody2DComponent>()
+             .each())
+    {
+        const Collider2DComponent* col =
+            registry.try_get<const Collider2DComponent>(entity);
+        const Collider2DShape shape = col ? col->Shape : Collider2DShape::Box;
+        const glm::vec2 size = col ? col->Size : glm::vec2{0.5F};
+        seen2DNew.push_back(id.Id);
+        const float angle = ZRotation(transform.Rotation);
+        auto found = m_State->EntityBodies2DNew.find(id.Id);
+        if (found != m_State->EntityBodies2DNew.end())
+        {
+            const auto record = m_State->Bodies2DNew.find(found->second);
+            if (record != m_State->Bodies2DNew.end() &&
+                (record->second.Type != rb.Type || record->second.Shape != shape ||
+                 record->second.Size != size))
+            {
+                DestroyBody(found->second);
+                found = m_State->EntityBodies2DNew.end();
+            }
+        }
+        if (found == m_State->EntityBodies2DNew.end())
+        {
+            b2BodyDef def = b2DefaultBodyDef();
+            switch (rb.Type)
+            {
+            case Body2DType::Static: def.type = b2_staticBody; break;
+            case Body2DType::Kinematic: def.type = b2_kinematicBody; break;
+            case Body2DType::Dynamic: def.type = b2_dynamicBody; break;
+            }
+            def.position = b2Vec2{transform.Position.x, transform.Position.y};
+            def.rotation = b2MakeRot(angle);
+            if (rb.Type == Body2DType::Dynamic)
+            {
+                def.linearVelocity = {rb.InitialLinearVelocity.x, rb.InitialLinearVelocity.y};
+                def.angularVelocity = rb.InitialAngularVelocity;
+            }
+            def.fixedRotation = rb.FixedRotation;
+            def.linearDamping = rb.LinearDamping;
+            def.angularDamping = rb.AngularDamping;
+            def.gravityScale = rb.GravityScale;
+            const b2BodyId bid = b2CreateBody(m_State->Physics2D, &def);
+            if (b2Body_IsValid(bid))
+            {
+                b2ShapeDef sd = b2DefaultShapeDef();
+                sd.density = (rb.Type == Body2DType::Dynamic) ? std::max(col ? col->Density : 1.0F, 0.0F) : 0.0F;
+                sd.material.friction = col ? col->Friction : 0.6F;
+                sd.material.restitution = col ? col->Restitution : 0.0F;
+                sd.isSensor = col && col->Sensor;
+                // Wire collision layer/mask so filter rules are actually enforced.
+                if (col)
+                {
+                    b2Filter filter = b2DefaultFilter();
+                    filter.categoryBits = static_cast<std::uint64_t>(col->CollisionLayer);
+                    filter.maskBits = static_cast<std::uint64_t>(col->CollisionMask);
+                    sd.filter = filter;
+                }
+                if (shape == Collider2DShape::Circle)
+                {
+                    const float radius = std::max(size.x * 0.5F, kMinHalfExtent);
+                    const b2Circle circle{{col ? col->Offset.x : 0.0F, col ? col->Offset.y : 0.0F}, radius};
+                    b2CreateCircleShape(bid, &sd, &circle);
+                }
+                else
+                {
+                    const glm::vec2 half{std::max(size.x * 0.5F, kMinHalfExtent),
+                        std::max(size.y * 0.5F, kMinHalfExtent)};
+                    const b2Polygon box = b2MakeOffsetBox(
+                        half.x, half.y,
+                        {col ? col->Offset.x : 0.0F, col ? col->Offset.y : 0.0F},
+                        b2MakeRot(0.0F));
+                    b2CreatePolygonShape(bid, &sd, &box);
+                }
+                if (rb.Type == Body2DType::Dynamic && rb.Mass > 0.0F)
+                {
+                    b2MassData md = b2Body_GetMassData(bid);
+                    md.mass = rb.Mass;
+                    b2Body_SetMassData(bid, md);
+                }
+                const PhysicsBodyHandle handle = m_State->NextHandle++;
+                m_State->Bodies2DNew.emplace(handle, State::Body2DNewRecord{bid, rb.Type, shape, size});
+                m_State->EntityBodies2DNew.insert_or_assign(id.Id, handle);
+                // Track body index for sensor event reverse-lookup.
+                m_State->BodyIndexToEntity.emplace(bid.index1, id.Id);
+            }
+        }
+        else
+        {
+            const auto physical = m_State->Bodies2DNew.find(found->second);
+            if (physical != m_State->Bodies2DNew.end())
+            {
+                b2Body_SetTransform(
+                    physical->second.Id,
+                    {transform.Position.x, transform.Position.y},
+                    b2MakeRot(angle));
+            }
+        }
+        static_cast<void>(entity);
+    }
+    ReconcileRemovedBodies(m_State->EntityBodies2DNew, seen2DNew);
 }
 
 void PhysicsWorld::ReconcileRemovedBodies(
@@ -715,6 +877,54 @@ void PhysicsWorld::SyncToWorld(IWorld& world) const
             transform->Rotation = glm::angleAxis(b2Rot_GetAngle(rotation), glm::vec3{0.0F, 0.0F, 1.0F});
         }
     }
+    for (const auto& [id, handle] : m_State->EntityBodies2DNew)
+    {
+        const auto entity = world.Find(id);
+        const auto body = m_State->Bodies2DNew.find(handle);
+        if (!entity || body == m_State->Bodies2DNew.end())
+        {
+            continue;
+        }
+        if (body->second.Type == Body2DType::Static)
+        {
+            continue;
+        }
+        if (TransformComponent* transform = registry.try_get<TransformComponent>(*entity))
+        {
+            const b2Vec2 position = b2Body_GetPosition(body->second.Id);
+            const b2Rot rotation = b2Body_GetRotation(body->second.Id);
+            transform->Position.x = position.x;
+            transform->Position.y = position.y;
+            transform->Rotation = glm::angleAxis(b2Rot_GetAngle(rotation), glm::vec3{0.0F, 0.0F, 1.0F});
+        }
+        // Sync actual body velocity back so scripts can read it; apply any
+        // overrides the scripts queued during the previous OnUpdate call.
+        if (RigidBody2DComponent* rb = registry.try_get<RigidBody2DComponent>(*entity))
+        {
+            if (rb->HasPendingVelocity)
+            {
+                b2Body_SetLinearVelocity(
+                    body->second.Id,
+                    {rb->PendingVelocity.x, rb->PendingVelocity.y});
+                rb->HasPendingVelocity = false;
+                rb->RuntimeLinearVelocity = rb->PendingVelocity;
+            }
+            else
+            {
+                const b2Vec2 vel = b2Body_GetLinearVelocity(body->second.Id);
+                rb->RuntimeLinearVelocity = {vel.x, vel.y};
+            }
+            if (rb->HasPendingImpulse)
+            {
+                b2Body_ApplyLinearImpulseToCenter(
+                    body->second.Id,
+                    {rb->PendingImpulse.x, rb->PendingImpulse.y},
+                    true);
+                rb->PendingImpulse = {0.0F, 0.0F};
+                rb->HasPendingImpulse = false;
+            }
+        }
+    }
     for (auto& [id, record] : m_State->Characters)
     {
         const auto entity = world.Find(id);
@@ -742,6 +952,13 @@ void PhysicsWorld::SyncToWorld(IWorld& world) const
 std::unique_ptr<IPhysicsWorld> CreatePhysicsWorld(ICollisionMeshProvider* meshes)
 {
     return std::make_unique<PhysicsWorld>(meshes);
+}
+
+std::vector<ContactEvent2D> PhysicsWorld::DrainContactEvents2D()
+{
+    std::vector<ContactEvent2D> result;
+    result.swap(m_State->PendingContactEvents);
+    return result;
 }
 
 }

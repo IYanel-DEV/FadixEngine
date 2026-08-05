@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(FadixEngine VERSION 0.9.136 LANGUAGES C CXX)
+project(FadixEngine VERSION 0.9.140 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -617,6 +617,24 @@ else()
     target_compile_options(fadix_scene_persistence_smoke PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 add_dependencies(fadix_editor fadix_scene_persistence_smoke)
+
+add_executable(fadix_2d_smoke
+    tools/Native2DSmoke.cpp
+    src/editor/camera/Ortho2DCamera.cpp
+    src/editor/scene/EntityTextIO.cpp
+    src/editor/scene/SceneSerializer.cpp
+    src/engine/Uuid.cpp)
+target_include_directories(fadix_2d_smoke PRIVATE src)
+target_link_libraries(fadix_2d_smoke PRIVATE fadix_runtime)
+if(WIN32)
+    target_link_libraries(fadix_2d_smoke PRIVATE ole32 shell32 uuid)
+endif()
+if(MSVC)
+    target_compile_options(fadix_2d_smoke PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(fadix_2d_smoke PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_dependencies(fadix_editor fadix_2d_smoke)
 
 add_executable(fadix_asset_browser_smoke
     tools/AssetBrowserSmoke.cpp

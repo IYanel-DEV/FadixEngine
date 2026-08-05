@@ -9,6 +9,7 @@
 #include "editor/gizmo/GizmoSystem.hpp"
 #include "editor/imgui/EditorShell.hpp"
 #include "editor/imgui/GraphicsPreferences.hpp"
+#include "editor/imgui/PerformancePreferences.hpp"
 #include "editor/imgui/EditorTheme.hpp"
 #include "editor/imgui/EditorUiState.hpp"
 #include "editor/imgui/ImGuiLayer.hpp"
@@ -24,6 +25,7 @@
 #include "editor/scene/SceneEditor.hpp"
 #include "editor/scripting/ScriptEditorController.hpp"
 
+#include <chrono>
 #include <filesystem>
 #include <array>
 #include <cstddef>
@@ -83,6 +85,10 @@ private:
     void ApplyGraphicsPreferences();
     void DrawGraphicsWindow();
     void DrawProfilerWindow();
+    void LoadPerformanceSettings(const std::filesystem::path& root);
+    void SavePerformanceSettings();
+    void ApplyPerformancePreferences();
+    void DrawPerformanceWindow();
     void CommandNewScene();
     void CommandOpenScene();
     void CommandSaveScene();
@@ -101,6 +107,7 @@ private:
     editor::ProjectManagerPanel m_ProjectManager;
     editor::ViewportPanel m_Viewports;
     editor::GraphicsPreferences m_GraphicsPrefs{editor::GraphicsPreferences::Defaults()};
+    editor::PerformancePreferences m_PerfPrefs{editor::PerformancePreferences::Defaults()};
     editor::ContentBrowserPanel m_ContentBrowser;
     editor::OutputPanel m_Output;
     editor::ScriptEditorPanel m_ScriptPanel;
@@ -135,5 +142,13 @@ private:
     std::size_t m_ProfilerSamples{0};
     bool m_ProfilerPaused{false};
     bool m_Running{true};
+
+    // Throttle limits; set by ApplyPerformancePreferences()
+    float m_FpsForeground{60.0F};   // 0 = unlimited
+    float m_FpsUnfocused{30.0F};
+    float m_FpsMinimized{5.0F};
+    std::chrono::steady_clock::time_point m_FrameDeadline{};
+
+    void SleepUntilNextFrame(float targetFps);
 };
 }

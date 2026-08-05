@@ -162,6 +162,15 @@ void AppendQuad(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indic
     AppendFace(vertices, indices, {0, 0, -1}, {-1, 0, 0, 1}, {{{0, 0, 0}, {0, 1, 0}, {1, 1, 0}, {1, 0, 0}}}, {1, 1, 1, 1});
 }
 
+void AppendSpriteQuad(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices)
+{
+    // Centered at origin in XY plane. UV(0,0) maps to world top-left (Y+),
+    // UV(1,1) maps to world bottom-right (Y-) to match image-space convention.
+    constexpr float h = 0.5F;
+    AppendFace(vertices, indices, {0, 0, 1}, {1, 0, 0, 1},
+        {{{-h, h, 0}, {h, h, 0}, {h, -h, 0}, {-h, -h, 0}}}, {1, 1, 1, 1});
+}
+
 void AppendPlanePrimitive(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices)
 {
     constexpr float h = 0.5F;

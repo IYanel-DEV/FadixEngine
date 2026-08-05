@@ -40,6 +40,11 @@ struct EntitySnapshot
     std::optional<SkeletonComponent> Skeleton;
     std::optional<AnimatorComponent> Animator;
     std::optional<TransformAnimatorComponent> TransformAnimator;
+    std::optional<Sprite2DComponent> Sprite2D;
+    std::optional<RigidBody2DComponent> RigidBody2D;
+    std::optional<Collider2DComponent> Collider2D;
+    std::optional<SpriteFrameAnimatorComponent> SpriteFrameAnimator;
+    std::optional<TileMapComponent> TileMap;
 
     [[nodiscard]] static std::optional<EntitySnapshot> Capture(const IWorld& world, const Uuid& id);
     [[nodiscard]] entt::entity Restore(IWorld& world) const;
@@ -114,6 +119,11 @@ public:
     void SetCamera(CameraComponent component);
     void SetJoltBody(JoltBodyComponent component);
     void SetBox2DBody(Box2DBodyComponent component);
+    void SetSprite2D(Sprite2DComponent component);
+    void SetTileMap(TileMapComponent component);
+    void SetRigidBody2D(RigidBody2DComponent component);
+    void SetCollider2D(Collider2DComponent component);
+    void SetSpriteFrameAnimator(SpriteFrameAnimatorComponent component);
 
 private:
     IWorld& m_World;

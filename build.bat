@@ -102,10 +102,10 @@ echo [Fadix] Building Release with %FADIX_RELEASE_JOBS% low-priority job^(s^)
 if errorlevel 1 exit /b %errorlevel%
 
 if not exist artifacts mkdir artifacts
-copy /Y "bin\Release\fadix_editor.exe" "artifacts\FadixEngine-0.9.136-Windows-x64.exe" >nul
+copy /Y "bin\Release\fadix_editor.exe" "artifacts\FadixEngine-0.9.138-Windows-x64.exe" >nul
 if errorlevel 1 exit /b %errorlevel%
-copy /Y "bin\Release\fadix_player.exe" "artifacts\FadixPlayer-0.9.136-Windows-x64.exe" >nul
+copy /Y "bin\Release\fadix_player.exe" "artifacts\FadixPlayer-0.9.138-Windows-x64.exe" >nul
 if errorlevel 1 exit /b %errorlevel%
-echo [Fadix] Portable release editor:  artifacts\FadixEngine-0.9.136-Windows-x64.exe
-echo [Fadix] Portable release player:  artifacts\FadixPlayer-0.9.136-Windows-x64.exe
+echo [Fadix] Portable release editor:  artifacts\FadixEngine-0.9.138-Windows-x64.exe
+echo [Fadix] Portable release player:  artifacts\FadixPlayer-0.9.138-Windows-x64.exe
 exit /b 0

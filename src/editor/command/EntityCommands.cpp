@@ -134,7 +134,12 @@ std::optional<EntitySnapshot> EntitySnapshot::Capture(const IWorld& world, const
         CopyComponent<TerrainComponent>(registry, *entity),
         CopyComponent<SkeletonComponent>(registry, *entity),
         CopyComponent<AnimatorComponent>(registry, *entity),
-        CopyComponent<TransformAnimatorComponent>(registry, *entity)};
+        CopyComponent<TransformAnimatorComponent>(registry, *entity),
+        CopyComponent<Sprite2DComponent>(registry, *entity),
+        CopyComponent<RigidBody2DComponent>(registry, *entity),
+        CopyComponent<Collider2DComponent>(registry, *entity),
+        CopyComponent<SpriteFrameAnimatorComponent>(registry, *entity),
+        CopyComponent<TileMapComponent>(registry, *entity)};
 }
 
 entt::entity EntitySnapshot::Restore(IWorld& world) const
@@ -172,6 +177,11 @@ entt::entity EntitySnapshot::Restore(IWorld& world) const
     RestoreComponent(registry, entity, Skeleton);
     RestoreComponent(registry, entity, Animator);
     RestoreComponent(registry, entity, TransformAnimator);
+    RestoreComponent(registry, entity, Sprite2D);
+    RestoreComponent(registry, entity, RigidBody2D);
+    RestoreComponent(registry, entity, Collider2D);
+    RestoreComponent(registry, entity, SpriteFrameAnimator);
+    RestoreComponent(registry, entity, TileMap);
     return entity;
 }
 
@@ -257,6 +267,11 @@ void AddEntityCommand::SetEnvironment(EnvironmentComponent component) { m_Entity
 void AddEntityCommand::SetCamera(CameraComponent component) { m_Entity.Camera = std::move(component); }
 void AddEntityCommand::SetJoltBody(JoltBodyComponent component) { m_Entity.JoltBody = std::move(component); }
 void AddEntityCommand::SetBox2DBody(Box2DBodyComponent component) { m_Entity.Box2DBody = std::move(component); }
+void AddEntityCommand::SetSprite2D(Sprite2DComponent component) { m_Entity.Sprite2D = std::move(component); }
+void AddEntityCommand::SetTileMap(TileMapComponent component) { m_Entity.TileMap = std::move(component); }
+void AddEntityCommand::SetRigidBody2D(RigidBody2DComponent component) { m_Entity.RigidBody2D = std::move(component); }
+void AddEntityCommand::SetCollider2D(Collider2DComponent component) { m_Entity.Collider2D = std::move(component); }
+void AddEntityCommand::SetSpriteFrameAnimator(SpriteFrameAnimatorComponent component) { m_Entity.SpriteFrameAnimator = std::move(component); }
 
 DeleteEntityCommand::DeleteEntityCommand(IWorld& world, const Uuid entity)
     : m_World(world), m_Entity(entity)

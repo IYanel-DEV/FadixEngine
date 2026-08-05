@@ -115,6 +115,58 @@ void ScriptRunner::DispatchAnimationEvents(entt::registry& registry)
     }
 }
 
+void ScriptRunner::DispatchContactEvents(entt::registry& registry,
+    const std::vector<ContactEvent2D>& events)
+{
+    if (events.empty() || !m_Started)
+    {
+        return;
+    }
+    for (const ContactEvent2D& ev : events)
+    {
+        // Find the sensor entity and visitor entity in the registry.
+        entt::entity sensorEnt = entt::null;
+        entt::entity visitorEnt = entt::null;
+        for (const auto [ent, uuid] : registry.view<const UuidComponent>().each())
+        {
+            if (uuid.Id == ev.SensorEntity)
+            {
+                sensorEnt = ent;
+            }
+            if (uuid.Id == ev.VisitorEntity)
+            {
+                visitorEnt = ent;
+            }
+            if (sensorEnt != entt::null && visitorEnt != entt::null)
+            {
+                break;
+            }
+        }
+        if (!registry.valid(sensorEnt) || !registry.valid(visitorEnt))
+        {
+            continue;
+        }
+        const ScriptEntityHandle sensorHandle{&registry, sensorEnt, &m_PendingDestroy};
+        const ScriptEntityHandle visitorHandle{&registry, visitorEnt, &m_PendingDestroy};
+        // Dispatch to Lua scripts on the sensor entity.
+        for (const Instance& instance : m_Instances)
+        {
+            if (instance.Entity != sensorEnt)
+            {
+                continue;
+            }
+            if (ev.Entered)
+            {
+                m_Vm.CallBodyEntered(instance.Id, sensorHandle, visitorHandle);
+            }
+            else
+            {
+                m_Vm.CallBodyExited(instance.Id, sensorHandle, visitorHandle);
+            }
+        }
+    }
+}
+
 void ScriptRunner::StartEntity(
     entt::registry& registry, const entt::entity entity, const SourceResolver& resolver)
 {

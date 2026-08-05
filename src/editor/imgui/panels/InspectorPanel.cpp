@@ -658,6 +658,328 @@ void InspectorPanel::Draw(SceneEditor& scene, EditorUiState& ui)
         }
     }
 
+    if (Sprite2DComponent* sprite = registry.try_get<Sprite2DComponent>(*entity))
+    {
+        if (ImGui::CollapsingHeader("Sprite 2D", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            DrawAssetSlot("Texture", sprite->Texture,
+                [&](AssetHandle h) { return scene.AssignSpriteTexture(h); },
+                [&] { return scene.ClearSpriteTexture(); }, ui);
+            {
+                float v[2] = {sprite->Size.x, sprite->Size.y};
+                if (ImGui::DragFloat2("Size", v, 0.01F, 0.0F, 10000.0F))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    sprite->Size = {v[0], v[1]};
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Sprite Size");
+            }
+            {
+                float col[4] = {sprite->Tint.r, sprite->Tint.g, sprite->Tint.b, sprite->Tint.a};
+                // ColorEdit4 activates one frame before it first reports a change,
+                // so begin the transaction on activation (outside the change guard)
+                // or the first edit frame is lost and undo has nothing to restore.
+                // Values stay normalized 0..1 internally even when shown as 0..255.
+                if (ImGui::ColorEdit4("Tint", col))
+                    sprite->Tint = {col[0], col[1], col[2], col[3]};
+                if (ImGui::IsItemActivated())
+                    scene.BeginEditTransaction();
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Sprite Tint");
+            }
+            if (!Sprite2DHasRenderableTexture(*sprite))
+            {
+                ImGui::TextDisabled("(?) Tint previews in Scene View only");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        "Tint previews here, but this Sprite2D requires a texture "
+                        "to render in Game View.");
+            }
+            {
+                float v[2] = {sprite->Pivot.x, sprite->Pivot.y};
+                if (ImGui::DragFloat2("Pivot", v, 0.01F, 0.0F, 1.0F))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    sprite->Pivot = {v[0], v[1]};
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Sprite Pivot");
+            }
+            {
+                float v[4] = {sprite->UvRect.x, sprite->UvRect.y, sprite->UvRect.z, sprite->UvRect.w};
+                if (ImGui::DragFloat4("UV Rect", v, 0.001F))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    sprite->UvRect = {v[0], v[1], v[2], v[3]};
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Sprite UV Rect");
+            }
+            {
+                float ppu = sprite->PixelsPerUnit;
+                if (ImGui::DragFloat("Pixels Per Unit", &ppu, 1.0F, 1.0F, 4096.0F))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    sprite->PixelsPerUnit = ppu;
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Sprite PPU");
+            }
+            {
+                int sl = sprite->SortingLayer;
+                int ol = sprite->OrderInLayer;
+                if (ImGui::DragInt("Sorting Layer", &sl))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    sprite->SortingLayer = sl;
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Sorting Layer");
+                if (ImGui::DragInt("Order In Layer", &ol))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    sprite->OrderInLayer = ol;
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Order In Layer");
+            }
+            DrawBoolToggle(scene, "Flip X", sprite->FlipX, [] {});
+            DrawBoolToggle(scene, "Flip Y", sprite->FlipY, [] {});
+            DrawBoolToggle(scene, "Nearest Filter", sprite->NearestFilter, [] {});
+            DrawBoolToggle(scene, "Pixel Snap", sprite->PixelSnap, [] {});
+            RemoveButton(scene, "remove-sprite2d", ui);
+        }
+    }
+
+    if (RigidBody2DComponent* rb = registry.try_get<RigidBody2DComponent>(*entity))
+    {
+        if (ImGui::CollapsingHeader("Rigid Body 2D", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            const char* typeNames[] = {"Static", "Kinematic", "Dynamic"};
+            int typeIdx = static_cast<int>(rb->Type);
+            if (ImGui::Combo("Type", &typeIdx, typeNames, 3))
+            {
+                scene.BeginEditTransaction();
+                rb->Type = static_cast<Body2DType>(typeIdx);
+                scene.EndEditTransaction("Change Body2D Type");
+            }
+            {
+                float mass = rb->Mass;
+                if (ImGui::DragFloat("Mass", &mass, 0.01F, 0.0F, 1000.0F))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    rb->Mass = mass;
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit RigidBody2D Mass");
+                float gs = rb->GravityScale;
+                if (ImGui::DragFloat("Gravity Scale", &gs, 0.01F))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    rb->GravityScale = gs;
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Gravity Scale");
+                float ld = rb->LinearDamping;
+                if (ImGui::DragFloat("Linear Damping", &ld, 0.01F, 0.0F))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    rb->LinearDamping = ld;
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Linear Damping");
+                float ad = rb->AngularDamping;
+                if (ImGui::DragFloat("Angular Damping", &ad, 0.01F, 0.0F))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    rb->AngularDamping = ad;
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Angular Damping");
+            }
+            DrawBoolToggle(scene, "Fixed Rotation", rb->FixedRotation, [] {});
+            RemoveButton(scene, "remove-rigidbody2d", ui);
+        }
+    }
+
+    if (Collider2DComponent* col = registry.try_get<Collider2DComponent>(*entity))
+    {
+        if (ImGui::CollapsingHeader("Collider 2D", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            const char* shapeNames[] = {"Box", "Circle"};
+            int shapeIdx = static_cast<int>(col->Shape);
+            if (ImGui::Combo("Shape", &shapeIdx, shapeNames, 2))
+            {
+                scene.BeginEditTransaction();
+                col->Shape = static_cast<Collider2DShape>(shapeIdx);
+                scene.EndEditTransaction("Change Collider2D Shape");
+            }
+            {
+                float v[2] = {col->Offset.x, col->Offset.y};
+                if (ImGui::DragFloat2("Offset", v, 0.01F))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    col->Offset = {v[0], v[1]};
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Collider Offset");
+            }
+            if (col->Shape == Collider2DShape::Box)
+            {
+                float v[2] = {col->Size.x, col->Size.y};
+                if (ImGui::DragFloat2("Size", v, 0.01F, 0.0F))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    col->Size = {v[0], v[1]};
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Collider Size");
+            }
+            else
+            {
+                float r = col->Size.x;
+                if (ImGui::DragFloat("Radius", &r, 0.01F, 0.0F))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    col->Size = {r, r};
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Collider Radius");
+            }
+            {
+                float fr = col->Friction;
+                if (ImGui::DragFloat("Friction", &fr, 0.01F, 0.0F, 1.0F))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    col->Friction = fr;
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Collider Friction");
+                float re = col->Restitution;
+                if (ImGui::DragFloat("Restitution", &re, 0.01F, 0.0F, 1.0F))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    col->Restitution = re;
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Collider Restitution");
+                float de = col->Density;
+                if (ImGui::DragFloat("Density", &de, 0.01F, 0.0F))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    col->Density = de;
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Collider Density");
+            }
+            DrawBoolToggle(scene, "Sensor", col->Sensor, [] {});
+            RemoveButton(scene, "remove-collider2d", ui);
+        }
+    }
+
+    if (SpriteFrameAnimatorComponent* sfa =
+            registry.try_get<SpriteFrameAnimatorComponent>(*entity))
+    {
+        if (ImGui::CollapsingHeader("Sprite Frame Animator", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            ImGui::Text("Clips: %d", static_cast<int>(sfa->Clips.size()));
+            if (!sfa->Clips.empty())
+            {
+                std::vector<const char*> clipNames;
+                clipNames.reserve(sfa->Clips.size());
+                for (const auto& clip : sfa->Clips)
+                {
+                    clipNames.push_back(clip.Name.c_str());
+                }
+                int idx = 0;
+                for (int i = 0; i < static_cast<int>(sfa->Clips.size()); ++i)
+                {
+                    if (sfa->Clips[static_cast<std::size_t>(i)].Name == sfa->CurrentClip)
+                    {
+                        idx = i;
+                        break;
+                    }
+                }
+                if (ImGui::Combo("Current Clip", &idx, clipNames.data(),
+                        static_cast<int>(clipNames.size())))
+                {
+                    scene.BeginEditTransaction();
+                    sfa->CurrentClip = sfa->Clips[static_cast<std::size_t>(idx)].Name;
+                    scene.EndEditTransaction("Change Sprite Clip");
+                }
+            }
+            {
+                float spd = sfa->Speed;
+                if (ImGui::DragFloat("Speed", &spd, 0.01F, 0.0F, 100.0F))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    sfa->Speed = spd;
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Animator Speed");
+            }
+            DrawBoolToggle(scene, "Autoplay", sfa->Autoplay, [] {});
+            DrawBoolToggle(scene, "Playing", sfa->Playing, [] {});
+            RemoveButton(scene, "remove-spriteframeanimator", ui);
+        }
+    }
+
+    if (TileMapComponent* tilemap = registry.try_get<TileMapComponent>(*entity))
+    {
+        if (ImGui::CollapsingHeader("Tile Map", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            DrawAssetSlot("Tile Set Texture", tilemap->TileSetTexture,
+                [&](AssetHandle h) { return scene.AssignTileSetTexture(h); },
+                [&] { return scene.ClearTileSetTexture(); }, ui);
+            ImGui::Text("Grid: %dx%d  Layers: %d", tilemap->GridWidth, tilemap->GridHeight,
+                tilemap->LayerCount);
+            {
+                int tw = tilemap->TileWidth;
+                int th = tilemap->TileHeight;
+                if (ImGui::DragInt("Tile Width", &tw, 1, 1, 4096))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    tilemap->TileWidth = tw;
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Tile Width");
+                if (ImGui::DragInt("Tile Height", &th, 1, 1, 4096))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    tilemap->TileHeight = th;
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Tile Height");
+                int sc = tilemap->SheetColumns;
+                if (ImGui::DragInt("Sheet Columns", &sc, 1, 1, 256))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    tilemap->SheetColumns = sc;
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Sheet Columns");
+                int sr = tilemap->SheetRows;
+                if (ImGui::DragInt("Sheet Rows", &sr, 1, 1, 256))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    tilemap->SheetRows = sr;
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Sheet Rows");
+                float ppu = tilemap->PixelsPerUnit;
+                if (ImGui::DragFloat("Pixels Per Unit", &ppu, 1.0F, 1.0F, 4096.0F))
+                {
+                    if (ImGui::IsItemActivated()) scene.BeginEditTransaction();
+                    tilemap->PixelsPerUnit = ppu;
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    scene.EndEditTransaction("Edit Tilemap PPU");
+            }
+            RemoveButton(scene, "remove-tilemap", ui);
+        }
+    }
+
     if (ScriptComponent* script = registry.try_get<ScriptComponent>(*entity))
     {
         if (ImGui::CollapsingHeader("Script", ImGuiTreeNodeFlags_DefaultOpen))
@@ -1004,6 +1326,17 @@ void InspectorPanel::Draw(SceneEditor& scene, EditorUiState& ui)
              "Character Controller (Jolt)",
              !registry.all_of<CharacterControllerComponent>(*entity)},
             {"add-component-box2d", "Box2D Body", !registry.all_of<Box2DBodyComponent>(*entity)},
+            {"add-component-sprite2d", "Sprite 2D", !registry.all_of<Sprite2DComponent>(*entity)},
+            {"add-component-rigidbody2d",
+             "Rigid Body 2D",
+             !registry.all_of<RigidBody2DComponent>(*entity)},
+            {"add-component-collider2d",
+             "Collider 2D",
+             !registry.all_of<Collider2DComponent>(*entity)},
+            {"add-component-spriteframeanimator",
+             "Sprite Frame Animator",
+             !registry.all_of<SpriteFrameAnimatorComponent>(*entity)},
+            {"add-component-tilemap", "Tile Map", !registry.all_of<TileMapComponent>(*entity)},
             {"add-component-network",
              "Network Identity",
              !registry.all_of<NetworkIdentityComponent>(*entity)},

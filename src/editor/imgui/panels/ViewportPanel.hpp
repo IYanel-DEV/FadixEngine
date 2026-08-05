@@ -2,6 +2,7 @@
 
 #include "editor/assets/AssetBrowserController.hpp"
 #include "editor/camera/CameraModule.hpp"
+#include "editor/camera/Ortho2DCamera.hpp"
 #include "editor/gizmo/GizmoSystem.hpp"
 #include "editor/imgui/EditorUiState.hpp"
 #include "editor/imgui/GraphicsPreferences.hpp"
@@ -41,6 +42,8 @@ class Device;
 
 namespace fadix::editor
 {
+class TilemapPanel;
+
 /// Independently dockable Scene View + Game View. Distinct ViewportRenderer targets.
 class ViewportPanel final
 {
@@ -110,11 +113,35 @@ public:
         m_MeshDropHandler = std::move(handler);
     }
 
+    void SetTilemapPanel(TilemapPanel* panel) noexcept { m_TilemapPanel = panel; }
+
+    void SetSprite2DDropHandler(
+        std::function<void(const AssetDragPayload&, const glm::vec2&)> handler)
+    {
+        m_Sprite2DDropHandler = std::move(handler);
+    }
+
     /// Invoked whenever the user picks a new quality preset (for persistence).
     void SetQualityChangedHandler(std::function<void()> handler)
     {
         m_QualityChanged = std::move(handler);
     }
+
+    /// Invoked when the user toggles 2D/3D viewport mode (for persistence).
+    void SetProjectionModeChangedHandler(std::function<void()> handler)
+    {
+        m_ProjectionModeChanged = std::move(handler);
+    }
+
+    /// Invoked when a floating overlay (transform rail / orientation gizmo) is
+    /// shown or hidden, so the shell can persist the new visibility state.
+    void SetWidgetVisibilityChangedHandler(std::function<void()> handler)
+    {
+        m_WidgetVisibilityChanged = std::move(handler);
+    }
+
+    [[nodiscard]] bool TransformRailVisible() const noexcept { return m_TransformRailVisible; }
+    [[nodiscard]] bool OrientationGizmoVisible() const noexcept { return m_OrientationGizmoVisible; }
 
     /// Independent per-view quality presets. Scene View defaults to Low, Game
     /// View to High; Play does not change either (Game already renders High).
@@ -152,9 +179,23 @@ private:
     void DrawQualityCombo(View& view, const char* id);
     void DrawSceneToolbar(
         EditorUiState& ui, CameraModule& camera, GizmoSystem& gizmo, EditorPlayMode playMode);
+    /// Small rounded translucent edge tab with an ImDrawList chevron (dir:
+    /// 0='<',1='>',2='v'). Feeds m_OverlayHovered; returns true when clicked.
+    [[nodiscard]] bool EdgeTab(const char* id, ImVec2 pos, ImVec2 size, int dir, const char* tip);
+    /// Floating in-viewport tool rail (Select/Move/Rotate/Scale), left edge.
+    void DrawTransformRail(const View& view);
+    /// Interactive XYZ orientation widget, top-right corner. Reacts to and drives
+    /// the edit camera orientation (3D perspective only).
+    void DrawOrientationGizmo(const View& view, CameraModule& camera);
     void DrawViewImage(View& view, const char* emptyMessage, bool showTexture);
     void MeasureView(View& view, float dpiScale);
     void EnsureSize(View& view);
+    // Cursor position inside a view in three coordinate spaces. Normalized [0,1]
+    // is the shared source; Logical feeds camera math (ScreenToWorld / mouse rays,
+    // both configured in logical size); Pixels feeds GPU picking only. Never feed
+    // render pixels into a logical-size camera.
+    [[nodiscard]] glm::vec2 MouseInViewNormalized(const View& view) const;
+    [[nodiscard]] glm::vec2 MouseInViewLogical(const View& view) const;
     [[nodiscard]] glm::vec2 MouseInViewPixels(const View& view) const;
     void UpdateGizmoVisual(
         View& view,
@@ -184,6 +225,13 @@ private:
     int m_GizmoTool{1};
     bool m_GizmoDragging{false};
     std::optional<GizmoHandle> m_GizmoHover;
+    // Overlay glyphs adapt to the active viewport: dark on the bright Ortho2D
+    // scene, light on the dark perspective scene. Set each Scene View frame.
+    bool m_SceneViewLight{false};
+    // Stale gizmo-hover clearing: reset hover when the projection mode or 2D zoom
+    // changes (wheel zoom fires no mouse-motion that would otherwise re-hit-test).
+    ViewportProjectionMode m_LastProjectionMode{ViewportProjectionMode::Perspective};
+    float m_LastOrtho2DZoom{-1.0F};
     std::optional<TransformComponent> m_GizmoStartTransform;
     bool m_PendingPick{false};
     ViewportDebugView m_DebugView{ViewportDebugView::None};
@@ -191,7 +239,16 @@ private:
     std::optional<MeshPreviewVisual> m_MeshPreview;
     std::function<void(const AssetDragPayload&)> m_AssetDropHandler;
     std::function<void(const AssetDragPayload&, const glm::vec3&)> m_MeshDropHandler;
+    std::function<void(const AssetDragPayload&, const glm::vec2&)> m_Sprite2DDropHandler;
     std::function<void()> m_QualityChanged;
+    std::function<void()> m_ProjectionModeChanged;
+    std::function<void()> m_WidgetVisibilityChanged;
+    bool m_TransformRailVisible{true};
+    bool m_OrientationGizmoVisible{true};
+    // True when the cursor is over a floating overlay control this frame, so
+    // SDL-level gizmo/pick handling ignores that click (set during Draw).
+    bool m_OverlayHovered{false};
     GraphicsPreferences m_GraphicsPrefs{GraphicsPreferences::Defaults()};
+    TilemapPanel* m_TilemapPanel{nullptr};
 };
 }
